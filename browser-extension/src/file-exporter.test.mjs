@@ -50,3 +50,42 @@ test('creates a valid store-only zip with supplied filenames and bytes', () => {
   assert.equal(zip.at(-22), 0x50);
   assert.equal(zip.at(-21), 0x4b);
 });
+
+function readUint32LE(bytes, offset) {
+  return (
+    bytes[offset]
+    | (bytes[offset + 1] << 8)
+    | (bytes[offset + 2] << 16)
+    | (bytes[offset + 3] << 24)
+  ) >>> 0;
+}
+
+function assertStoredZipShape(zip, entries) {
+  assert.equal(readUint32LE(zip, 0), 0x04034b50);
+  assert.equal(readUint32LE(zip, zip.length - 22), 0x06054b50);
+  const centralOffset = readUint32LE(zip, zip.length - 6);
+  assert.equal(readUint32LE(zip, centralOffset), 0x02014b50);
+  assert.equal(zip[zip.length - 12] | (zip[zip.length - 11] << 8), entries.length);
+}
+
+for (const size of [500_000, 1_000_000, 5_000_000, 15_000_000]) {
+  test(`creates a valid stored ZIP entry at the advertised boundary (${size} bytes)`, () => {
+    const data = new Uint8Array(size);
+    data[0] = 0x11;
+    data[data.length - 1] = 0x22;
+    const entries = [{ name: `boundary-${size}.bin`, data }];
+    const zip = createZipBytes(entries);
+    assertStoredZipShape(zip, entries);
+    assert.equal(zip.length, 30 + entries[0].name.length + size + 46 + entries[0].name.length + 22);
+  });
+}
+
+test('creates a valid ZIP for multiple files totalling 15 MB without spread overflow', () => {
+  const entries = Array.from({ length: 3 }, (_, index) => ({
+    name: `part-${index + 1}.bin`,
+    data: new Uint8Array(5_000_000),
+  }));
+  const zip = createZipBytes(entries);
+  assertStoredZipShape(zip, entries);
+  assert.ok(zip.length > 15_000_000);
+});
