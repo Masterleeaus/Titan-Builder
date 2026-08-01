@@ -36,6 +36,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path, PurePosixPath
           import collections
+          import filecmp
           import shutil
           import stat
           import tempfile
@@ -44,6 +45,21 @@ jobs:
           archive = Path('OpenBrowser-v0.5.0-Project-Intelligence-Port.zip')
           if not archive.is_file():
               raise SystemExit(f'Missing source archive: {archive}')
+
+          def merge_protected(source_dir: Path, destination_dir: Path) -> None:
+              destination_dir.mkdir(parents=True, exist_ok=True)
+              for source_item in source_dir.rglob('*'):
+                  relative = source_item.relative_to(source_dir)
+                  destination_item = destination_dir / relative
+                  if source_item.is_dir():
+                      destination_item.mkdir(parents=True, exist_ok=True)
+                      continue
+                  destination_item.parent.mkdir(parents=True, exist_ok=True)
+                  if destination_item.exists():
+                      if destination_item.is_file() and filecmp.cmp(source_item, destination_item, shallow=False):
+                          continue
+                      raise SystemExit(f'Refusing protected-file conflict: {destination_item}')
+                  shutil.copy2(source_item, destination_item)
 
           repo = Path.cwd().resolve()
           with zipfile.ZipFile(archive) as zf:
@@ -85,9 +101,12 @@ jobs:
 
                   for child in source.iterdir():
                       destination = repo / child.name
+                      if child.name in {'.github', '.titan'}:
+                          if not child.is_dir():
+                              raise SystemExit(f'Protected archive entry must be a directory: {child}')
+                          merge_protected(child, destination)
+                          continue
                       if destination.exists():
-                          if destination.name in {'.github', '.titan'}:
-                              raise SystemExit(f'Refusing to overwrite protected repository path: {destination}')
                           if destination.name == archive.name:
                               continue
                           if destination.is_dir():
