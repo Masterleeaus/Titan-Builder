@@ -1,0 +1,108 @@
+name: Import OpenBrowser source
+
+on:
+  push:
+    branches:
+      - agent/fix-titan-builder-v2.6-deep-scan
+    paths:
+      - .github/workflows/import-openbrowser-source.yml
+      - OpenBrowser-v0.5.0-Project-Intelligence-Port.zip
+
+permissions:
+  contents: write
+
+jobs:
+  import-source:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/fix-titan-builder-v2.6-deep-scan
+          fetch-depth: 0
+
+      - name: Safely inspect and extract archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path, PurePosixPath
+          import collections
+          import shutil
+          import stat
+          import tempfile
+          import zipfile
+
+          archive = Path('OpenBrowser-v0.5.0-Project-Intelligence-Port.zip')
+          if not archive.is_file():
+              raise SystemExit(f'Missing source archive: {archive}')
+
+          repo = Path.cwd().resolve()
+          with zipfile.ZipFile(archive) as zf:
+              infos = zf.infolist()
+              names = [item.filename for item in infos]
+              duplicates = [name for name, count in collections.Counter(names).items() if count > 1]
+              case_groups = collections.defaultdict(list)
+              for name in names:
+                  case_groups[name.casefold()].append(name)
+              case_collisions = [group for group in case_groups.values() if len(group) > 1]
+
+              unsafe = []
+              symlinks = []
+              for item in infos:
+                  name = item.filename
+                  parts = PurePosixPath(name).parts
+                  if name.startswith('/') or '..' in parts:
+                      unsafe.append(name)
+                  mode = (item.external_attr >> 16) & 0xFFFF
+                  if stat.S_ISLNK(mode):
+                      symlinks.append(name)
+
+              if unsafe or symlinks or duplicates or case_collisions:
+                  raise SystemExit(
+                      f'Unsafe archive: traversal={unsafe}, symlinks={symlinks}, '
+                      f'duplicates={duplicates}, case_collisions={case_collisions}'
+                  )
+
+              roots = sorted({name.split('/', 1)[0] for name in names if name})
+              if roots != ['OpenBrowser-v0.5.0']:
+                  raise SystemExit(f'Unexpected archive root(s): {roots}')
+
+              with tempfile.TemporaryDirectory(prefix='titan-builder-import-') as tmp:
+                  tmp_path = Path(tmp).resolve()
+                  zf.extractall(tmp_path)
+                  source = tmp_path / 'OpenBrowser-v0.5.0'
+                  if not source.is_dir():
+                      raise SystemExit('Expected wrapper directory was not extracted')
+
+                  for child in source.iterdir():
+                      destination = repo / child.name
+                      if destination.exists():
+                          if destination.name in {'.github', '.titan'}:
+                              raise SystemExit(f'Refusing to overwrite protected repository path: {destination}')
+                          if destination.name == archive.name:
+                              continue
+                          if destination.is_dir():
+                              shutil.rmtree(destination)
+                          else:
+                              destination.unlink()
+                      if child.is_dir():
+                          shutil.copytree(child, destination)
+                      else:
+                          shutil.copy2(child, destination)
+          PY
+
+      - name: Commit extracted source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No extracted source changes to commit.'
+            exit 0
+          fi
+          git commit -m 'chore: extract OpenBrowser source for Titan Builder repair'
+          git push origin HEAD:agent/fix-titan-builder-v2.6-deep-scan
