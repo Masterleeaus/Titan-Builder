@@ -1,4 +1,4 @@
-name: Import and Patch OpenBrowser Source
+name: Apply Verified Titan Builder Repairs
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 jobs:
-  import-source:
+  apply-repairs:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     concurrency:
@@ -27,150 +27,51 @@ jobs:
           ref: agent/fix-titan-builder-v2.6-deep-scan
           fetch-depth: 0
 
-      - name: Safely inspect and extract archive when source is absent
+      - name: Confirm source was safely expanded
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -f package.json ]]; then
-            echo 'Source is already expanded; skipping archive extraction.'
-            exit 0
-          fi
+          test -f package.json
+          test -d browser-extension
+          test -d src
+          test -f OpenBrowser-v0.5.0-Project-Intelligence-Port.zip
 
-          python - <<'PY'
-          from pathlib import Path, PurePosixPath
-          import collections
-          import filecmp
-          import shutil
-          import stat
-          import tempfile
-          import zipfile
-
-          archive = Path('OpenBrowser-v0.5.0-Project-Intelligence-Port.zip')
-          if not archive.is_file():
-              raise SystemExit(f'Missing source archive: {archive}')
-
-          def merge_protected(source_dir: Path, destination_dir: Path) -> None:
-              destination_dir.mkdir(parents=True, exist_ok=True)
-              for source_item in source_dir.rglob('*'):
-                  relative = source_item.relative_to(source_dir)
-                  if destination_dir.name == '.github' and relative.parts[:1] == ('workflows',):
-                      print(f'Deferring archived workflow to connector-managed import: {relative}')
-                      continue
-                  destination_item = destination_dir / relative
-                  if source_item.is_dir():
-                      destination_item.mkdir(parents=True, exist_ok=True)
-                      continue
-                  destination_item.parent.mkdir(parents=True, exist_ok=True)
-                  if destination_item.exists():
-                      if destination_item.is_file() and filecmp.cmp(source_item, destination_item, shallow=False):
-                          continue
-                      raise SystemExit(f'Refusing protected-file conflict: {destination_item}')
-                  shutil.copy2(source_item, destination_item)
-
-          repo = Path.cwd().resolve()
-          with zipfile.ZipFile(archive) as zf:
-              infos = zf.infolist()
-              names = [item.filename for item in infos]
-              duplicates = [name for name, count in collections.Counter(names).items() if count > 1]
-              case_groups = collections.defaultdict(list)
-              for name in names:
-                  case_groups[name.casefold()].append(name)
-              case_collisions = [group for group in case_groups.values() if len(group) > 1]
-
-              unsafe = []
-              symlinks = []
-              for item in infos:
-                  name = item.filename
-                  parts = PurePosixPath(name).parts
-                  if name.startswith('/') or '..' in parts:
-                      unsafe.append(name)
-                  mode = (item.external_attr >> 16) & 0xFFFF
-                  if stat.S_ISLNK(mode):
-                      symlinks.append(name)
-
-              if unsafe or symlinks or duplicates or case_collisions:
-                  raise SystemExit(
-                      f'Unsafe archive: traversal={unsafe}, symlinks={symlinks}, '
-                      f'duplicates={duplicates}, case_collisions={case_collisions}'
-                  )
-
-              roots = sorted({name.split('/', 1)[0] for name in names if name})
-              if roots != ['OpenBrowser-v0.5.0']:
-                  raise SystemExit(f'Unexpected archive root(s): {roots}')
-
-              with tempfile.TemporaryDirectory(prefix='titan-builder-import-') as tmp:
-                  tmp_path = Path(tmp).resolve()
-                  zf.extractall(tmp_path)
-                  source = tmp_path / 'OpenBrowser-v0.5.0'
-                  if not source.is_dir():
-                      raise SystemExit('Expected wrapper directory was not extracted')
-
-                  for child in source.iterdir():
-                      destination = repo / child.name
-                      if child.name in {'.github', '.titan'}:
-                          if not child.is_dir():
-                              raise SystemExit(f'Protected archive entry must be a directory: {child}')
-                          merge_protected(child, destination)
-                          continue
-                      if destination.exists():
-                          if destination.name == archive.name:
-                              continue
-                          if destination.is_dir():
-                              shutil.rmtree(destination)
-                          else:
-                              destination.unlink()
-                      if child.is_dir():
-                          shutil.copytree(child, destination)
-                      else:
-                          shutil.copy2(child, destination)
-          PY
-
-      - name: Decode, verify, and apply repair bundles once
+      - name: Download, verify, and apply repairs once
         shell: bash
+        env:
+          PATCH_BASE_URL: https://titan-builder-repair-patches.miniup.app/patches
         run: |
           set -euo pipefail
           work_dir="$(mktemp -d)"
           trap 'rm -rf "$work_dir"' EXIT
 
-          bundles=(
-            '01-OB-001-grok-routing.patch.gz.b64|single|9f87cb2aacf13524697377f1123499120bcfa6263814284f1f915a66cbd8c72c'
-            '02-OB-002-project-path.patch.gz.b64|parts|37ffa62e7bebfdf44b3d355993c699f3361b97e28e7167aef8760c136f165636'
-            '03-OB-003-operation-order.patch.gz.b64|single|1e96fe1c5440e4a47811676534e4737b8892cbe56fcbc101db6a4ef231632399'
-            '04-test-registration.patch.gz.b64|single|0875fe177e26f7df9962d5936bac73202fea1898dfcab024561c17e4be014892'
+          patches=(
+            '01-OB-001-grok-routing.patch|9f87cb2aacf13524697377f1123499120bcfa6263814284f1f915a66cbd8c72c'
+            '02-OB-002-project-path.patch|37ffa62e7bebfdf44b3d355993c699f3361b97e28e7167aef8760c136f165636'
+            '03-OB-003-operation-order.patch|1e96fe1c5440e4a47811676534e4737b8892cbe56fcbc101db6a4ef231632399'
+            '04-test-registration.patch|0875fe177e26f7df9962d5936bac73202fea1898dfcab024561c17e4be014892'
           )
 
-          for item in "${bundles[@]}"; do
-            IFS='|' read -r bundle transport expected_sha <<< "$item"
-            bundle_path=".titan/patch-bundles/$bundle"
-            encoded_path="$work_dir/$bundle"
-            patch_path="$work_dir/${bundle%.gz.b64}"
+          for item in "${patches[@]}"; do
+            IFS='|' read -r patch_name expected_sha <<< "$item"
+            patch_path="$work_dir/$patch_name"
+            curl --fail --location --silent --show-error --retry 3 \
+              "$PATCH_BASE_URL/$patch_name" \
+              --output "$patch_path"
 
-            if [[ "$transport" == 'parts' ]]; then
-              shopt -s nullglob
-              parts=("$bundle_path".part-*)
-              if (( ${#parts[@]} == 0 )); then
-                echo "No transport chunks found for $bundle" >&2
-                exit 1
-              fi
-              cat "${parts[@]}" > "$encoded_path"
-            else
-              cp "$bundle_path" "$encoded_path"
-            fi
-
-            base64 --decode "$encoded_path" | gzip --decompress > "$patch_path"
             actual_sha="$(sha256sum "$patch_path" | awk '{print $1}')"
             if [[ "$actual_sha" != "$expected_sha" ]]; then
-              echo "Checksum mismatch for $bundle: expected $expected_sha, got $actual_sha" >&2
+              echo "Checksum mismatch for $patch_name: expected $expected_sha, got $actual_sha" >&2
               exit 1
             fi
 
             if git apply --reverse --check "$patch_path" 2>/dev/null; then
-              echo "Already applied: $bundle"
+              echo "Already applied: $patch_name"
             elif git apply --check "$patch_path"; then
               git apply "$patch_path"
-              echo "Applied: $bundle"
+              echo "Applied: $patch_name"
             else
-              echo "Repair bundle cannot be applied cleanly: $bundle" >&2
+              echo "Repair patch cannot be applied cleanly: $patch_name" >&2
               exit 1
             fi
           done
@@ -181,15 +82,15 @@ jobs:
           set -euo pipefail
           npm run verify:offline
 
-      - name: Commit source or patch changes
+      - name: Commit verified source changes
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          git add browser-extension src package.json
           if git diff --cached --quiet; then
-            echo 'No source or patch changes to commit.'
+            echo 'Repairs are already present; nothing to commit.'
             exit 0
           fi
           git commit -m 'fix: apply verified OB-001 through OB-003 repairs'
