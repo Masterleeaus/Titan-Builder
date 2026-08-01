@@ -1,12 +1,6 @@
-name: Import OpenBrowser source
+name: Import and Patch OpenBrowser Source
 
 on:
-  push:
-    branches:
-      - agent/fix-titan-builder-v2.6-deep-scan
-    paths:
-      - .github/workflows/import-openbrowser-source.yml
-      - OpenBrowser-v0.5.0-Project-Intelligence-Port.zip
   pull_request:
     branches:
       - main
@@ -14,6 +8,7 @@ on:
       - opened
       - reopened
       - synchronize
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -29,10 +24,15 @@ jobs:
           ref: agent/fix-titan-builder-v2.6-deep-scan
           fetch-depth: 0
 
-      - name: Safely inspect and extract archive
+      - name: Safely inspect and extract archive when source is absent
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -f package.json ]]; then
+            echo 'Source is already expanded; skipping archive extraction.'
+            exit 0
+          fi
+
           python - <<'PY'
           from pathlib import Path, PurePosixPath
           import collections
@@ -122,7 +122,25 @@ jobs:
                           shutil.copy2(child, destination)
           PY
 
-      - name: Commit extracted source
+      - name: Apply verified repair patch once
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch_file='.titan/patches/OB-001-to-OB-003-code.patch'
+          if [[ ! -f "$patch_file" ]]; then
+            echo 'Repair patch is not present yet.'
+            exit 0
+          fi
+          if git apply --reverse --check "$patch_file"; then
+            echo 'Repair patch is already applied.'
+          elif git apply --check "$patch_file"; then
+            git apply "$patch_file"
+          else
+            echo 'Repair patch cannot be applied cleanly.' >&2
+            exit 1
+          fi
+
+      - name: Commit source or patch changes
         shell: bash
         run: |
           set -euo pipefail
@@ -130,8 +148,9 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           if git diff --cached --quiet; then
-            echo 'No extracted source changes to commit.'
+            echo 'No source or patch changes to commit.'
             exit 0
           fi
-          git commit -m 'chore: extract OpenBrowser source for Titan Builder repair'
+          git commit -m 'fix: import source and apply verified repair patch'
+          git pull --rebase origin agent/fix-titan-builder-v2.6-deep-scan
           git push origin HEAD:agent/fix-titan-builder-v2.6-deep-scan
