@@ -95,12 +95,30 @@ test('chunks, completion, renewal, and release require the current claim token',
   const completed = completeSession(session.id, 'done', claim.claimToken, 12_300);
   assert.equal(completed?.status, 'complete');
   assert.equal(completed?.response, 'done');
+  assert.equal(completed?.partialText, undefined);
   assert.equal(completed?.claimToken, undefined);
 
   assert.throws(
     () => failSession(session.id, 'late failure', claim.claimToken, 12_400),
     /not claimed/i,
   );
+});
+
+test('terminal failures discard transient partial response text', () => {
+  const session = createFixture();
+  const claim = tryClaimSession(session.id, {
+    claimantId: 'tab-1',
+    nowMs: 20_000,
+    leaseMs: 5_000,
+  });
+  assert.ok(claim);
+
+  updateSessionPartial(session.id, 'incomplete stream', claim.claimToken, 20_100);
+  const failed = failSession(session.id, 'provider failed', claim.claimToken, 20_200);
+
+  assert.equal(failed?.status, 'error');
+  assert.equal(failed?.error, 'provider failed');
+  assert.equal(failed?.partialText, undefined);
 });
 
 test('a claimed session can be explicitly released and reclaimed', () => {
