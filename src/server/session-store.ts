@@ -162,6 +162,7 @@ export function completeSession(
   const session = requireClaim(sessionId, claimToken, nowMs);
   session.status = 'complete';
   session.response = response;
+  delete session.partialText;
   session.completedAt = new Date(nowMs).toISOString();
   session.lastActivityAt = session.completedAt;
   clearClaim(session);
@@ -177,6 +178,7 @@ export function failSession(
   const session = requireClaim(sessionId, claimToken, nowMs);
   session.status = 'error';
   session.error = error;
+  delete session.partialText;
   session.completedAt = new Date(nowMs).toISOString();
   session.lastActivityAt = session.completedAt;
   clearClaim(session);
