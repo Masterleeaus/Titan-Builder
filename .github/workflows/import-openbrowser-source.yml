@@ -50,6 +50,7 @@ jobs:
             '02-OB-002-project-path.patch|37ffa62e7bebfdf44b3d355993c699f3361b97e28e7167aef8760c136f165636'
             '03-OB-003-operation-order.patch|1e96fe1c5440e4a47811676534e4737b8892cbe56fcbc101db6a4ef231632399'
             '04-test-registration.patch|0875fe177e26f7df9962d5936bac73202fea1898dfcab024561c17e4be014892'
+            '05-typecheck-operation-paths.patch|e15ec905fb6c9c22be6cda443a015e1f65a3413154eeaf35865069cdde7bf91f'
           )
 
           for item in "${patches[@]}"; do
@@ -93,6 +94,6 @@ jobs:
             echo 'Repairs are already present; nothing to commit.'
             exit 0
           fi
-          git commit -m 'fix: apply verified OB-001 through OB-003 repairs'
+          git commit -m 'fix: apply verified Titan Builder repairs'
           git pull --rebase origin agent/fix-titan-builder-v2.6-deep-scan
           git push origin HEAD:agent/fix-titan-builder-v2.6-deep-scan
