@@ -220,25 +220,28 @@ async function applyOperation(
       break;
     }
     case 'CREATE_FOLDER': {
-      const absolutePath = await resolveProjectPath(projectRoot, operation.path, { expectedType: 'directory' });
+      const operationPath = requireOperationPath(operation);
+      const absolutePath = await resolveProjectPath(projectRoot, operationPath, { expectedType: 'directory' });
       const relativePath = path.relative(projectRoot, absolutePath);
       onStep?.('creating folder', relativePath);
       await fs.ensureDir(absolutePath);
-      await resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'directory' });
+      await resolveProjectPath(projectRoot, operationPath, { requireExisting: true, expectedType: 'directory' });
       break;
     }
     case 'CREATE_FILE': {
-      let absolutePath = await resolveProjectPath(projectRoot, operation.path, { expectedType: 'file' });
+      const operationPath = requireOperationPath(operation);
+      let absolutePath = await resolveProjectPath(projectRoot, operationPath, { expectedType: 'file' });
       const relativePath = path.relative(projectRoot, absolutePath);
       onStep?.('creating file', relativePath);
       await fs.ensureDir(path.dirname(absolutePath));
       await revalidateParentDirectory(projectRoot, absolutePath);
-      absolutePath = await resolveProjectPath(projectRoot, operation.path, { expectedType: 'file' });
+      absolutePath = await resolveProjectPath(projectRoot, operationPath, { expectedType: 'file' });
       await safeWriteFile(absolutePath, operation.content ?? '');
       break;
     }
     case 'EDIT_FILE': {
-      let absolutePath = await resolveProjectPath(projectRoot, operation.path, { expectedType: 'file' });
+      const operationPath = requireOperationPath(operation);
+      let absolutePath = await resolveProjectPath(projectRoot, operationPath, { expectedType: 'file' });
       const relativePath = path.relative(projectRoot, absolutePath);
       const exists = await fs.pathExists(absolutePath);
       if (!exists) {
@@ -250,27 +253,29 @@ async function applyOperation(
         onStep?.('creating file', `${relativePath} (via EDIT_FILE)`);
         await fs.ensureDir(path.dirname(absolutePath));
         await revalidateParentDirectory(projectRoot, absolutePath);
-        absolutePath = await resolveProjectPath(projectRoot, operation.path, { expectedType: 'file' });
+        absolutePath = await resolveProjectPath(projectRoot, operationPath, { expectedType: 'file' });
         await safeWriteFile(absolutePath, operation.content ?? '');
         break;
       }
 
       onStep?.('editing file', relativePath);
       const before = await fs.readFile(absolutePath, 'utf8');
-      absolutePath = await resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'file' });
+      absolutePath = await resolveProjectPath(projectRoot, operationPath, { requireExisting: true, expectedType: 'file' });
       await revalidateParentDirectory(projectRoot, absolutePath);
       await safeWriteFile(absolutePath, nextContent(operation, before));
       break;
     }
     case 'DELETE_FILE': {
-      const absolutePath = await resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'file' });
+      const operationPath = requireOperationPath(operation);
+      const absolutePath = await resolveProjectPath(projectRoot, operationPath, { requireExisting: true, expectedType: 'file' });
       const relativePath = path.relative(projectRoot, absolutePath);
       onStep?.('deleting file', relativePath);
       await unlink(absolutePath);
       break;
     }
     case 'RENAME_FILE': {
-      let absolutePath = await resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'file' });
+      const operationPath = requireOperationPath(operation);
+      let absolutePath = await resolveProjectPath(projectRoot, operationPath, { requireExisting: true, expectedType: 'file' });
       const relativePath = path.relative(projectRoot, absolutePath);
       onStep?.('renaming file', relativePath);
       if (!operation.replace) {
@@ -279,7 +284,7 @@ async function applyOperation(
       let destination = await resolveProjectPath(projectRoot, operation.replace, { expectedType: 'file' });
       await fs.ensureDir(path.dirname(destination));
       await revalidateParentDirectory(projectRoot, destination);
-      absolutePath = await resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'file' });
+      absolutePath = await resolveProjectPath(projectRoot, operationPath, { requireExisting: true, expectedType: 'file' });
       destination = await resolveProjectPath(projectRoot, operation.replace, { expectedType: 'file' });
       await fs.move(absolutePath, destination, { overwrite: false });
       break;
@@ -287,6 +292,13 @@ async function applyOperation(
     default:
       assertNever(operation.action);
   }
+}
+
+function requireOperationPath(operation: FileOperation): string {
+  if (!operation.path) {
+    throw new Error(`${operation.action} requires path`);
+  }
+  return operation.path;
 }
 
 async function revalidateParentDirectory(projectRoot: string, targetPath: string): Promise<void> {
