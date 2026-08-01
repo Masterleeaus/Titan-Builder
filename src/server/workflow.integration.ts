@@ -36,9 +36,24 @@ test('bridge workflow recovers, claims, streams, and completes with a lease toke
     payload: { sessionId, claimantId: 'test-tab' },
   });
   assert.equal(claim.statusCode, 200);
-  const claimPayload = claim.json() as { claimed: boolean; claimToken: string };
+  const claimPayload = claim.json() as {
+    claimed: boolean;
+    claimToken: string;
+    job: {
+      message: string;
+      promptBody: string;
+      systemPrompt: string;
+      promptInjectionCharLimit: number;
+      promptFileComposerNote: string;
+    };
+  };
   assert.equal(claimPayload.claimed, true);
   assert.ok(claimPayload.claimToken);
+  assert.equal(claimPayload.job.promptBody, 'message');
+  assert.equal(claimPayload.job.message, 'message');
+  assert.equal(claimPayload.job.systemPrompt, 'system');
+  assert.ok(claimPayload.job.promptInjectionCharLimit > 0);
+  assert.match(claimPayload.job.promptFileComposerNote, /attached/i);
 
   const duplicate = await app.inject({
     method: 'POST',

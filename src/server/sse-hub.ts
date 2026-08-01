@@ -6,8 +6,11 @@ export interface BrowserJobEvent {
   sessionId: string;
   mode: PromptSession['mode'];
   message: string;
+  promptBody: string;
   composerMessage: string;
   delivery: PromptDelivery;
+  promptInjectionCharLimit: number;
+  promptFileComposerNote: string;
   promptFileName?: string;
   systemPrompt: string;
   conversationId: string;

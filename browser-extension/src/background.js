@@ -6,6 +6,7 @@ import {
   withBridgeAuth,
 } from './bridge-config.js';
 import { selectPromptTarget } from './prompt-routing.js';
+import { prepareOutboundJob } from './job-payload.js';
 import { BUILTIN_AGENT_PROFILES, BUILTIN_SKILLS, composeWorkspacePrompt, normalizeAgentProfile, normalizeSkill, resolveWorkspaceContext } from './workspace-library.js';
 
 const RECONNECT_MS = 2500;
@@ -405,8 +406,7 @@ async function tryDispatchJob(job) {
   const config = await getBridgeConfig();
   const workspaceInstructions = await getWorkspaceInstructions();
   const enrichedJob = {
-    ...job,
-    systemPrompt: mergeSystemInstructions(job.systemPrompt, workspaceInstructions),
+    ...prepareOutboundJob(job, workspaceInstructions),
     autoContinue: {
       enabled: config.autoContinueEnabled,
       maxContinuations: config.autoContinueMax,
@@ -624,9 +624,3 @@ async function composePromptWithWorkspace(prompt) {
   return instructions ? `${instructions}\n\n${prompt}` : prompt;
 }
 
-function mergeSystemInstructions(existing, workspace) {
-  const left = String(existing ?? '').trim();
-  const right = String(workspace ?? '').trim();
-  if (!right || left.includes('--- OpenBrowser Active Agent Profile ---') || left.includes('--- OpenBrowser Active Skills ---')) return left;
-  return [left, right].filter(Boolean).join('\n\n');
-}

@@ -25,6 +25,7 @@ import {
 import {
   PROMPT_FILE_COMPOSER_NOTE,
   PROMPT_FILE_NAME,
+  PROMPT_INJECTION_CHAR_LIMIT,
   shouldDeliverPromptAsFile,
 } from '../shared/prompt-delivery.js';
 import {
@@ -288,17 +289,7 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
 
     logger.info({ sessionId: session.id, mode: session.mode, delivery }, 'Prompt session queued');
 
-    broadcastBrowserJob({
-      sessionId: session.id,
-      mode: session.mode,
-      message: composerMessage,
-      composerMessage,
-      delivery,
-      promptFileName: delivery === 'file' ? PROMPT_FILE_NAME : undefined,
-      systemPrompt: session.systemPrompt,
-      conversationId: session.conversationId,
-      markdownDraft: session.markdownDraft,
-    });
+    broadcastBrowserJob(toBrowserJob(session));
 
     return { sessionId: session.id, status: session.status };
   });
@@ -502,8 +493,11 @@ function toBrowserJob(session: PromptSession) {
     sessionId: session.id,
     mode: session.mode,
     message: session.composerMessage,
+    promptBody: session.message,
     composerMessage: session.composerMessage,
     delivery: session.delivery,
+    promptInjectionCharLimit: PROMPT_INJECTION_CHAR_LIMIT,
+    promptFileComposerNote: PROMPT_FILE_COMPOSER_NOTE,
     promptFileName: session.delivery === 'file' ? PROMPT_FILE_NAME : undefined,
     systemPrompt: session.systemPrompt,
     conversationId: session.conversationId,

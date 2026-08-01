@@ -26,8 +26,13 @@ test('workspace instructions and capped auto-continue are wired into prompt and 
     readFile(new URL('./content-script.js', import.meta.url), 'utf8'),
   ]);
   assert.match(background, /composeWorkspacePrompt/);
+  assert.match(background, /prepareOutboundJob/);
   assert.match(background, /activeProfileId/);
   assert.match(background, /autoContinueEnabled/);
+  assert.match(content, /authoritativeOutboundMessage/);
+  assert.match(content, /job\.promptFileContent/);
+  assert.doesNotMatch(content, /\/browser\/prompt-file/);
+  assert.doesNotMatch(content, /buildOutboundMessageForThread/);
   assert.match(content, /runAutoContinue/);
   assert.match(content, /autoContinueMax/);
   assert.match(content, /findNativeContinueButton/);

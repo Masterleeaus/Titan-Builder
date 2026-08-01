@@ -250,18 +250,17 @@ function startClaimHeartbeat(sessionId, claimToken) {
 
 async function processJob(job) {
   const beforeCount = countAssistantMessages();
-  const threadIsEmpty = beforeCount === 0;
+  const outboundMessage = authoritativeOutboundMessage(job);
+  if (!outboundMessage) {
+    throw new Error('Authoritative outbound prompt was empty.');
+  }
 
   if (job.delivery === 'file') {
     const composerMessage = job.composerMessage ?? job.message;
-    const attached = await attachPromptFile(job);
+    const promptFileContent = String(job.promptFileContent ?? outboundMessage);
+    const attached = await attachPromptFile(job, promptFileContent);
     if (!attached) {
-      const filePayload = await bridgeRequest(`/browser/prompt-file/${job.sessionId}`);
-      const fullMessage = String(filePayload?.content ?? '');
-      if (!fullMessage) {
-        throw new Error('Prompt file from bridge server was empty.');
-      }
-      await injectPrompt(fullMessage);
+      await injectPrompt(outboundMessage);
       await sleep(150);
       await clickSendWhenReady();
     } else {
@@ -271,7 +270,6 @@ async function processJob(job) {
       );
     }
   } else {
-    const outboundMessage = buildOutboundMessageForThread(job, threadIsEmpty);
     await injectPrompt(outboundMessage);
     await sleep(150);
     await clickSendWhenReady();
@@ -300,23 +298,8 @@ async function processJob(job) {
   await postBrowserResponse({ sessionId: job.sessionId, claimToken: job.claimToken, text });
 }
 
-function buildOutboundMessageForThread(job, threadIsEmpty) {
-  const message = String(job?.message ?? '');
-  if (!threadIsEmpty || !job?.systemPrompt) {
-    return message;
-  }
-
-  if (message.includes('--- OpenBrowser System Instructions ---')) {
-    return message;
-  }
-
-  return [
-    '--- OpenBrowser System Instructions ---',
-    String(job.systemPrompt),
-    '--- End System Instructions ---',
-    '',
-    message,
-  ].join('\n');
+function authoritativeOutboundMessage(job) {
+  return String(job?.outboundMessage ?? job?.promptBody ?? job?.message ?? '');
 }
 
 const MAX_ATTACH_ATTEMPTS = 2;
@@ -385,22 +368,21 @@ function isPromptAlreadyAttached(fileName) {
   return hasUploadUiSignal(fileName);
 }
 
-async function attachPromptFile(job) {
+async function attachPromptFile(job, content) {
   clearAttachDomCache();
 
   const fileName = job.promptFileName ?? 'openbrowser-prompt.txt';
-  const filePayload = await bridgeRequest(`/browser/prompt-file/${job.sessionId}`);
-  const content = String(filePayload?.content ?? '');
+  const promptContent = String(content ?? '');
 
-  if (!content) {
-    throw new Error('Prompt file from bridge server was empty.');
+  if (!promptContent) {
+    throw new Error('Authoritative prompt file content was empty.');
   }
 
   if (isPromptAlreadyAttached(fileName)) {
     return true;
   }
 
-  const file = new File([content], fileName, { type: 'text/plain' });
+  const file = new File([promptContent], fileName, { type: 'text/plain' });
   const fileSelectors = provider?.selectors?.fileInput ?? ['input[type="file"]'];
 
   if (await tryAttachOnBestInput(file, fileName, fileSelectors)) {
