@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createBridgeServer } from './index.ts';
-import { clearSessions } from './session-store.ts';
+import { createBridgeServer } from './index.js';
+import { clearSessions } from './session-store.js';
 
 test.beforeEach(() => {
   clearSessions();
