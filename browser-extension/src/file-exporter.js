@@ -44,100 +44,146 @@ export function buildMarkdownExport(items = [], { title = 'OpenBrowser export', 
   return `${lines.join('\n').trim()}\n`;
 }
 
+const CRC32_TABLE = new Uint32Array(256);
+for (let value = 0; value < CRC32_TABLE.length; value += 1) {
+  let crc = value;
+  for (let bit = 0; bit < 8; bit += 1) {
+    crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  CRC32_TABLE[value] = crc >>> 0;
+}
+
 function crc32(bytes) {
   let crc = 0xffffffff;
   for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
-    }
+    crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
   }
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-function pushUint16(target, value) {
-  target.push(value & 0xff, (value >>> 8) & 0xff);
+function writeUint16(view, offset, value) {
+  view.setUint16(offset, value, true);
+  return offset + 2;
 }
 
-function pushUint32(target, value) {
-  target.push(
-    value & 0xff,
-    (value >>> 8) & 0xff,
-    (value >>> 16) & 0xff,
-    (value >>> 24) & 0xff,
-  );
+function writeUint32(view, offset, value) {
+  view.setUint32(offset, value, true);
+  return offset + 4;
 }
 
 function dosDateTime(date = new Date()) {
-  const year = Math.max(1980, date.getFullYear());
+  const year = Math.min(2107, Math.max(1980, date.getFullYear()));
   return {
     time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
     date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
   };
 }
 
-export function createZipBytes(entries = []) {
-  const local = [];
-  const central = [];
-  let offset = 0;
-  const timestamp = dosDateTime();
+function normalizeZipEntry(entry) {
+  const name = String(entry.name ?? 'file')
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter(Boolean)
+    .map((part) => sanitizeExportName(part, 'file'))
+    .join('/') || 'file';
+  const nameBytes = encoder.encode(name);
+  const data = entry.data instanceof Uint8Array ? entry.data : encoder.encode(String(entry.data ?? ''));
 
-  for (const entry of entries) {
-    const name = String(entry.name ?? 'file')
-      .replace(/\\/g, '/')
-      .split('/')
-      .filter(Boolean)
-      .map((part) => sanitizeExportName(part, 'file'))
-      .join('/');
-    const nameBytes = encoder.encode(name);
-    const data = entry.data instanceof Uint8Array ? entry.data : encoder.encode(String(entry.data ?? ''));
-    const checksum = crc32(data);
-    const localHeader = [];
-    pushUint32(localHeader, 0x04034b50);
-    pushUint16(localHeader, 20);
-    pushUint16(localHeader, 0x0800);
-    pushUint16(localHeader, 0);
-    pushUint16(localHeader, timestamp.time);
-    pushUint16(localHeader, timestamp.date);
-    pushUint32(localHeader, checksum);
-    pushUint32(localHeader, data.length);
-    pushUint32(localHeader, data.length);
-    pushUint16(localHeader, nameBytes.length);
-    pushUint16(localHeader, 0);
-    local.push(...localHeader, ...nameBytes, ...data);
-
-    const centralHeader = [];
-    pushUint32(centralHeader, 0x02014b50);
-    pushUint16(centralHeader, 20);
-    pushUint16(centralHeader, 20);
-    pushUint16(centralHeader, 0x0800);
-    pushUint16(centralHeader, 0);
-    pushUint16(centralHeader, timestamp.time);
-    pushUint16(centralHeader, timestamp.date);
-    pushUint32(centralHeader, checksum);
-    pushUint32(centralHeader, data.length);
-    pushUint32(centralHeader, data.length);
-    pushUint16(centralHeader, nameBytes.length);
-    pushUint16(centralHeader, 0);
-    pushUint16(centralHeader, 0);
-    pushUint16(centralHeader, 0);
-    pushUint16(centralHeader, 0);
-    pushUint32(centralHeader, 0);
-    pushUint32(centralHeader, offset);
-    central.push(...centralHeader, ...nameBytes);
-    offset += localHeader.length + nameBytes.length + data.length;
+  if (nameBytes.length > 0xffff) {
+    throw new RangeError(`ZIP entry name is too long: ${name}`);
+  }
+  if (data.length > 0xffffffff) {
+    throw new RangeError(`ZIP entry is too large for the classic ZIP format: ${name}`);
   }
 
-  const end = [];
-  pushUint32(end, 0x06054b50);
-  pushUint16(end, 0);
-  pushUint16(end, 0);
-  pushUint16(end, entries.length);
-  pushUint16(end, entries.length);
-  pushUint32(end, central.length);
-  pushUint32(end, local.length);
-  pushUint16(end, 0);
-  return Uint8Array.from([...local, ...central, ...end]);
+  return {
+    nameBytes,
+    data,
+    checksum: crc32(data),
+    localOffset: 0,
+  };
+}
+
+export function createZipBytes(entries = []) {
+  if (entries.length > 0xffff) {
+    throw new RangeError('Classic ZIP archives support at most 65,535 entries.');
+  }
+
+  const normalized = entries.map(normalizeZipEntry);
+  const localLength = normalized.reduce(
+    (total, entry) => total + 30 + entry.nameBytes.length + entry.data.length,
+    0,
+  );
+  const centralLength = normalized.reduce(
+    (total, entry) => total + 46 + entry.nameBytes.length,
+    0,
+  );
+  const totalLength = localLength + centralLength + 22;
+
+  if (!Number.isSafeInteger(totalLength) || localLength > 0xffffffff || centralLength > 0xffffffff) {
+    throw new RangeError('ZIP archive exceeds classic ZIP size limits.');
+  }
+
+  const output = new Uint8Array(totalLength);
+  const view = new DataView(output.buffer, output.byteOffset, output.byteLength);
+  const timestamp = dosDateTime();
+  let cursor = 0;
+
+  for (const entry of normalized) {
+    entry.localOffset = cursor;
+    cursor = writeUint32(view, cursor, 0x04034b50);
+    cursor = writeUint16(view, cursor, 20);
+    cursor = writeUint16(view, cursor, 0x0800);
+    cursor = writeUint16(view, cursor, 0);
+    cursor = writeUint16(view, cursor, timestamp.time);
+    cursor = writeUint16(view, cursor, timestamp.date);
+    cursor = writeUint32(view, cursor, entry.checksum);
+    cursor = writeUint32(view, cursor, entry.data.length);
+    cursor = writeUint32(view, cursor, entry.data.length);
+    cursor = writeUint16(view, cursor, entry.nameBytes.length);
+    cursor = writeUint16(view, cursor, 0);
+    output.set(entry.nameBytes, cursor);
+    cursor += entry.nameBytes.length;
+    output.set(entry.data, cursor);
+    cursor += entry.data.length;
+  }
+
+  const centralOffset = cursor;
+  for (const entry of normalized) {
+    cursor = writeUint32(view, cursor, 0x02014b50);
+    cursor = writeUint16(view, cursor, 20);
+    cursor = writeUint16(view, cursor, 20);
+    cursor = writeUint16(view, cursor, 0x0800);
+    cursor = writeUint16(view, cursor, 0);
+    cursor = writeUint16(view, cursor, timestamp.time);
+    cursor = writeUint16(view, cursor, timestamp.date);
+    cursor = writeUint32(view, cursor, entry.checksum);
+    cursor = writeUint32(view, cursor, entry.data.length);
+    cursor = writeUint32(view, cursor, entry.data.length);
+    cursor = writeUint16(view, cursor, entry.nameBytes.length);
+    cursor = writeUint16(view, cursor, 0);
+    cursor = writeUint16(view, cursor, 0);
+    cursor = writeUint16(view, cursor, 0);
+    cursor = writeUint16(view, cursor, 0);
+    cursor = writeUint32(view, cursor, 0);
+    cursor = writeUint32(view, cursor, entry.localOffset);
+    output.set(entry.nameBytes, cursor);
+    cursor += entry.nameBytes.length;
+  }
+
+  cursor = writeUint32(view, cursor, 0x06054b50);
+  cursor = writeUint16(view, cursor, 0);
+  cursor = writeUint16(view, cursor, 0);
+  cursor = writeUint16(view, cursor, normalized.length);
+  cursor = writeUint16(view, cursor, normalized.length);
+  cursor = writeUint32(view, cursor, centralLength);
+  cursor = writeUint32(view, cursor, centralOffset);
+  cursor = writeUint16(view, cursor, 0);
+
+  if (cursor !== output.length) {
+    throw new Error(`ZIP assembly length mismatch: wrote ${cursor}, allocated ${output.length}`);
+  }
+  return output;
 }
 
 export function base64ToBytes(value) {
