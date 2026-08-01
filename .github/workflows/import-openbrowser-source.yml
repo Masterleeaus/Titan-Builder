@@ -50,6 +50,9 @@ jobs:
               destination_dir.mkdir(parents=True, exist_ok=True)
               for source_item in source_dir.rglob('*'):
                   relative = source_item.relative_to(source_dir)
+                  if destination_dir.name == '.github' and relative.parts[:1] == ('workflows',):
+                      print(f'Deferring archived workflow to connector-managed import: {relative}')
+                      continue
                   destination_item = destination_dir / relative
                   if source_item.is_dir():
                       destination_item.mkdir(parents=True, exist_ok=True)
