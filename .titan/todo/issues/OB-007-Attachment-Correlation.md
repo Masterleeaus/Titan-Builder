@@ -2,11 +2,14 @@
 
 - Severity: High
 - Branch: `agent/fix-titan-builder-v2.6-deep-scan`
-- Status: FIXED — dependency-backed verification pending
+- Status: VERIFIED
 - Source commit: `e28c5fc4b7a09856cee11814ccbd82d295b072cb`
+- Documentation verification commit: `31e656253c8e1abf64cb755a991f4b01db7ee6cc`
 - Artifact SHA-256: `f5315b9aa3b9c89bd4b085e9a851ba9bd023dfa01f44728bfd598ce550020c11`
 - Offline applicator run: `30724250738`
 - Offline applicator job: `91432941538`
+- Full verification run: `30724273543`
+- Full verification job: `91432999078`
 
 ## Confirmed defects
 
@@ -54,7 +57,7 @@ The original source explicitly accepted `text.includes('.txt')` and used `actual
 - Manifest ordering and source-wiring guards.
 - Unique per-session prompt filename generation.
 
-## Current verification
+## Green evidence
 
 The guarded applicator passed:
 
@@ -63,4 +66,13 @@ The guarded applicator passed:
 - Extension integrity.
 - Commit and push to the repair branch.
 
-Do not mark this issue VERIFIED until the full GitHub pipeline passes typecheck, all Node tests, all integrations, production build, CLI smoke, and extension integrity on this source commit or a direct descendant.
+GitHub Actions run `30724273543`, job `91432999078` passed:
+
+- TypeScript typecheck.
+- 116/116 Node tests.
+- 4/4 dependency-backed integration tests.
+- Production build.
+- CLI smoke test.
+- Manifest V3 extension integrity.
+
+The acceptance criteria are satisfied. Attachment completion now requires new, exact, per-job evidence, and composer submission requires normalized equality with the intended prompt.
