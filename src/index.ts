@@ -34,7 +34,7 @@ import {
   resolveProject,
   setActiveProject,
 } from './projects/registry.js';
-import { executeOperations, planOperations } from './operations/index.js';
+import { executePlannedOperations, planOperations } from './operations/index.js';
 import {
   buildAgentSystemPrompt,
   buildAskSystemPrompt,
@@ -281,7 +281,7 @@ ${colors.bold}Verification plan${colors.reset} ${colors.dim}(${profile})${colors
     return;
   }
 
-  await executeOperations(detected.operations, process.cwd(), {
+  await executePlannedOperations(plans, process.cwd(), {
     onStep: (step, detail) => writeInfo(`${step}${detail ? `: ${detail}` : ''}`),
   });
   writeSuccess(`${profile} verification completed`);
@@ -645,7 +645,10 @@ ${colors.bold}Changes preview${colors.reset} ${colors.dim}(${plans.length} opera
       }
 
       try {
-        await executeOperations(approvedOperations, process.cwd(), {
+        const executionPlans = approvedOperations.length === plans.length
+          ? plans
+          : await planOperations(approvedOperations, process.cwd());
+        await executePlannedOperations(executionPlans, process.cwd(), {
           conversationId: payload.conversationId,
           onStep: (step, detail) => tracker.step(step as TrackerStep, detail),
         });

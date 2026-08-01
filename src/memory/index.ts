@@ -18,6 +18,12 @@ export interface HistoryEntry {
   conversationId?: string;
   mode: 'ask' | 'agent' | 'server';
   summary: string;
+  status?: 'committed' | 'failed';
+  transactionId?: string;
+  operationCount?: number;
+  failedOperation?: number;
+  rollbackStatus?: 'not_required' | 'rolled_back' | 'rollback_failed';
+  error?: string;
 }
 
 function memoryPath(projectRoot: string, fileName?: string): string {

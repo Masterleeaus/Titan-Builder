@@ -1,6 +1,7 @@
 import { exec, spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
-import { open, unlink } from 'node:fs/promises';
+import { open, rename as renamePath, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { createPatch } from 'diff';
@@ -20,11 +21,21 @@ import {
 
 const execAsync = promisify(exec);
 
+export type PathStateKind = 'missing' | 'file' | 'directory';
+
+export interface PathPrecondition {
+  absolutePath: string;
+  kind: PathStateKind;
+  hash: string;
+}
+
 export interface PlannedOperation {
   operation: FileOperation;
   absolutePath: string;
   diff: string;
   risk: ToolRisk;
+  preconditions: PathPrecondition[];
+  affectedPaths: string[];
 }
 
 export interface ExecuteOptions {
@@ -33,12 +44,55 @@ export interface ExecuteOptions {
   onStep?: (step: string, detail?: string) => void;
 }
 
+interface PathSnapshot {
+  kind: PathStateKind;
+  hash: string;
+  content?: string;
+  mode?: number;
+}
+
+interface RollbackSnapshot extends PathSnapshot {
+  absolutePath: string;
+  relativePath: string;
+  backupPath?: string;
+  role: 'target' | 'parent';
+}
+
+interface TransactionJournal {
+  id: string;
+  status: 'prepared' | 'applying' | 'committed' | 'rolling_back' | 'rolled_back' | 'rollback_failed';
+  projectRoot: string;
+  conversationId?: string;
+  operationCount: number;
+  activeOperation?: number;
+  createdAt: string;
+  updatedAt: string;
+  rollbackStatus?: 'not_required' | 'rolled_back' | 'rollback_failed';
+  error?: string;
+  externalEffectsPossible: boolean;
+  snapshots: Array<{
+    relativePath: string;
+    kind: PathStateKind;
+    hash: string;
+    role: 'target' | 'parent';
+    backupPath?: string;
+  }>;
+}
+
+interface PreparedTransaction {
+  journal: TransactionJournal;
+  journalPath: string;
+  backupRoot: string;
+  snapshots: RollbackSnapshot[];
+}
+
 export async function planOperations(
   operations: FileOperation[],
   projectRoot: string,
 ): Promise<PlannedOperation[]> {
   const root = await canonicalizeProjectRoot(projectRoot);
   const plans: PlannedOperation[] = [];
+  const virtualState = new Map<string, PathSnapshot>();
   const normalizedOperations = preserveOperationOrder(
     expandMkdirOperations(operations),
   );
@@ -54,6 +108,8 @@ export async function planOperations(
         absolutePath: cwd,
         diff: `RUN_TOOL [${invocation.risk}] ${invocation.displayCommand}`,
         risk: invocation.risk,
+        preconditions: [],
+        affectedPaths: [],
       });
       continue;
     }
@@ -72,6 +128,8 @@ export async function planOperations(
         absolutePath: cwd,
         diff: `RUN_COMMAND [UNSAFE] ${operation.command ?? ''}`,
         risk: 'DESTRUCTIVE',
+        preconditions: [],
+        affectedPaths: [],
       });
       continue;
     }
@@ -81,11 +139,14 @@ export async function planOperations(
     }
 
     const absolutePath = await resolveFileOperationPath(root, operation);
+    const filePlan = await planFileOperation(operation, absolutePath, root, virtualState);
     plans.push({
       operation,
       absolutePath,
-      diff: await buildDiff(operation, absolutePath, root),
+      diff: filePlan.diff,
       risk: riskForFileOperation(operation),
+      preconditions: filePlan.preconditions,
+      affectedPaths: filePlan.affectedPaths,
     });
   }
 
@@ -97,25 +158,80 @@ export async function executeOperations(
   projectRoot: string,
   options: ExecuteOptions = {},
 ): Promise<PlannedOperation[]> {
+  const plans = await planOperations(operations, projectRoot);
+  return executePlannedOperations(plans, projectRoot, options);
+}
+
+export async function executePlannedOperations(
+  plans: PlannedOperation[],
+  projectRoot: string,
+  options: ExecuteOptions = {},
+): Promise<PlannedOperation[]> {
   const root = await canonicalizeProjectRoot(projectRoot);
-  const plans = await planOperations(operations, root);
 
   if (options.dryRun) {
     return plans;
   }
 
-  for (const plan of plans) {
-    await applyOperation(plan, root, options.onStep);
+  const transaction = await prepareTransaction(root, plans, options.conversationId);
+
+  try {
+    for (const [index, plan] of plans.entries()) {
+      transaction.journal.status = 'applying';
+      transaction.journal.activeOperation = index;
+      transaction.journal.updatedAt = new Date().toISOString();
+      await writeTransactionJournal(transaction);
+      await verifyPreconditions(plan.preconditions);
+      await applyOperation(plan, root, options.onStep);
+    }
+
+    transaction.journal.status = 'committed';
+    transaction.journal.rollbackStatus = 'not_required';
+    transaction.journal.activeOperation = undefined;
+    transaction.journal.updatedAt = new Date().toISOString();
+    await writeTransactionJournal(transaction);
+    await fs.remove(transaction.backupRoot);
+
+    await appendHistory(root, {
+      timestamp: new Date().toISOString(),
+      conversationId: options.conversationId,
+      mode: 'agent',
+      summary: `Applied ${plans.length} operation(s)`,
+      status: 'committed',
+      transactionId: transaction.journal.id,
+      operationCount: plans.length,
+      rollbackStatus: 'not_required',
+    });
+
+    return plans;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const rollbackStatus = await rollbackTransaction(transaction, message);
+
+    try {
+      await appendHistory(root, {
+        timestamp: new Date().toISOString(),
+        conversationId: options.conversationId,
+        mode: 'agent',
+        summary: `Operation transaction failed after ${transaction.journal.activeOperation ?? 0} completed step(s)`,
+        status: 'failed',
+        transactionId: transaction.journal.id,
+        operationCount: plans.length,
+        failedOperation: transaction.journal.activeOperation,
+        rollbackStatus,
+        error: message,
+      });
+    } catch (historyError) {
+      transaction.journal.error = `${message}; history write failed: ${formatUnknownError(historyError)}`;
+      transaction.journal.updatedAt = new Date().toISOString();
+      await writeTransactionJournal(transaction).catch(() => undefined);
+    }
+
+    throw new Error(
+      `Operation transaction failed: ${message}. Rollback ${rollbackStatus === 'rolled_back' ? 'completed' : 'failed; inspect the transaction journal'}.`,
+      { cause: error },
+    );
   }
-
-  await appendHistory(root, {
-    timestamp: new Date().toISOString(),
-    conversationId: options.conversationId,
-    mode: 'agent',
-    summary: `Applied ${plans.length} operation(s)`,
-  });
-
-  return plans;
 }
 
 async function resolveFileOperationPath(
@@ -131,10 +247,9 @@ async function resolveFileOperationPath(
       return resolveProjectPath(projectRoot, operation.path, { expectedType: 'directory' });
     case 'CREATE_FILE':
     case 'EDIT_FILE':
-      return resolveProjectPath(projectRoot, operation.path, { expectedType: 'file' });
     case 'DELETE_FILE':
     case 'RENAME_FILE':
-      return resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'file' });
+      return resolveProjectPath(projectRoot, operation.path, { expectedType: 'file' });
     default:
       throw new Error(`${operation.action} is not a file operation`);
   }
@@ -158,35 +273,349 @@ function riskForFileOperation(operation: FileOperation): ToolRisk {
   }
 }
 
-async function buildDiff(
+async function planFileOperation(
   operation: FileOperation,
   absolutePath: string,
   projectRoot: string,
-): Promise<string> {
+  virtualState: Map<string, PathSnapshot>,
+): Promise<{
+  diff: string;
+  preconditions: PathPrecondition[];
+  affectedPaths: string[];
+}> {
   const relativePath = path.relative(projectRoot, absolutePath);
+  const before = await getVirtualSnapshot(virtualState, absolutePath);
+  const preconditions = [toPrecondition(absolutePath, before)];
+  const affectedPaths = [absolutePath];
 
-  if (operation.action === 'CREATE_FOLDER') {
-    return `CREATE_FOLDER ${relativePath}`;
-  }
-
-  if (operation.action === 'RENAME_FILE') {
-    if (!operation.replace) {
-      throw new Error('RENAME_FILE requires replace as destination path');
+  switch (operation.action) {
+    case 'CREATE_FOLDER': {
+      if (before.kind === 'file') {
+        throw new Error(`CREATE_FOLDER cannot replace file ${relativePath}`);
+      }
+      virtualState.set(absolutePath, createSnapshot('directory'));
+      return { diff: `CREATE_FOLDER ${relativePath}`, preconditions, affectedPaths };
     }
-    await resolveProjectPath(projectRoot, operation.replace, { expectedType: 'file' });
-    return `RENAME_FILE ${relativePath} -> ${operation.replace}`;
+    case 'CREATE_FILE': {
+      if (before.kind === 'directory') {
+        throw new Error(`CREATE_FILE cannot replace directory ${relativePath}`);
+      }
+      const after = normalizeMultilineText(operation.content ?? '');
+      virtualState.set(absolutePath, createSnapshot('file', after));
+      return {
+        diff: createPatch(relativePath, before.content ?? '', after, 'before', 'after'),
+        preconditions,
+        affectedPaths,
+      };
+    }
+    case 'EDIT_FILE': {
+      if (before.kind === 'directory') {
+        throw new Error(`EDIT_FILE cannot edit directory ${relativePath}`);
+      }
+      if (before.kind === 'missing' && !operation.content?.trim()) {
+        throw new Error(
+          `EDIT_FILE on missing file ${relativePath} requires full content (file will be created)`,
+        );
+      }
+      const after = nextContent(operation, before.content ?? '');
+      virtualState.set(absolutePath, createSnapshot('file', after));
+      return {
+        diff: createPatch(relativePath, before.content ?? '', after, 'before', 'after'),
+        preconditions,
+        affectedPaths,
+      };
+    }
+    case 'DELETE_FILE': {
+      if (before.kind !== 'file') {
+        throw new Error(`DELETE_FILE requires existing file ${relativePath}`);
+      }
+      virtualState.set(absolutePath, createSnapshot('missing'));
+      return {
+        diff: createPatch(relativePath, before.content ?? '', '', 'before', 'after'),
+        preconditions,
+        affectedPaths,
+      };
+    }
+    case 'RENAME_FILE': {
+      if (before.kind !== 'file') {
+        throw new Error(`RENAME_FILE requires existing file ${relativePath}`);
+      }
+      if (!operation.replace) {
+        throw new Error('RENAME_FILE requires replace as destination path');
+      }
+      const destination = await resolveProjectPath(projectRoot, operation.replace, { expectedType: 'file' });
+      const destinationBefore = await getVirtualSnapshot(virtualState, destination);
+      if (destinationBefore.kind !== 'missing') {
+        throw new Error(`RENAME_FILE destination already exists: ${path.relative(projectRoot, destination)}`);
+      }
+      preconditions.push(toPrecondition(destination, destinationBefore));
+      affectedPaths.push(destination);
+      virtualState.set(absolutePath, createSnapshot('missing'));
+      virtualState.set(destination, createSnapshot('file', before.content ?? '', before.mode));
+      return {
+        diff: `RENAME_FILE ${relativePath} -> ${path.relative(projectRoot, destination)}`,
+        preconditions,
+        affectedPaths,
+      };
+    }
+    default:
+      throw new Error(`${operation.action} is not a file operation`);
+  }
+}
+
+async function getVirtualSnapshot(
+  virtualState: Map<string, PathSnapshot>,
+  absolutePath: string,
+): Promise<PathSnapshot> {
+  const existing = virtualState.get(absolutePath);
+  if (existing) {
+    return existing;
+  }
+  const snapshot = await readPathSnapshot(absolutePath);
+  virtualState.set(absolutePath, snapshot);
+  return snapshot;
+}
+
+function createSnapshot(kind: PathStateKind, content?: string, mode?: number): PathSnapshot {
+  return {
+    kind,
+    content: kind === 'file' ? content ?? '' : undefined,
+    mode,
+    hash: hashPathState(kind, content),
+  };
+}
+
+function toPrecondition(absolutePath: string, snapshot: PathSnapshot): PathPrecondition {
+  return {
+    absolutePath,
+    kind: snapshot.kind,
+    hash: snapshot.hash,
+  };
+}
+
+async function readPathSnapshot(absolutePath: string): Promise<PathSnapshot> {
+  if (!(await fs.pathExists(absolutePath))) {
+    return createSnapshot('missing');
   }
 
-  const before = (await fs.pathExists(absolutePath))
-    ? await fs.readFile(absolutePath, 'utf8')
-    : '';
-
-  if (operation.action === 'DELETE_FILE') {
-    return createPatch(relativePath, before, '', 'before', 'after');
+  const stats = await fs.lstat(absolutePath);
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Symbolic links are not valid operation targets: ${absolutePath}`);
+  }
+  if (stats.isDirectory()) {
+    return createSnapshot('directory', undefined, stats.mode);
+  }
+  if (!stats.isFile()) {
+    throw new Error(`Unsupported filesystem target: ${absolutePath}`);
   }
 
-  const after = nextContent(operation, before);
-  return createPatch(relativePath, before, after, 'before', 'after');
+  const content = await fs.readFile(absolutePath, 'utf8');
+  return createSnapshot('file', content, stats.mode);
+}
+
+function hashPathState(kind: PathStateKind, content?: string): string {
+  return crypto
+    .createHash('sha256')
+    .update(kind)
+    .update('\0')
+    .update(kind === 'file' ? content ?? '' : '')
+    .digest('hex');
+}
+
+async function verifyPreconditions(preconditions: PathPrecondition[]): Promise<void> {
+  for (const expected of preconditions) {
+    const actual = await readPathSnapshot(expected.absolutePath);
+    if (actual.kind !== expected.kind || actual.hash !== expected.hash) {
+      throw new Error(`Operation precondition changed for ${expected.absolutePath}`);
+    }
+  }
+}
+
+async function prepareTransaction(
+  projectRoot: string,
+  plans: PlannedOperation[],
+  conversationId?: string,
+): Promise<PreparedTransaction> {
+  const id = crypto.randomUUID();
+  const transactionsRoot = path.join(projectRoot, '.openbrowser', 'transactions');
+  const journalPath = path.join(transactionsRoot, `${id}.json`);
+  const backupRoot = path.join(transactionsRoot, `${id}.backup`);
+  const firstPreconditions = new Map<string, PathPrecondition>();
+
+  for (const plan of plans) {
+    for (const precondition of plan.preconditions) {
+      if (!firstPreconditions.has(precondition.absolutePath)) {
+        firstPreconditions.set(precondition.absolutePath, precondition);
+      }
+    }
+  }
+
+  for (const precondition of firstPreconditions.values()) {
+    await verifyPreconditions([precondition]);
+  }
+
+  const snapshots: RollbackSnapshot[] = [];
+  for (const absolutePath of firstPreconditions.keys()) {
+    const snapshot = await readPathSnapshot(absolutePath);
+    snapshots.push({
+      ...snapshot,
+      absolutePath,
+      relativePath: path.relative(projectRoot, absolutePath),
+      role: 'target',
+    });
+  }
+
+  const parentPaths = collectParentPaths(projectRoot, [...firstPreconditions.keys()]);
+  for (const absolutePath of parentPaths) {
+    const snapshot = await readPathSnapshot(absolutePath);
+    snapshots.push({
+      ...snapshot,
+      absolutePath,
+      relativePath: path.relative(projectRoot, absolutePath),
+      role: 'parent',
+    });
+  }
+
+  await fs.ensureDir(backupRoot);
+  let backupIndex = 0;
+  for (const snapshot of snapshots) {
+    if (snapshot.kind !== 'file') {
+      continue;
+    }
+    const backupPath = path.join(backupRoot, `${backupIndex}.bak`);
+    backupIndex += 1;
+    await fs.copyFile(snapshot.absolutePath, backupPath);
+    snapshot.backupPath = backupPath;
+  }
+
+  const now = new Date().toISOString();
+  const journal: TransactionJournal = {
+    id,
+    status: 'prepared',
+    projectRoot,
+    conversationId,
+    operationCount: plans.length,
+    createdAt: now,
+    updatedAt: now,
+    externalEffectsPossible: plans.some((plan) =>
+      plan.operation.action === 'RUN_COMMAND' ||
+      (plan.operation.action === 'RUN_TOOL' && plan.risk !== 'READ')
+    ),
+    snapshots: snapshots.map((snapshot) => ({
+      relativePath: snapshot.relativePath,
+      kind: snapshot.kind,
+      hash: snapshot.hash,
+      role: snapshot.role,
+      backupPath: snapshot.backupPath ? path.relative(transactionsRoot, snapshot.backupPath) : undefined,
+    })),
+  };
+
+  const transaction = { journal, journalPath, backupRoot, snapshots };
+  await writeTransactionJournal(transaction);
+  return transaction;
+}
+
+function collectParentPaths(projectRoot: string, targets: string[]): string[] {
+  const parents = new Set<string>();
+  for (const target of targets) {
+    let current = path.dirname(target);
+    while (current !== projectRoot && path.relative(projectRoot, current) && !path.relative(projectRoot, current).startsWith('..')) {
+      if (!current.startsWith(path.join(projectRoot, '.openbrowser', 'transactions'))) {
+        parents.add(current);
+      }
+      current = path.dirname(current);
+    }
+  }
+  return [...parents].sort((left, right) => pathDepth(left) - pathDepth(right));
+}
+
+async function rollbackTransaction(
+  transaction: PreparedTransaction,
+  errorMessage: string,
+): Promise<'rolled_back' | 'rollback_failed'> {
+  transaction.journal.status = 'rolling_back';
+  transaction.journal.error = errorMessage;
+  transaction.journal.updatedAt = new Date().toISOString();
+  await writeTransactionJournal(transaction).catch(() => undefined);
+
+  try {
+    const targets = transaction.snapshots
+      .filter((snapshot) => snapshot.role === 'target')
+      .sort((left, right) => pathDepth(right.absolutePath) - pathDepth(left.absolutePath));
+
+    for (const snapshot of targets) {
+      if (snapshot.kind === 'missing') {
+        await fs.remove(snapshot.absolutePath);
+        continue;
+      }
+      if (snapshot.kind === 'directory') {
+        if (await fs.pathExists(snapshot.absolutePath)) {
+          const current = await fs.lstat(snapshot.absolutePath);
+          if (!current.isDirectory()) {
+            await fs.remove(snapshot.absolutePath);
+          }
+        }
+        await fs.ensureDir(snapshot.absolutePath);
+        continue;
+      }
+      if (!snapshot.backupPath) {
+        throw new Error(`Missing rollback backup for ${snapshot.relativePath}`);
+      }
+      await fs.remove(snapshot.absolutePath);
+      await fs.ensureDir(path.dirname(snapshot.absolutePath));
+      await fs.copyFile(snapshot.backupPath, snapshot.absolutePath);
+      if (snapshot.mode !== undefined) {
+        await fs.chmod(snapshot.absolutePath, snapshot.mode);
+      }
+    }
+
+    const parents = transaction.snapshots
+      .filter((snapshot) => snapshot.role === 'parent')
+      .sort((left, right) => pathDepth(right.absolutePath) - pathDepth(left.absolutePath));
+    for (const snapshot of parents) {
+      if (snapshot.kind === 'missing') {
+        try {
+          await fs.rmdir(snapshot.absolutePath);
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTEMPTY' && code !== 'EEXIST') {
+            throw error;
+          }
+        }
+      } else if (snapshot.kind === 'directory') {
+        await fs.ensureDir(snapshot.absolutePath);
+      }
+    }
+
+    transaction.journal.status = 'rolled_back';
+    transaction.journal.rollbackStatus = 'rolled_back';
+    transaction.journal.updatedAt = new Date().toISOString();
+    await fs.remove(transaction.backupRoot);
+    await writeTransactionJournal(transaction);
+    return 'rolled_back';
+  } catch (rollbackError) {
+    transaction.journal.status = 'rollback_failed';
+    transaction.journal.rollbackStatus = 'rollback_failed';
+    transaction.journal.error = `${errorMessage}; rollback failed: ${formatUnknownError(rollbackError)}`;
+    transaction.journal.updatedAt = new Date().toISOString();
+    await writeTransactionJournal(transaction).catch(() => undefined);
+    return 'rollback_failed';
+  }
+}
+
+async function writeTransactionJournal(transaction: PreparedTransaction): Promise<void> {
+  await fs.ensureDir(path.dirname(transaction.journalPath));
+  const temporaryPath = `${transaction.journalPath}.${crypto.randomUUID()}.tmp`;
+  await fs.writeJson(temporaryPath, transaction.journal, { spaces: 2 });
+  await renamePath(temporaryPath, transaction.journalPath);
+}
+
+function pathDepth(value: string): number {
+  return value.split(path.sep).length;
+}
+
+function formatUnknownError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function applyOperation(
@@ -310,12 +739,27 @@ async function revalidateParentDirectory(projectRoot: string, targetPath: string
 
 async function safeWriteFile(filePath: string, content: string): Promise<void> {
   const noFollowFlag = process.platform === 'win32' ? 0 : fsConstants.O_NOFOLLOW;
-  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | noFollowFlag;
-  const handle = await open(filePath, flags, 0o666);
+  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | noFollowFlag;
+  const temporaryPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.openbrowser-${crypto.randomUUID()}.tmp`,
+  );
+  const existingMode = await fs.stat(filePath).then((stats) => stats.mode).catch(() => undefined);
+  const handle = await open(temporaryPath, flags, existingMode ?? 0o666);
   try {
     await handle.writeFile(content, 'utf8');
   } finally {
     await handle.close();
+  }
+
+  try {
+    if (existingMode !== undefined) {
+      await fs.chmod(temporaryPath, existingMode);
+    }
+    await renamePath(temporaryPath, filePath);
+  } catch (error) {
+    await fs.remove(temporaryPath).catch(() => undefined);
+    throw error;
   }
 }
 
