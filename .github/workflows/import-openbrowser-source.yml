@@ -1,4 +1,4 @@
-name: Apply Verified Titan Builder Repairs
+name: Apply Verified Titan Builder Repair
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 jobs:
-  apply-repairs:
+  apply-repair:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     concurrency:
@@ -36,52 +36,34 @@ jobs:
           test -d src
           test -f OpenBrowser-v0.5.0-Project-Intelligence-Port.zip
 
-      - name: Download, verify, and apply repairs once
+      - name: Download, verify, and apply OB-004 repair once
         shell: bash
         env:
-          PATCH_BASE_URL: https://titan-builder-repair-patches.miniup.app/patches
+          PATCH_URL: https://titan-builder-repair-patches.miniup.app/patches/06-OB-004-transactional-operations.patch
+          PATCH_SHA256: 26ed0bb494eceb0cb9c0156601cef3b71bc5dc780c3159a1b8eb55e10c098341
         run: |
           set -euo pipefail
-          work_dir="$(mktemp -d)"
-          trap 'rm -rf "$work_dir"' EXIT
+          patch_path="$(mktemp)"
+          trap 'rm -f "$patch_path"' EXIT
+          curl --fail --location --silent --show-error --retry 3 "$PATCH_URL" --output "$patch_path"
+          actual_sha="$(sha256sum "$patch_path" | awk '{print $1}')"
+          if [[ "$actual_sha" != "$PATCH_SHA256" ]]; then
+            echo "Checksum mismatch: expected $PATCH_SHA256, got $actual_sha" >&2
+            exit 1
+          fi
 
-          patches=(
-            '01-OB-001-grok-routing.patch|9f87cb2aacf13524697377f1123499120bcfa6263814284f1f915a66cbd8c72c'
-            '02-OB-002-project-path.patch|37ffa62e7bebfdf44b3d355993c699f3361b97e28e7167aef8760c136f165636'
-            '03-OB-003-operation-order.patch|1e96fe1c5440e4a47811676534e4737b8892cbe56fcbc101db6a4ef231632399'
-            '04-test-registration.patch|0875fe177e26f7df9962d5936bac73202fea1898dfcab024561c17e4be014892'
-            '05-typecheck-operation-paths.patch|e15ec905fb6c9c22be6cda443a015e1f65a3413154eeaf35865069cdde7bf91f'
-          )
-
-          for item in "${patches[@]}"; do
-            IFS='|' read -r patch_name expected_sha <<< "$item"
-            patch_path="$work_dir/$patch_name"
-            curl --fail --location --silent --show-error --retry 3 \
-              "$PATCH_BASE_URL/$patch_name" \
-              --output "$patch_path"
-
-            actual_sha="$(sha256sum "$patch_path" | awk '{print $1}')"
-            if [[ "$actual_sha" != "$expected_sha" ]]; then
-              echo "Checksum mismatch for $patch_name: expected $expected_sha, got $actual_sha" >&2
-              exit 1
-            fi
-
-            if git apply --reverse --check "$patch_path" 2>/dev/null; then
-              echo "Already applied: $patch_name"
-            elif git apply --check "$patch_path"; then
-              git apply "$patch_path"
-              echo "Applied: $patch_name"
-            else
-              echo "Repair patch cannot be applied cleanly: $patch_name" >&2
-              exit 1
-            fi
-          done
+          if git apply --reverse --check "$patch_path" 2>/dev/null; then
+            echo 'OB-004 repair is already applied.'
+          elif git apply --check "$patch_path"; then
+            git apply "$patch_path"
+            echo 'Applied OB-004 transactional operations repair.'
+          else
+            echo 'OB-004 repair cannot be applied cleanly.' >&2
+            exit 1
+          fi
 
       - name: Run dependency-free repair gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run verify:offline
+        run: npm run verify:offline
 
       - name: Commit verified source changes
         shell: bash
@@ -89,11 +71,11 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add browser-extension src package.json
+          git add src
           if git diff --cached --quiet; then
-            echo 'Repairs are already present; nothing to commit.'
+            echo 'Repair is already present; nothing to commit.'
             exit 0
           fi
-          git commit -m 'fix: apply verified Titan Builder repairs'
+          git commit -m 'fix: make operations stateful and transactional'
           git pull --rebase origin agent/fix-titan-builder-v2.6-deep-scan
           git push origin HEAD:agent/fix-titan-builder-v2.6-deep-scan
