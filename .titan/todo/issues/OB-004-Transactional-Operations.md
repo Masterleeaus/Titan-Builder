@@ -2,8 +2,10 @@
 
 - Severity: High
 - Branch: `agent/fix-titan-builder-v2.6-deep-scan`
-- Status: FIXED — dependency-backed verification running
+- Status: VERIFIED
 - Source commit: `f20bd93a7ff11ccb93d36652529e32b6f6a84073`
+- Verification run: `30723710993`
+- Verification job: `91431555309`
 
 ## Confirmed defects
 
@@ -15,8 +17,8 @@
 
 GitHub Actions run `30723345611`, job `91430626148` reproduced both original defects:
 
-- Stateful preview test failed with `Search text not found in notes.txt` on the second edit.
-- Transaction test failed with the original operation error and no rollback indication.
+- Stateful preview failed with `Search text not found in notes.txt` on the second edit.
+- Transaction application failed without restoring the earlier write or recording rollback.
 
 ## Implemented repair
 
@@ -28,20 +30,21 @@ GitHub Actions run `30723345611`, job `91430626148` reproduced both original def
 - Automatic rollback when any later operation fails.
 - Rollback status, failure details, transaction ID, operation count, and failed step recorded in history.
 - Sibling temporary-file writes followed by rename for atomic replacement where supported.
-- CLI execution paths now use the approved plans rather than silently rebuilding them.
-- Journal records when tool or command execution may have produced external side effects that filesystem rollback cannot reverse.
+- CLI execution paths use approved plans rather than silently rebuilding them.
+- Journal records when external tool or command side effects may not be reversible by filesystem rollback.
 
-## Verification gates
+## Green evidence
 
-- Exact binary source artifact SHA-256: `e4748eb85dc601be01efabce80e944bcce323c1fff58a702ea1e2c2e5914addc`.
-- Artifact path allowlist: exactly five files.
-- Dependency-free gate passed before the source commit: 101/101 tests plus extension integrity.
-- Full pipeline must still prove:
-  - sequential planning,
-  - stale approved-plan rejection,
-  - restoration of edited files,
-  - removal of newly created files,
-  - rollback history and journal state,
-  - typecheck, build, CLI smoke, and extension integrity.
+GitHub Actions run `30723710993`, job `91431555309` passed:
 
-Do not mark this issue VERIFIED until the full dependency-backed run passes on the source commit above or a direct descendant.
+- 101/101 Node tests.
+- Stateful sequential-preview integration.
+- Stale approved-plan rejection integration.
+- Multi-file rollback restoration and journal integration.
+- Bridge workflow integration.
+- TypeScript typecheck.
+- Production build.
+- CLI smoke test.
+- Extension integrity check.
+
+The issue is verified for the tested Linux environment. Cross-platform atomic-replace behavior remains part of normal platform hardening, but no known OB-004 acceptance criterion remains open.
