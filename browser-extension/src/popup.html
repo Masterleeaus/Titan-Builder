@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>OpenBrowser</title>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <main>
+      <header class="header">
+        <img class="logo" src="../icons/favicon.png" alt="OpenBrowser" width="28" height="28" />
+        <h1>OpenBrowser</h1>
+        <span class="version" id="extension-version">—</span>
+      </header>
+
+      <section class="card" id="bridge-card">
+        <div class="card-title">Bridge</div>
+        <div class="status-row">
+          <span class="dot" id="bridge-dot"></span>
+          <span id="bridge-status">Checking...</span>
+        </div>
+        <div class="meta" id="bridge-meta">127.0.0.1:5000</div>
+      </section>
+
+      <section class="card" id="page-card">
+        <div class="card-title">Current Page</div>
+        <div class="status-row">
+          <span class="dot" id="page-dot"></span>
+          <span id="page-host">—</span>
+        </div>
+        <div class="meta" id="page-provider">—</div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">Coding Bridge Settings</div>
+        <label class="field">
+          <span>Local port</span>
+          <input id="bridge-port" type="number" min="1024" max="65535" inputmode="numeric" />
+        </label>
+        <label class="field">
+          <span>Bridge token</span>
+          <input id="bridge-token" type="password" autocomplete="off" placeholder="Optional but recommended" />
+        </label>
+        <label class="field">
+          <span>Preferred AI tab</span>
+          <select id="preferred-provider">
+            <option value="auto">Automatic / active tab</option>
+            <option value="chatgpt">ChatGPT</option>
+            <option value="claude">Claude</option>
+            <option value="gemini">Gemini</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="perplexity">Perplexity</option>
+            <option value="glm">GLM</option>
+            <option value="grok">Grok</option>
+          </select>
+        </label>
+        <label class="check-field">
+          <input id="superpower-compatibility" type="checkbox" />
+          <span>Superpower compatibility mode</span>
+        </label>
+        <button id="save-settings" type="button">Save Bridge Settings</button>
+        <div class="meta" id="settings-result" role="status"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">Providers</div>
+        <ul id="provider-list" class="provider-list"></ul>
+      </section>
+
+      <section class="card">
+        <div class="card-title">Open Tabs</div>
+        <div class="meta" id="tabs-summary">0 tabs</div>
+      </section>
+
+      <button id="open-sidepanel" class="primary-action" type="button">Open Coding Side Panel</button>
+      <button id="check" type="button">Refresh Status</button>
+    </main>
+    <script type="module" src="./popup.js"></script>
+  </body>
+</html>
