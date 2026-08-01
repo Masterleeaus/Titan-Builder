@@ -1,4 +1,6 @@
 import { exec, spawn } from 'node:child_process';
+import { constants as fsConstants } from 'node:fs';
+import { open, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { createPatch } from 'diff';
@@ -6,8 +8,9 @@ import fs from 'fs-extra';
 import type { FileOperation } from '../core/index.js';
 import { normalizeMultilineText } from '../parser/markdown-agent.js';
 import { appendHistory } from '../memory/index.js';
+import { canonicalizeProjectRoot, resolveProjectPath } from '../security/project-path.js';
 import { expandMkdirOperations, looksLikePowerShellCommand } from './mkdir-normalize.js';
-import { sortOperationsByExecutionOrder } from './operation-order.js';
+import { preserveOperationOrder } from './operation-order.js';
 import {
   isUnsafeLegacyCommandEnabled,
   resolveToolInvocation,
@@ -34,15 +37,17 @@ export async function planOperations(
   operations: FileOperation[],
   projectRoot: string,
 ): Promise<PlannedOperation[]> {
-  const root = path.resolve(projectRoot);
+  const root = await canonicalizeProjectRoot(projectRoot);
   const plans: PlannedOperation[] = [];
-  const normalizedOperations = sortOperationsByExecutionOrder(
+  const normalizedOperations = preserveOperationOrder(
     expandMkdirOperations(operations),
   );
 
   for (const operation of normalizedOperations) {
     if (operation.action === 'RUN_TOOL') {
-      const cwd = operation.path ? resolveInsideRoot(root, operation.path) : root;
+      const cwd = operation.path
+        ? await resolveProjectPath(root, operation.path, { requireExisting: true, expectedType: 'directory' })
+        : root;
       const invocation = resolveToolInvocation(operation.tool ?? '', operation.args ?? [], cwd);
       plans.push({
         operation,
@@ -59,9 +64,12 @@ export async function planOperations(
           'RUN_COMMAND is disabled. Use RUN_TOOL, or set OPENBROWSER_ALLOW_UNSAFE_COMMANDS=1 for explicit legacy opt-in.',
         );
       }
+      const cwd = operation.path
+        ? await resolveProjectPath(root, operation.path, { requireExisting: true, expectedType: 'directory' })
+        : root;
       plans.push({
         operation,
-        absolutePath: root,
+        absolutePath: cwd,
         diff: `RUN_COMMAND [UNSAFE] ${operation.command ?? ''}`,
         risk: 'DESTRUCTIVE',
       });
@@ -72,7 +80,7 @@ export async function planOperations(
       throw new Error(`${operation.action} requires path`);
     }
 
-    const absolutePath = resolveInsideRoot(root, operation.path);
+    const absolutePath = await resolveFileOperationPath(root, operation);
     plans.push({
       operation,
       absolutePath,
@@ -89,17 +97,18 @@ export async function executeOperations(
   projectRoot: string,
   options: ExecuteOptions = {},
 ): Promise<PlannedOperation[]> {
-  const plans = await planOperations(operations, projectRoot);
+  const root = await canonicalizeProjectRoot(projectRoot);
+  const plans = await planOperations(operations, root);
 
   if (options.dryRun) {
     return plans;
   }
 
   for (const plan of plans) {
-    await applyOperation(plan, projectRoot, options.onStep);
+    await applyOperation(plan, root, options.onStep);
   }
 
-  await appendHistory(projectRoot, {
+  await appendHistory(root, {
     timestamp: new Date().toISOString(),
     conversationId: options.conversationId,
     mode: 'agent',
@@ -109,15 +118,26 @@ export async function executeOperations(
   return plans;
 }
 
-function resolveInsideRoot(projectRoot: string, relativePath: string): string {
-  const absolutePath = path.resolve(projectRoot, relativePath);
-  const relative = path.relative(projectRoot, absolutePath);
-
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error(`Path escapes project root: ${relativePath}`);
+async function resolveFileOperationPath(
+  projectRoot: string,
+  operation: FileOperation,
+): Promise<string> {
+  if (!operation.path) {
+    throw new Error(`${operation.action} requires path`);
   }
 
-  return absolutePath;
+  switch (operation.action) {
+    case 'CREATE_FOLDER':
+      return resolveProjectPath(projectRoot, operation.path, { expectedType: 'directory' });
+    case 'CREATE_FILE':
+    case 'EDIT_FILE':
+      return resolveProjectPath(projectRoot, operation.path, { expectedType: 'file' });
+    case 'DELETE_FILE':
+    case 'RENAME_FILE':
+      return resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'file' });
+    default:
+      throw new Error(`${operation.action} is not a file operation`);
+  }
 }
 
 function riskForFileOperation(operation: FileOperation): ToolRisk {
@@ -153,7 +173,7 @@ async function buildDiff(
     if (!operation.replace) {
       throw new Error('RENAME_FILE requires replace as destination path');
     }
-    resolveInsideRoot(projectRoot, operation.replace);
+    await resolveProjectPath(projectRoot, operation.replace, { expectedType: 'file' });
     return `RENAME_FILE ${relativePath} -> ${operation.replace}`;
   }
 
@@ -174,12 +194,12 @@ async function applyOperation(
   projectRoot: string,
   onStep?: (step: string, detail?: string) => void,
 ): Promise<void> {
-  const { operation, absolutePath } = plan;
+  const { operation } = plan;
 
   switch (operation.action) {
     case 'RUN_TOOL': {
       const cwd = operation.path
-        ? resolveInsideRoot(projectRoot, operation.path)
+        ? await resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'directory' })
         : projectRoot;
       const invocation = resolveToolInvocation(operation.tool ?? '', operation.args ?? [], cwd);
       onStep?.('running command', `${invocation.toolId} [${invocation.risk}]`);
@@ -193,26 +213,32 @@ async function applyOperation(
         );
       }
       const cwd = operation.path
-        ? resolveInsideRoot(projectRoot, operation.path)
+        ? await resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'directory' })
         : projectRoot;
       onStep?.('running command', `UNSAFE legacy command: ${operation.command ?? ''}`);
       await runShellCommand(operation.command ?? '', cwd);
       break;
     }
     case 'CREATE_FOLDER': {
+      const absolutePath = await resolveProjectPath(projectRoot, operation.path, { expectedType: 'directory' });
       const relativePath = path.relative(projectRoot, absolutePath);
       onStep?.('creating folder', relativePath);
       await fs.ensureDir(absolutePath);
+      await resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'directory' });
       break;
     }
     case 'CREATE_FILE': {
+      let absolutePath = await resolveProjectPath(projectRoot, operation.path, { expectedType: 'file' });
       const relativePath = path.relative(projectRoot, absolutePath);
       onStep?.('creating file', relativePath);
       await fs.ensureDir(path.dirname(absolutePath));
-      await fs.writeFile(absolutePath, operation.content ?? '');
+      await revalidateParentDirectory(projectRoot, absolutePath);
+      absolutePath = await resolveProjectPath(projectRoot, operation.path, { expectedType: 'file' });
+      await safeWriteFile(absolutePath, operation.content ?? '');
       break;
     }
     case 'EDIT_FILE': {
+      let absolutePath = await resolveProjectPath(projectRoot, operation.path, { expectedType: 'file' });
       const relativePath = path.relative(projectRoot, absolutePath);
       const exists = await fs.pathExists(absolutePath);
       if (!exists) {
@@ -223,34 +249,61 @@ async function applyOperation(
         }
         onStep?.('creating file', `${relativePath} (via EDIT_FILE)`);
         await fs.ensureDir(path.dirname(absolutePath));
-        await fs.writeFile(absolutePath, operation.content ?? '');
+        await revalidateParentDirectory(projectRoot, absolutePath);
+        absolutePath = await resolveProjectPath(projectRoot, operation.path, { expectedType: 'file' });
+        await safeWriteFile(absolutePath, operation.content ?? '');
         break;
       }
 
       onStep?.('editing file', relativePath);
       const before = await fs.readFile(absolutePath, 'utf8');
-      await fs.writeFile(absolutePath, nextContent(operation, before));
+      absolutePath = await resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'file' });
+      await revalidateParentDirectory(projectRoot, absolutePath);
+      await safeWriteFile(absolutePath, nextContent(operation, before));
       break;
     }
     case 'DELETE_FILE': {
+      const absolutePath = await resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'file' });
       const relativePath = path.relative(projectRoot, absolutePath);
       onStep?.('deleting file', relativePath);
-      await fs.remove(absolutePath);
+      await unlink(absolutePath);
       break;
     }
     case 'RENAME_FILE': {
+      let absolutePath = await resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'file' });
       const relativePath = path.relative(projectRoot, absolutePath);
       onStep?.('renaming file', relativePath);
       if (!operation.replace) {
         throw new Error('RENAME_FILE requires replace as destination path');
       }
-      const destination = resolveInsideRoot(projectRoot, operation.replace);
+      let destination = await resolveProjectPath(projectRoot, operation.replace, { expectedType: 'file' });
       await fs.ensureDir(path.dirname(destination));
+      await revalidateParentDirectory(projectRoot, destination);
+      absolutePath = await resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'file' });
+      destination = await resolveProjectPath(projectRoot, operation.replace, { expectedType: 'file' });
       await fs.move(absolutePath, destination, { overwrite: false });
       break;
     }
     default:
       assertNever(operation.action);
+  }
+}
+
+async function revalidateParentDirectory(projectRoot: string, targetPath: string): Promise<void> {
+  await resolveProjectPath(projectRoot, path.dirname(targetPath), {
+    requireExisting: true,
+    expectedType: 'directory',
+  });
+}
+
+async function safeWriteFile(filePath: string, content: string): Promise<void> {
+  const noFollowFlag = process.platform === 'win32' ? 0 : fsConstants.O_NOFOLLOW;
+  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | noFollowFlag;
+  const handle = await open(filePath, flags, 0o666);
+  try {
+    await handle.writeFile(content, 'utf8');
+  } finally {
+    await handle.close();
   }
 }
 

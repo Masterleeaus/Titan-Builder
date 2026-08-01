@@ -1,26 +1,17 @@
 import type { FileOperation } from '../core/types/index.js';
 
-const EXECUTION_ORDER: Record<string, number> = {
-  CREATE_FOLDER: 0,
-  CREATE_FILE: 1,
-  EDIT_FILE: 2,
-  RENAME_FILE: 3,
-  DELETE_FILE: 4,
-  RUN_TOOL: 5,
-  RUN_COMMAND: 6,
-};
-
-/** Run folders and file writes before structured tools or legacy shell commands. */
-export function sortOperationsByExecutionOrder(operations: FileOperation[]): FileOperation[] {
-  return [...operations]
-    .map((operation, index) => ({ operation, index }))
-    .sort((left, right) => {
-      const leftOrder = EXECUTION_ORDER[left.operation.action] ?? 9;
-      const rightOrder = EXECUTION_ORDER[right.operation.action] ?? 9;
-      if (leftOrder !== rightOrder) {
-        return leftOrder - rightOrder;
-      }
-      return left.index - right.index;
-    })
-    .map(({ operation }) => operation);
+/**
+ * Preserve the operation sequence approved by the user.
+ *
+ * Safe command normalization (for example, converting an in-place mkdir-only
+ * command into CREATE_FOLDER operations) happens before this function and
+ * retains the command's original position. File operations already create
+ * their required parent directories at execution time, so global action-type
+ * sorting is neither necessary nor safe.
+ */
+export function preserveOperationOrder(operations: FileOperation[]): FileOperation[] {
+  return [...operations];
 }
+
+/** @deprecated Use preserveOperationOrder. Kept for compatibility with callers outside this package. */
+export const sortOperationsByExecutionOrder = preserveOperationOrder;

@@ -130,24 +130,32 @@ const OPENBROWSER_PROVIDERS = {
   },
   grok: {
     name: 'Grok',
-    hosts: ['grok.com', 'x.com'],
+    hosts: ['grok.com'],
+    pathPatterns: [/^\/$/, /^\/(?:c|chat)(?:\/|$)/],
+    rootSelectors: [
+      'main [data-testid="grok-composer"]',
+      'main [data-testid="grok-chat"]',
+      'main textarea[aria-label*="Ask Grok" i]',
+      'main div[contenteditable="true"][aria-label*="Ask Grok" i]',
+    ],
     selectors: {
       input: [
-        'textarea',
-        'div[contenteditable="true"]',
-        '.ProseMirror[contenteditable="true"]',
+        'main [data-testid="grok-composer"] textarea',
+        'main textarea[aria-label*="Ask Grok" i]',
+        'main [data-testid="grok-composer"] div[contenteditable="true"]',
+        'main div[contenteditable="true"][aria-label*="Ask Grok" i]',
       ],
       send: [
-        'button[aria-label="Send"]',
-        'button[type="submit"]',
-        'button[data-testid="send-button"]',
+        'main [data-testid="grok-composer"] button[aria-label="Send"]',
+        'main button[aria-label="Send"][data-testid*="send" i]',
+        'main form[aria-label*="Grok" i] button[type="submit"]',
       ],
       assistant: [
-        '[data-testid="message-assistant"]',
-        '.message-assistant',
-        '.markdown',
+        'main [data-testid="message-assistant"]',
+        'main .message-assistant',
+        'main .markdown',
       ],
-      stop: ['button[aria-label="Stop"]'],
+      stop: ['main button[aria-label="Stop"]'],
       markdown: ['.markdown', '.prose'],
     },
   },
@@ -260,12 +268,31 @@ const OPENBROWSER_PROVIDERS = {
   },
 };
 
-function getProviderForHost(hostname) {
+function getProviderForUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+
   return (
-    Object.values(OPENBROWSER_PROVIDERS).find((provider) =>
-      provider.hosts.includes(hostname),
-    ) ?? null
+    Object.values(OPENBROWSER_PROVIDERS).find((candidate) => {
+      if (!candidate.hosts.includes(parsed.hostname)) {
+        return false;
+      }
+      const pathPatterns = candidate.pathPatterns;
+      return !pathPatterns || pathPatterns.some((pattern) => pattern.test(parsed.pathname));
+    }) ?? null
   );
+}
+
+function providerRootIsPresent(candidate, root = document) {
+  const selectors = candidate?.rootSelectors;
+  if (!selectors?.length) {
+    return true;
+  }
+  return selectors.some((selector) => Boolean(root.querySelector?.(selector)));
 }
 
 function collectSearchRoots(root = document) {

@@ -9,7 +9,7 @@ const PROVIDERS = [
   { name: 'Claude', hosts: ['claude.ai'] },
   { name: 'Perplexity', hosts: ['www.perplexity.ai', 'perplexity.ai'] },
   { name: 'GLM', hosts: ['chat.z.ai', 'glm.ai', 'open.bigmodel.cn'] },
-  { name: 'Grok', hosts: ['grok.com', 'x.com'] },
+  { name: 'Grok', hosts: ['grok.com'] },
   { name: 'Gemini', hosts: ['gemini.google.com'] },
   { name: 'DeepSeek', hosts: ['chat.deepseek.com'] },
 ];

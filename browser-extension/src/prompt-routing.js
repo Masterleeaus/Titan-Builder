@@ -5,7 +5,11 @@ export const PROMPT_PROVIDER_HOSTS = Object.freeze({
   deepseek: ['chat.deepseek.com'],
   perplexity: ['www.perplexity.ai', 'perplexity.ai'],
   glm: ['chat.z.ai', 'glm.ai', 'open.bigmodel.cn'],
-  grok: ['grok.com', 'x.com'],
+  grok: ['grok.com'],
+});
+
+const PROMPT_PROVIDER_PATHS = Object.freeze({
+  grok: [/^\/$/, /^\/(?:c|chat)(?:\/|$)/],
 });
 
 export function getProviderKeyForUrl(url) {
@@ -13,15 +17,19 @@ export function getProviderKeyForUrl(url) {
     return null;
   }
 
-  let hostname;
+  let parsed;
   try {
-    hostname = new URL(url).hostname;
+    parsed = new URL(url);
   } catch {
     return null;
   }
 
   for (const [provider, hosts] of Object.entries(PROMPT_PROVIDER_HOSTS)) {
-    if (hosts.includes(hostname)) {
+    if (!hosts.includes(parsed.hostname)) {
+      continue;
+    }
+    const pathRules = PROMPT_PROVIDER_PATHS[provider];
+    if (!pathRules || pathRules.some((rule) => rule.test(parsed.pathname))) {
       return provider;
     }
   }

@@ -10,6 +10,8 @@ test('manifest exposes the coding side panel without broad or debugger permissio
   assert.ok(manifest.permissions.includes('sidePanel'));
   assert.ok(!manifest.permissions.includes('debugger'));
   assert.ok(!manifest.host_permissions.includes('<all_urls>'));
+  assert.ok(!manifest.host_permissions.some((pattern) => pattern.startsWith('https://x.com/')));
+  assert.ok(!manifest.content_scripts.flatMap((entry) => entry.matches).some((pattern) => pattern.startsWith('https://x.com/')));
   for (const path of [
     manifest.side_panel.default_path,
     'src/sidepanel.js',

@@ -18,7 +18,7 @@ const processedSessionIds = new Set();
 const jobQueue = [];
 const claimantId = crypto.randomUUID();
 
-const provider = getProviderForHost(location.hostname);
+const provider = getProviderForUrl(location.href);
 
 void registerWithBackground();
 
@@ -61,10 +61,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false;
 });
 
-async function handleLibraryPrompt(message) {
+
+function assertProviderPageReady() {
   if (!provider) {
     throw new Error('This page is not a supported AI provider.');
   }
+  if (!providerRootIsPresent(provider, document)) {
+    throw new Error(`${provider.name} page identity could not be verified. Prompt insertion is blocked.`);
+  }
+}
+
+async function handleLibraryPrompt(message) {
+  assertProviderPageReady();
   if (running) {
     throw new Error('An OpenBrowser agent job is already using this AI tab.');
   }
@@ -127,7 +135,7 @@ async function drainJobQueue() {
 }
 
 async function runJob(job) {
-  if (!provider) {
+  if (!provider || !providerRootIsPresent(provider, document)) {
     return;
   }
 
@@ -178,6 +186,10 @@ async function runJob(job) {
 
 async function registerWithBackground() {
   if (!provider) {
+    return;
+  }
+  if (!providerRootIsPresent(provider, document)) {
+    setTimeout(registerWithBackground, 1000);
     return;
   }
 
@@ -659,6 +671,7 @@ async function waitForAttachComplete(fileName) {
 }
 
 async function injectPrompt(message, options = {}) {
+  assertProviderPageReady();
   const preserveAttachments = options.preserveAttachments === true;
   const input = findPromptInput();
   if (!input) {
@@ -969,6 +982,7 @@ async function trySubmitSend(fileName) {
 }
 
 async function clickSendWhenReady() {
+  assertProviderPageReady();
   for (let attempt = 0; attempt < SEND_MAX_RETRIES; attempt += 1) {
     const button = findSendButton();
     if (button && isSendButtonEnabled(button)) {

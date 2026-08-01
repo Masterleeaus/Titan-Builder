@@ -29,7 +29,6 @@
     "https://glm.ai/*",
     "https://open.bigmodel.cn/*",
     "https://grok.com/*",
-    "https://x.com/*",
     "https://files.oaiusercontent.com/*",
     "https://*.oaiusercontent.com/*"
   ],
@@ -50,8 +49,7 @@
         "https://chat.z.ai/*",
         "https://glm.ai/*",
         "https://open.bigmodel.cn/*",
-        "https://grok.com/*",
-        "https://x.com/*"
+        "https://grok.com/*"
       ],
       "js": [
         "src/providers.js",

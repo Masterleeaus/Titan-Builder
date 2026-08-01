@@ -18,7 +18,7 @@ const PROVIDER_HOSTS = Object.freeze({
   deepseek: ['chat.deepseek.com'],
   perplexity: ['www.perplexity.ai', 'perplexity.ai'],
   glm: ['chat.z.ai', 'glm.ai', 'open.bigmodel.cn'],
-  grok: ['grok.com', 'x.com'],
+  grok: ['grok.com'],
 });
 
 export async function loadBridgeConfig() {

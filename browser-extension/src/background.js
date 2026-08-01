@@ -30,7 +30,6 @@ const AI_URL_PATTERNS = [
   'https://glm.ai/*',
   'https://open.bigmodel.cn/*',
   'https://grok.com/*',
-  'https://x.com/*',
 ];
 
 let streamAbort = null;
