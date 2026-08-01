@@ -17,6 +17,9 @@ jobs:
   import-source:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
+    concurrency:
+      group: titan-builder-source-repair
+      cancel-in-progress: false
     steps:
       - name: Check out repair branch
         uses: actions/checkout@v4
@@ -122,23 +125,48 @@ jobs:
                           shutil.copy2(child, destination)
           PY
 
-      - name: Apply verified repair patch once
+      - name: Decode, verify, and apply repair bundles once
         shell: bash
         run: |
           set -euo pipefail
-          patch_file='.titan/patches/OB-001-to-OB-003-code.patch'
-          if [[ ! -f "$patch_file" ]]; then
-            echo 'Repair patch is not present yet.'
-            exit 0
-          fi
-          if git apply --reverse --check "$patch_file"; then
-            echo 'Repair patch is already applied.'
-          elif git apply --check "$patch_file"; then
-            git apply "$patch_file"
-          else
-            echo 'Repair patch cannot be applied cleanly.' >&2
-            exit 1
-          fi
+          work_dir="$(mktemp -d)"
+          trap 'rm -rf "$work_dir"' EXIT
+
+          bundles=(
+            '01-OB-001-grok-routing.patch.gz.b64|9f87cb2aacf13524697377f1123499120bcfa6263814284f1f915a66cbd8c72c'
+            '02-OB-002-project-path.patch.gz.b64|37ffa62e7bebfdf44b3d355993c699f3361b97e28e7167aef8760c136f165636'
+            '03-OB-003-operation-order.patch.gz.b64|1e96fe1c5440e4a47811676534e4737b8892cbe56fcbc101db6a4ef231632399'
+            '04-test-registration.patch.gz.b64|0875fe177e26f7df9962d5936bac73202fea1898dfcab024561c17e4be014892'
+          )
+
+          for item in "${bundles[@]}"; do
+            IFS='|' read -r bundle expected_sha <<< "$item"
+            bundle_path=".titan/patch-bundles/$bundle"
+            patch_path="$work_dir/${bundle%.gz.b64}"
+            test -f "$bundle_path"
+            base64 --decode "$bundle_path" | gzip --decompress > "$patch_path"
+            actual_sha="$(sha256sum "$patch_path" | awk '{print $1}')"
+            if [[ "$actual_sha" != "$expected_sha" ]]; then
+              echo "Checksum mismatch for $bundle: expected $expected_sha, got $actual_sha" >&2
+              exit 1
+            fi
+
+            if git apply --reverse --check "$patch_path"; then
+              echo "Already applied: $bundle"
+            elif git apply --check "$patch_path"; then
+              git apply "$patch_path"
+              echo "Applied: $bundle"
+            else
+              echo "Repair bundle cannot be applied cleanly: $bundle" >&2
+              exit 1
+            fi
+          done
+
+      - name: Run dependency-free repair gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run verify:offline
 
       - name: Commit source or patch changes
         shell: bash
@@ -151,6 +179,6 @@ jobs:
             echo 'No source or patch changes to commit.'
             exit 0
           fi
-          git commit -m 'fix: import source and apply verified repair patch'
+          git commit -m 'fix: apply verified OB-001 through OB-003 repairs'
           git pull --rebase origin agent/fix-titan-builder-v2.6-deep-scan
           git push origin HEAD:agent/fix-titan-builder-v2.6-deep-scan
