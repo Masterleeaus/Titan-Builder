@@ -50,9 +50,17 @@ test('package and extension versions match for a coherent release', () => {
   assert.equal(manifest.version, packageJson.version);
 });
 
-test('end-to-end verification includes the bridge integration test', () => {
+test('test scripts use the Node test runner once and include bridge integration', () => {
+  const testScript = packageJson.scripts?.test || '';
+  const verifyScript = packageJson.scripts?.verify || '';
+
   assert.equal(typeof packageJson.scripts?.['test:integration'], 'string');
-  assert.match(packageJson.scripts?.verify || '', /test:integration/);
+  assert.match(testScript, /test:node/);
+  assert.match(testScript, /test:integration/);
+  assert.doesNotMatch(testScript, /vitest/);
+  assert.match(verifyScript, /pnpm run test(?:\s|$)/);
+  assert.doesNotMatch(verifyScript, /test:node|test:integration|vitest/);
+
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
   assert.match(readme, /openbrowser verify --profile standard/);
 });
