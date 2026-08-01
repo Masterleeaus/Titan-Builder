@@ -40,7 +40,7 @@ jobs:
         shell: bash
         env:
           PATCH_URL: https://titan-builder-repair-patches.miniup.app/patches/06-OB-004-transactional-operations.patch
-          PATCH_SHA256: 26ed0bb494eceb0cb9c0156601cef3b71bc5dc780c3159a1b8eb55e10c098341
+          PATCH_SHA256: 98e41e61064575686bf8c69e5011f2c61eb52db65c251885cfad75e1d7dac01a
         run: |
           set -euo pipefail
           patch_path="$(mktemp)"
