@@ -19,6 +19,10 @@ const jobQueue = [];
 const claimantId = crypto.randomUUID();
 
 const provider = getProviderForUrl(location.href);
+const attachmentVerification = globalThis.OpenBrowserAttachmentVerification;
+if (!attachmentVerification) {
+  throw new Error('Attachment verification runtime was not loaded.');
+}
 
 void registerWithBackground();
 
@@ -304,7 +308,7 @@ function authoritativeOutboundMessage(job) {
 
 const MAX_ATTACH_ATTEMPTS = 2;
 const ATTACH_PREVIEW_POLL_MS = 300;
-const ATTACH_PREVIEW_TIMEOUT_MS = 2_500;
+const ATTACH_PREVIEW_TIMEOUT_MS = 5_000;
 const ATTACH_SHADOW_MAX_DEPTH = 4;
 
 let attachShadowRoots = null;
@@ -364,8 +368,64 @@ function queryFirstForAttach(selectors, root = document) {
   return null;
 }
 
-function isPromptAlreadyAttached(fileName) {
-  return hasUploadUiSignal(fileName);
+function captureAttachmentPreviewState(expected) {
+  const keys = new Set();
+  const nodes = new Set();
+  const previewSelectors = provider?.selectors?.attachmentPreview ?? [
+    'gem-attachment',
+    'uploader-file-preview',
+    '.f3a54b52',
+    '._76cd190',
+    '[data-testid="file-name"]',
+    '[data-testid="attachment-preview"]',
+  ];
+
+  for (const node of queryAllForAttach(previewSelectors)) {
+    const key = attachmentVerification.previewEvidenceKey(attachmentNodeEvidence(node), expected);
+    if (!key) {
+      continue;
+    }
+    keys.add(key);
+    nodes.add(node);
+  }
+
+  return { keys, nodes };
+}
+
+function queryAllForAttach(selectors) {
+  const selectorList = Array.isArray(selectors) ? selectors : [selectors];
+  const roots = [document, ...getAttachShadowRoots()];
+  const output = [];
+  const seen = new Set();
+
+  for (const root of roots) {
+    for (const selector of selectorList) {
+      const nodes = root.querySelectorAll?.(selector) ?? [];
+      for (const node of nodes) {
+        if (!seen.has(node)) {
+          seen.add(node);
+          output.push(node);
+        }
+      }
+    }
+  }
+
+  return output;
+}
+
+function attachmentNodeEvidence(node) {
+  return [
+    node?.textContent,
+    node?.getAttribute?.('title'),
+    node?.getAttribute?.('aria-label'),
+    node?.getAttribute?.('data-file-name'),
+    node?.getAttribute?.('data-filename'),
+  ].filter(Boolean).join(' ');
+}
+
+function hasNewAttachmentPreview(expected, beforeState) {
+  const currentState = captureAttachmentPreviewState(expected);
+  return attachmentVerification.hasNewAttachmentEvidence(beforeState, currentState);
 }
 
 async function attachPromptFile(job, content) {
@@ -378,44 +438,38 @@ async function attachPromptFile(job, content) {
     throw new Error('Authoritative prompt file content was empty.');
   }
 
-  if (isPromptAlreadyAttached(fileName)) {
-    return true;
-  }
-
   const file = new File([promptContent], fileName, { type: 'text/plain' });
+  const expected = attachmentVerification.createAttachmentExpectation(fileName, file.size);
+  const beforeState = captureAttachmentPreviewState(expected);
   const fileSelectors = provider?.selectors?.fileInput ?? ['input[type="file"]'];
 
-  if (await tryAttachOnBestInput(file, fileName, fileSelectors)) {
+  if (await tryAttachOnBestInput(file, expected, beforeState, fileSelectors)) {
     return true;
   }
 
   for (let attempt = 1; attempt < MAX_ATTACH_ATTEMPTS; attempt += 1) {
-    if (isPromptAlreadyAttached(fileName)) {
+    if (hasNewAttachmentPreview(expected, beforeState)) {
       return true;
     }
 
-    await openUploadMenuForProvider(fileName);
+    await openUploadMenuForProvider();
     await sleep(700);
 
-    if (await tryAttachOnBestInput(file, fileName, fileSelectors)) {
+    if (await tryAttachOnBestInput(file, expected, beforeState, fileSelectors)) {
       return true;
     }
   }
 
-  return waitForAttachComplete(fileName);
+  return waitForAttachComplete(expected, beforeState);
 }
 
-async function tryAttachOnBestInput(file, fileName, fileSelectors) {
-  if (isPromptAlreadyAttached(fileName)) {
-    return true;
-  }
-
+async function tryAttachOnBestInput(file, expected, beforeState, fileSelectors) {
   const fileInput = findBestFileInput(fileSelectors);
   if (!fileInput) {
     return false;
   }
 
-  return trySetFileAndConfirm(fileInput, file, fileName);
+  return trySetFileAndConfirm(fileInput, file, expected, beforeState);
 }
 
 function findBestFileInput(selectors) {
@@ -429,11 +483,7 @@ function findBestFileInput(selectors) {
   return null;
 }
 
-async function openUploadMenuForProvider(fileName) {
-  if (isPromptAlreadyAttached(fileName)) {
-    return;
-  }
-
+async function openUploadMenuForProvider() {
   const host = location.hostname;
 
   if (host.includes('chatgpt.com') || host.includes('openai.com')) {
@@ -476,11 +526,6 @@ async function openUploadMenuForProvider(fileName) {
       ]),
     );
     await sleep(500);
-
-    if (isPromptAlreadyAttached(fileName)) {
-      return;
-    }
-
     clickElement(
       queryFirstForAttach(provider?.selectors?.attachMenuSelectors ?? []) ??
         findClickableByText(['files', 'upload file', 'add file']),
@@ -502,11 +547,6 @@ async function openUploadMenuForProvider(fileName) {
   if (host.includes('perplexity.ai')) {
     clickElement(queryFirstForAttach(provider?.selectors?.attachButton ?? []));
     await sleep(500);
-
-    if (isPromptAlreadyAttached(fileName)) {
-      return;
-    }
-
     clickElement(
       findClickableByText([
         'upload files or images',
@@ -520,61 +560,20 @@ async function openUploadMenuForProvider(fileName) {
 
   clickElement(queryFirstForAttach(provider?.selectors?.attachButton ?? []));
   await sleep(500);
-
-  if (isPromptAlreadyAttached(fileName)) {
-    return;
-  }
-
   clickElement(findClickableByText(provider?.selectors?.attachMenuText ?? ['upload', 'file']));
 }
 
-async function trySetFileAndConfirm(fileInput, file, fileName) {
-  if (isPromptAlreadyAttached(fileName)) {
-    return true;
-  }
-
+async function trySetFileAndConfirm(fileInput, file, expected, beforeState) {
   if (!(await setFileOnInput(fileInput, file))) {
     return false;
   }
 
-  const deadline = Date.now() + ATTACH_PREVIEW_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (isPromptAlreadyAttached(fileName)) {
-      return true;
-    }
-
-    if (fileInput.files?.length > 0) {
-      return true;
-    }
-
-    await sleep(ATTACH_PREVIEW_POLL_MS);
-  }
-
-  return isPromptAlreadyAttached(fileName);
-}
-
-function hasUploadUiSignal(fileName) {
-  if (hasAttachmentPreview(fileName)) {
-    return true;
-  }
-
-  const composerRoot =
-    findPromptInput()?.closest(
-      'form, [class*="composer"], [class*="input-area"], [class*="chat-input"], uploader-file-preview',
-    ) ?? null;
-
-  if (!composerRoot) {
+  const selectedFile = fileInput.files?.[0];
+  if (!attachmentVerification.fileEvidenceKey(selectedFile, expected)) {
     return false;
   }
 
-  const text = (composerRoot.textContent ?? '').toLowerCase();
-  const baseName = fileName.replace(/\.[^.]+$/, '').toLowerCase();
-
-  return (
-    text.includes('openbrowser-prompt') ||
-    text.includes(baseName) ||
-    text.includes('.txt')
-  );
+  return waitForAttachComplete(expected, beforeState);
 }
 
 async function setFileOnInput(fileInput, file) {
@@ -593,63 +592,23 @@ async function setFileOnInput(fileInput, file) {
       }),
     );
     await sleep(400);
-    return fileInput.files?.length > 0;
+    return Boolean(fileInput.files?.length);
   } catch {
     return false;
   }
 }
 
-function hasAttachmentPreview(fileName) {
-  const previewSelectors = provider?.selectors?.attachmentPreview ?? [
-    'gem-attachment',
-    'uploader-file-preview',
-    '.f3a54b52',
-    '._76cd190',
-    '[data-testid="file-name"]',
-  ];
-
-  if (queryFirstForAttach(previewSelectors)) {
-    return true;
-  }
-
-  const composerRoot =
-    findPromptInput()?.closest(
-      'form, [class*="composer"], [class*="input-area"], [class*="chat-input"], uploader-file-preview',
-    ) ?? null;
-
-  if (!composerRoot) {
-    return false;
-  }
-
-  const baseName = fileName.replace(/\.[^.]+$/, '').toLowerCase();
-  const previewNode = composerRoot.querySelector?.(
-    '.gem-attachment-text, .f3a54b52, [data-testid="file-name"], .gem-attachment-extension-label, gem-attachment, uploader-file-preview',
-  );
-
-  if (!previewNode) {
-    return false;
-  }
-
-  const text = (previewNode.textContent ?? '').trim().toLowerCase();
-  return (
-    text.includes(baseName) ||
-    text.includes('txt') ||
-    text.includes('openbrowser-prompt') ||
-    text.includes('.txt')
-  );
-}
-
-async function waitForAttachComplete(fileName) {
+async function waitForAttachComplete(expected, beforeState) {
   const deadline = Date.now() + ATTACH_PREVIEW_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    if (isPromptAlreadyAttached(fileName)) {
+    if (hasNewAttachmentPreview(expected, beforeState)) {
       return true;
     }
     await sleep(ATTACH_PREVIEW_POLL_MS);
   }
 
-  return isPromptAlreadyAttached(fileName);
+  return hasNewAttachmentPreview(expected, beforeState);
 }
 
 async function injectPrompt(message, options = {}) {
@@ -667,20 +626,17 @@ async function injectPrompt(message, options = {}) {
 
   if (method === 'textarea' || input instanceof HTMLTextAreaElement) {
     await injectTextarea(input, message, { preserveAttachments });
-    return;
-  }
-
-  if (method === 'lexical' || input.getAttribute('data-lexical-editor') === 'true') {
+  } else if (method === 'lexical' || input.getAttribute('data-lexical-editor') === 'true') {
     await injectLexical(input, message, { preserveAttachments });
-    return;
-  }
-
-  if (input.isContentEditable) {
+  } else if (input.isContentEditable) {
     await injectProseMirror(input, message, { preserveAttachments });
-    return;
+  } else {
+    throw new Error('Unsupported chat input element.');
   }
 
-  throw new Error('Unsupported chat input element.');
+  if (!hasInjectedContent(input, message)) {
+    throw new Error('The chat composer did not exactly match the intended prompt. Submission was blocked.');
+  }
 }
 
 async function injectTextarea(element, text, options = {}) {
@@ -849,13 +805,8 @@ function hasInjectedContent(element, text) {
     element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement
       ? element.value
       : (element.textContent ?? '')
-  ).trim();
-  const expected = text.trim();
-  if (!actual || !expected) {
-    return false;
-  }
-
-  return actual.length >= expected.length * 0.85;
+  );
+  return attachmentVerification.composerContentMatches(actual, text);
 }
 
 function dispatchPaste(element, text) {
@@ -899,13 +850,9 @@ function setNativeValue(element, value) {
   element.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-function canSubmitComposer(fileName) {
+function canSubmitComposer() {
   const input = findPromptInput();
   if (input && hasComposerContent(input)) {
-    return true;
-  }
-
-  if (fileName && isPromptAlreadyAttached(fileName)) {
     return true;
   }
 
@@ -953,7 +900,7 @@ async function trySubmitSend(fileName) {
     }
   }
 
-  if (input && canSubmitComposer(fileName)) {
+  if (input && canSubmitComposer()) {
     await submitViaEnter(input);
     if (await verifyMessageSubmitted()) {
       return true;

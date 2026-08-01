@@ -54,6 +54,7 @@
       "js": [
         "src/providers.js",
         "src/chatgpt-page-tools.js",
+        "src/attachment-verification.js",
         "src/content-script.js"
       ],
       "run_at": "document_idle"

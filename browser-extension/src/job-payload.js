@@ -40,8 +40,13 @@ export function prepareOutboundJob(job, workspaceInstructions = '') {
     ? rawLimit
     : DEFAULT_PROMPT_LIMIT;
   const delivery = outboundMessage.length > promptInjectionCharLimit ? 'file' : 'text';
-  const promptFileName = String(job?.promptFileName || DEFAULT_PROMPT_FILE_NAME);
-  const promptFileComposerNote = String(job?.promptFileComposerNote || DEFAULT_PROMPT_FILE_NOTE);
+  const attachmentMarker = buildAttachmentMarker(job?.sessionId);
+  const configuredFileName = String(job?.promptFileName || '');
+  const promptFileName = !configuredFileName || configuredFileName === DEFAULT_PROMPT_FILE_NAME
+    ? `openbrowser-prompt-${attachmentMarker}.txt`
+    : configuredFileName;
+  const configuredNote = String(job?.promptFileComposerNote || DEFAULT_PROMPT_FILE_NOTE);
+  const promptFileComposerNote = configuredNote.replaceAll(DEFAULT_PROMPT_FILE_NAME, promptFileName);
   const composerMessage = delivery === 'file' ? promptFileComposerNote : outboundMessage;
 
   return {
@@ -50,6 +55,7 @@ export function prepareOutboundJob(job, workspaceInstructions = '') {
     promptBody,
     outboundMessage,
     promptFileContent: delivery === 'file' ? outboundMessage : undefined,
+    attachmentMarker: delivery === 'file' ? attachmentMarker : undefined,
     promptInjectionCharLimit,
     delivery,
     promptFileName: delivery === 'file' ? promptFileName : undefined,
@@ -61,6 +67,17 @@ export function prepareOutboundJob(job, workspaceInstructions = '') {
 
 export function selectOutboundMessage(job, _context = {}) {
   return String(job?.outboundMessage ?? job?.promptBody ?? job?.message ?? '');
+}
+
+
+function buildAttachmentMarker(sessionId) {
+  const normalized = String(sessionId ?? '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(-48);
+  return normalized || 'session';
 }
 
 function stripLeadingSystemInstructions(message) {

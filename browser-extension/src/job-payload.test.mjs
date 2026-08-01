@@ -95,6 +95,8 @@ test('file delivery uses the same final payload and is recalculated after worksp
   }, workspace);
 
   assert.equal(prepared.delivery, 'file');
+  assert.equal(prepared.promptFileName, 'openbrowser-prompt-session-2.txt');
+  assert.equal(prepared.attachmentMarker, 'session-2');
   assert.equal(prepared.message, 'Read the attached prompt.');
   assert.equal(prepared.composerMessage, 'Read the attached prompt.');
   assert.equal(prepared.promptFileContent, prepared.outboundMessage);
