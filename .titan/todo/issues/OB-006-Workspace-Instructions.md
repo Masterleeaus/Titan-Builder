@@ -2,11 +2,14 @@
 
 - Severity: High
 - Branch: `agent/fix-titan-builder-v2.6-deep-scan`
-- Status: FIXED — dependency-backed verification pending
+- Status: VERIFIED
 - Source commit: `21e208f164fe3f53dfe7ce62459c0d9e97993083`
+- Documentation verification commit: `0e7d34fc1a6d811e347f1efe3c393c0b48348046`
 - Artifact SHA-256: `cbc58e8e7c7a219d14280afae3d5c65eaf7734f27a521e4e0ddff9d0b53d5699`
 - Offline applicator run: `30724047581`
 - Offline applicator job: `91432415821`
+- Full verification run: `30724071899`
+- Full verification job: `91432481816`
 
 ## Confirmed defects
 
@@ -26,13 +29,13 @@ Failure-first tests required behavior that did not exist:
 ## Implemented repair
 
 - Added one pure `prepareOutboundJob` boundary in the background service worker.
-- Server jobs now retain `promptBody`, the full original CLI prompt, even when the server's initial delivery suggestion is `file`.
+- Server jobs retain `promptBody`, the full original CLI prompt, even when the initial server suggestion is file delivery.
 - The background merges the current active profile and skills, strips stale workspace sections, and constructs exactly one system-instruction wrapper.
 - Delivery is recalculated from the final enriched outbound payload.
 - Text and attachment paths consume the same `outboundMessage` bytes.
 - File content is carried in the dispatched job as `promptFileContent`; the content script no longer fetches a stale prompt file from the bridge.
 - Established and new threads use the same authoritative outbound message.
-- Current workspace sections replace stale profile/skill sections instead of accumulating duplicates.
+- Current workspace sections replace stale profile/skill sections rather than accumulating duplicates.
 
 ## Test coverage
 
@@ -47,7 +50,7 @@ Failure-first tests required behavior that did not exist:
 - Source-wiring guard preventing reintroduction of `/browser/prompt-file` in content delivery.
 - Bridge integration asserts `promptBody`, prompt limit, and attachment note reach claimed jobs.
 
-## Current verification
+## Green evidence
 
 The guarded applicator passed:
 
@@ -56,4 +59,13 @@ The guarded applicator passed:
 - Extension integrity.
 - Commit and push to the repair branch.
 
-Do not mark this issue VERIFIED until the full GitHub pipeline passes typecheck, all Node tests, bridge/operation integrations, build, CLI smoke, and extension integrity on this source commit or a direct descendant.
+GitHub Actions run `30724071899`, job `91432481816` passed:
+
+- TypeScript typecheck.
+- 111/111 Node tests.
+- 4/4 dependency-backed integration tests.
+- Production build.
+- CLI smoke test.
+- Manifest V3 extension integrity.
+
+The acceptance criteria are satisfied. Workspace profile and skill instructions now reach every tested CLI-created browser job in text and attachment modes, regardless of whether the destination thread is empty or established.
