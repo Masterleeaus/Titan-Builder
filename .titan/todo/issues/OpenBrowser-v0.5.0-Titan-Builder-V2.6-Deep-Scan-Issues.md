@@ -16,14 +16,14 @@
 
 The original archive passed 83 dependency-free tests. The current repair branch passes:
 
-- 106/106 Node tests.
+- 116/116 Node tests.
 - 4/4 dependency-backed integration tests.
 - TypeScript typecheck.
 - Production build.
 - CLI smoke test.
 - Manifest V3 extension integrity.
 
-Latest full verification: run `30723807441`, job `91431798561`.
+Latest full verification: run `30724273543`, job `91432999078`.
 
 Windows-native junction/reparse-point verification remains required before OB-002 can be promoted from FIXED to VERIFIED.
 
@@ -44,9 +44,9 @@ Windows-native junction/reparse-point verification remains required before OB-00
 | OB-003 | High | Global operation sorting reverses dependencies and changes approved intent | VERIFIED |
 | OB-004 | High | Planning is not stateful and multi-operation application is not transactional | VERIFIED |
 | OB-005 | High | ZIP export crashes far below its advertised 15 MB entry limit | VERIFIED |
-| OB-006 | High | Active workspace skills and profiles can be omitted from CLI-created jobs | TODO — next repair target |
-| OB-007 | High | Attachment detection can accept an unrelated pre-existing file | TODO |
-| OB-008 | High | Bridge authentication, origin checks, and approval boundaries are weaker than documented | TODO |
+| OB-006 | High | Active workspace skills and profiles can be omitted from CLI-created jobs | VERIFIED |
+| OB-007 | High | Attachment detection can accept an unrelated pre-existing file | VERIFIED |
+| OB-008 | High | Bridge authentication, origin checks, and approval boundaries are weaker than documented | IN PROGRESS |
 | OB-009 | High | npm/pnpm scripts and lifecycle execution are labelled safer than their arbitrary-code capability | TODO |
 | OB-010 | High | Session, prompt, chunk, and response retention is unbounded | TODO |
 | OB-011 | High | Unlabelled Markdown/YAML fences can be attached to the wrong target file | TODO |
@@ -64,7 +64,7 @@ Windows-native junction/reparse-point verification remains required before OB-00
 | OB-023 | Low/Medium | Documented branch operations are implemented as read-only inspection | TODO |
 | OB-024 | Low | `SECURITY.md` support table and version wording are stale | TODO |
 | OB-025 | Low/Medium | Titan Builder product/version identity and upstream attribution are absent | TODO |
-| OB-026 | Medium | Release tests omit the most safety-critical edge cases | IN PROGRESS — coverage expanded from 83 to 106 Node tests plus 4 integrations |
+| OB-026 | Medium | Release tests omit the most safety-critical edge cases | IN PROGRESS — coverage expanded from 83 to 116 Node tests plus 4 integrations |
 
 ## Verified repairs
 
@@ -112,6 +112,28 @@ Windows-native junction/reparse-point verification remains required before OB-00
 - Verified by run `30723807441`, job `91431798561`.
 - Detailed evidence: `OB-005-Large-ZIP-Export.md`.
 
+### OB-006 — workspace instructions in every job
+
+- Added one authoritative outbound payload after active profile and skill enrichment.
+- Recalculates text/file delivery after enrichment.
+- Text and attachment delivery use identical final prompt bytes.
+- Existing and new conversation threads use the same payload.
+- Removes stale workspace sections rather than duplicating them.
+- Source commit: `21e208f164fe3f53dfe7ce62459c0d9e97993083`.
+- Verified by run `30724071899`, job `91432481816`.
+- Detailed evidence: `OB-006-Workspace-Instructions.md`.
+
+### OB-007 — exact attachment correlation
+
+- Generates a unique per-session filename and marker.
+- Requires new before/after attachment evidence for the current job.
+- Rejects generic `.txt`, unrelated files, and unchanged pre-existing chips.
+- Verifies exact selected-file filename and byte size.
+- Requires normalized composer equality rather than approximate length.
+- Source commit: `e28c5fc4b7a09856cee11814ccbd82d295b072cb`.
+- Verified by run `30724273543`, job `91432999078`.
+- Detailed evidence: `OB-007-Attachment-Correlation.md`.
+
 ## Additional CI defects repaired
 
 1. NodeNext integration imports now use emitted `.js` specifiers. Commit: `75e817f3c7b57c6b09b369496aa69f64feb1c42e`.
@@ -121,8 +143,8 @@ Windows-native junction/reparse-point verification remains required before OB-00
 
 ## Next sequence
 
-1. Repair OB-006 with failure-first tests proving workspace profiles and skills reach every CLI-created job and existing conversation.
-2. Continue with OB-007 attachment correlation.
+1. Repair OB-008 with failure-first tests for mandatory authentication, scoped browser origins, and one-time operation-approval capabilities.
+2. Continue with OB-009 package-script and install risk classification.
 3. Add Windows CI for OB-002 junction behavior.
 4. Keep this ledger and draft PR synchronized with every verified increment.
 5. Keep PR #1 in draft until all release blockers and required security gates are resolved.
