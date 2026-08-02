@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseSkillEntrypoint } from './entrypoint.js';
 
 export const SKILL_MANIFEST_SCHEMA_VERSION = '1' as const;
 export const SKILL_KINDS = ['guidance', 'executable', 'orchestration', 'adapter'] as const;
@@ -42,11 +43,21 @@ export const SKILL_PLATFORMS = ['linux', 'windows', 'macos', 'browser'] as const
 
 const canonicalId = /^titan\.[a-z0-9]+(?:[.-][a-z0-9]+)*$/u;
 const compatibleId = /^(?:titan\.)?[a-z0-9]+(?:[.-][a-z0-9]+)*$/u;
-const semver = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+const semver = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 const slug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
-const entrypoint = /^(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+#[A-Za-z_$][A-Za-z0-9_$]*$/u;
 const relativeAsset = /^(?![A-Za-z]:[\\/])(?![\\/])(?!.*(?:^|[\\/])\.\.(?:[\\/]|$)).+$/u;
 const highSideEffectRisks = new Set(['NETWORK_WRITE', 'ARBITRARY_EXECUTION', 'DESTRUCTIVE', 'PUBLISH']);
+
+const entrypointSchema = z.string().superRefine((value, context) => {
+  try {
+    parseSkillEntrypoint(value);
+  } catch (error) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: error instanceof Error ? error.message : 'Invalid skill entrypoint.',
+    });
+  }
+});
 
 const jsonObjectSchema = z.record(z.unknown()).superRefine((value, context) => {
   if (value.type !== 'object') {
@@ -65,7 +76,7 @@ const manifestSchema = z.object({
   description: z.string().trim().min(1).max(500),
   owner: z.string().trim().min(1).max(120),
   runtimeTargets: z.array(z.enum(SKILL_RUNTIME_TARGETS)).min(1),
-  entrypoint: z.string().regex(entrypoint, 'Entrypoint must be a relative module path followed by #exportName.').optional(),
+  entrypoint: entrypointSchema.optional(),
   instructions: z.string().regex(relativeAsset, 'Instructions must be a contained relative asset path.').optional(),
   inputs: jsonObjectSchema,
   outputs: jsonObjectSchema,
