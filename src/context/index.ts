@@ -6,10 +6,7 @@ export {
   formatAgentContextJson,
   formatContextMarkdown,
   listContextChoices,
-  loadContextFiles,
-  loadContextAttachments,
   type ContextFile,
-  type ContextAttachment,
   type ContextDirectory,
 } from './file-context.js';
 export { collectProjectDirectories, scanDirectoryTree } from './directory-tree.js';

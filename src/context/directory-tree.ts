@@ -1,8 +1,9 @@
 import path from 'node:path';
+import { lstat, realpath, readdir } from 'node:fs/promises';
 import fg from 'fast-glob';
 import fs from 'fs-extra';
 import { CONTEXT_IGNORE } from './file-context.js';
-import { normalizeContextReference, resolveContextPath } from './context-path.js';
+import { isPathInsideProject } from '../security/project-path.js';
 
 const MAX_TREE_DEPTH = 10;
 const MAX_TREE_ENTRIES = 200;
@@ -28,29 +29,45 @@ export async function scanDirectoryTree(
   projectRoot: string,
   dirRef: string,
 ): Promise<ContextDirectory | null> {
-  let normalizedRef: string;
-  let resolvedDirectory;
+  const normalizedRef = dirRef.replace(/\\/g, '/').replace(/\/$/, '');
+  const resolved = path.resolve(projectRoot, normalizedRef);
+
+  let rootCanonical: string;
   try {
-    normalizedRef = normalizeContextReference(dirRef);
-    resolvedDirectory = await resolveContextPath(projectRoot, normalizedRef, {
-      requireExisting: true,
-      expectedType: 'directory',
-    });
+    rootCanonical = await realpath(projectRoot);
   } catch {
     return null;
   }
 
-  const root = resolvedDirectory.projectRoot;
-  const resolved = resolvedDirectory.absolutePath;
-  const relativePath = resolvedDirectory.relativePath === '.' ? '' : resolvedDirectory.relativePath;
+  if (!isPathInsideProject(rootCanonical, resolved)) {
+    return null;
+  }
+
+  let targetCanonical: string;
+  try {
+    targetCanonical = await realpath(resolved);
+  } catch {
+    return null;
+  }
+
+  if (!isPathInsideProject(rootCanonical, targetCanonical)) {
+    return null;
+  }
+
+  const stat = await lstat(targetCanonical);
+  if (!stat.isDirectory()) {
+    return null;
+  }
+
+  const relativePath = path.relative(rootCanonical, targetCanonical).replace(/\\/g, '/');
   const treeLines: string[] = [];
   const directories: string[] = [];
   const files: string[] = [];
 
-  await walkDirectory(root, resolved, relativePath, 0, treeLines, directories, files);
+  await walkDirectory(rootCanonical, targetCanonical, relativePath, 0, treeLines, directories, files);
 
   const nestedFiles = await fg('**/*', {
-    cwd: resolved,
+    cwd: targetCanonical,
     dot: false,
     onlyFiles: true,
     followSymbolicLinks: false,
@@ -102,7 +119,7 @@ async function walkDirectory(
     return;
   }
 
-  const entries = await fs.readdir(absoluteDir, { withFileTypes: true });
+  const entries = await readdir(absoluteDir, { withFileTypes: true });
   entries.sort((left, right) => {
     if (left.isDirectory() !== right.isDirectory()) {
       return left.isDirectory() ? -1 : 1;
@@ -119,28 +136,27 @@ async function walkDirectory(
       continue;
     }
 
-    const indent = '  '.repeat(depth);
+    const childAbsolute = path.join(absoluteDir, entry.name);
     const childRelative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
 
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
+
     if (entry.isDirectory()) {
-      let safeDirectory;
-      try {
-        safeDirectory = await resolveContextPath(projectRoot, childRelative, {
-          requireExisting: true,
-          expectedType: 'directory',
-        });
-      } catch {
+      if (!isPathInsideProject(projectRoot, childAbsolute)) {
         continue;
       }
 
-      const dirPath = `${safeDirectory.relativePath}/`;
+      const dirPath = `${childRelative}/`;
       directories.push(dirPath);
+      const indent = '  '.repeat(depth);
       treeLines.push(`${indent}${entry.name}/`);
 
       await walkDirectory(
         projectRoot,
-        safeDirectory.absolutePath,
-        safeDirectory.relativePath,
+        childAbsolute,
+        childRelative,
         depth + 1,
         treeLines,
         directories,
@@ -150,21 +166,21 @@ async function walkDirectory(
     }
 
     if (entry.isFile()) {
-      try {
-        const safeFile = await resolveContextPath(projectRoot, childRelative, {
-          requireExisting: true,
-          expectedType: 'file',
-        });
-        files.push(safeFile.relativePath);
-        treeLines.push(`${indent}${entry.name}`);
-      } catch {
-        // Ignore files that no longer resolve through the canonical project boundary.
-      }
+      files.push(childRelative);
+      const indent = '  '.repeat(depth);
+      treeLines.push(`${indent}${entry.name}`);
     }
   }
 }
 
 export async function collectProjectDirectories(projectRoot: string): Promise<string[]> {
+  let rootCanonical: string;
+  try {
+    rootCanonical = await realpath(projectRoot);
+  } catch {
+    return [];
+  }
+
   const dirs = new Set<string>();
   let root: string;
   try {
@@ -176,37 +192,33 @@ export async function collectProjectDirectories(projectRoot: string): Promise<st
     return [];
   }
 
-  async function walk(relativeDir: string): Promise<void> {
-    let currentDirectory;
-    try {
-      currentDirectory = await resolveContextPath(root, relativeDir || '.', {
-        requireExisting: true,
-        expectedType: 'directory',
-      });
-    } catch {
+  async function walk(absoluteDir: string, relativeDir: string): Promise<void> {
+    if (!(await fs.pathExists(absoluteDir))) {
       return;
     }
 
-    const entries = await fs.readdir(currentDirectory.absolutePath, { withFileTypes: true });
+    if (!isPathInsideProject(rootCanonical, absoluteDir)) {
+      return;
+    }
+
+    const entries = await readdir(absoluteDir, { withFileTypes: true });
     for (const entry of entries) {
-      if (!entry.isDirectory() || shouldSkipDir(entry.name)) {
+      if (!entry.isDirectory() || shouldSkipDir(entry.name) || entry.isSymbolicLink()) {
+        continue;
+      }
+
+      const childAbsolute = path.join(absoluteDir, entry.name);
+      if (!isPathInsideProject(rootCanonical, childAbsolute)) {
         continue;
       }
 
       const childRelative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-      try {
-        const safeDirectory = await resolveContextPath(root, childRelative, {
-          requireExisting: true,
-          expectedType: 'directory',
-        });
-        dirs.add(`${safeDirectory.relativePath}/`);
-        await walk(safeDirectory.relativePath);
-      } catch {
-        // Ignore linked, missing, or escaped directories.
-      }
+      const normalized = `${childRelative.replace(/\\/g, '/')}/`;
+      dirs.add(normalized);
+      await walk(childAbsolute, childRelative);
     }
   }
 
-  await walk('');
+  await walk(rootCanonical, '');
   return [...dirs].sort();
 }
