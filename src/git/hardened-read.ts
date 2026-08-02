@@ -6,6 +6,14 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BUFFER_BYTES = 512 * 1024;
 const CONFIGURED_HELPER_PATTERN = '^(filter\\..*\\.(clean|smudge|process)|diff\\..*\\.(command|textconv))$';
 const disabledHooksPath = path.join(os.tmpdir(), 'openbrowser-disabled-git-hooks');
+const trustedCommandConfig = [
+  ['core.fsmonitor', 'false'],
+  ['core.hooksPath', disabledHooksPath],
+  ['diff.external', ''],
+  ['interactive.diffFilter', ''],
+  ['core.askPass', ''],
+  ['credential.helper', ''],
+] as const;
 
 const blockedEnvironmentNames = new Set([
   'EDITOR',
@@ -77,21 +85,26 @@ export function createHardenedGitEnvironment(
     environment[key] = value;
   }
 
-  return {
-    ...environment,
-    GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_SYSTEM: os.devNull,
-    GIT_CONFIG_GLOBAL: os.devNull,
-    GIT_ATTR_NOSYSTEM: '1',
-    GIT_TERMINAL_PROMPT: '0',
-    GIT_OPTIONAL_LOCKS: '0',
-    GIT_PAGER: '',
-    PAGER: '',
-    GIT_EDITOR: '',
-    GIT_SEQUENCE_EDITOR: '',
-    GIT_ASKPASS: '',
-    SSH_ASKPASS: '',
-  };
+  environment.GIT_CONFIG_NOSYSTEM = '1';
+  environment.GIT_CONFIG_SYSTEM = os.devNull;
+  environment.GIT_CONFIG_GLOBAL = os.devNull;
+  environment.GIT_ATTR_NOSYSTEM = '1';
+  environment.GIT_TERMINAL_PROMPT = '0';
+  environment.GIT_OPTIONAL_LOCKS = '0';
+  environment.GIT_PAGER = '';
+  environment.PAGER = '';
+  environment.GIT_EDITOR = '';
+  environment.GIT_SEQUENCE_EDITOR = '';
+  environment.GIT_ASKPASS = '';
+  environment.SSH_ASKPASS = '';
+  environment.GIT_CONFIG_COUNT = String(trustedCommandConfig.length);
+
+  trustedCommandConfig.forEach(([key, value], index) => {
+    environment[`GIT_CONFIG_KEY_${index}`] = key;
+    environment[`GIT_CONFIG_VALUE_${index}`] = value;
+  });
+
+  return environment;
 }
 
 export function buildHardenedGitInvocation(
@@ -100,23 +113,7 @@ export function buildHardenedGitInvocation(
 ): HardenedGitInvocation {
   return {
     executable: 'git',
-    args: [
-      '--no-pager',
-      '--no-optional-locks',
-      '-c',
-      'core.fsmonitor=false',
-      '-c',
-      `core.hooksPath=${disabledHooksPath}`,
-      '-c',
-      'diff.external=',
-      '-c',
-      'interactive.diffFilter=',
-      '-c',
-      'core.askPass=',
-      '-c',
-      'credential.helper=',
-      ...commandArgs,
-    ],
+    args: [...commandArgs],
     env: createHardenedGitEnvironment(environment),
   };
 }
