@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseToolManifest, validateToolManifest } from './manifest.ts';
 
-function validManifest() {
+function validManifest(): Record<string, unknown> {
   return {
     schemaVersion: '1',
     id: 'titan.tool.git.status',
