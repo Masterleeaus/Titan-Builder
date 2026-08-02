@@ -917,8 +917,13 @@ function nextContent(operation: FileOperation, before: string): string {
   if (operation.search !== undefined && operation.replace !== undefined) {
     const search = normalizeMultilineText(operation.search);
     const replace = normalizeMultilineText(operation.replace);
-    if (!before.includes(search)) {
+    const searchIndex = before.indexOf(search);
+    if (searchIndex === -1) {
       throw new Error(`Search text not found in ${operation.path}`);
+    }
+    const nextIndex = before.indexOf(search, searchIndex + 1);
+    if (nextIndex !== -1) {
+      throw new Error(`Search text appears ${countOccurrences(before, search)} times in ${operation.path}; ambiguous match without explicit occurrence selector`);
     }
     return before.replace(search, replace);
   }
@@ -945,8 +950,12 @@ function applyLineEdit(
     throw new Error(`startLine ${startLine} is beyond end of file (${lines.length} lines)`);
   }
 
+  if (endLine > lines.length) {
+    throw new Error(`endLine ${endLine} is beyond end of file (${lines.length} lines)`);
+  }
+
   const startIndex = startLine - 1;
-  const endIndex = Math.min(endLine, lines.length);
+  const endIndex = endLine;
   const replacementLines = replacement.split('\n');
 
   return [
@@ -954,6 +963,17 @@ function applyLineEdit(
     ...replacementLines,
     ...lines.slice(endIndex),
   ].join('\n');
+}
+
+function countOccurrences(text: string, search: string): number {
+  if (search.length === 0) return 0;
+  let count = 0;
+  let index = 0;
+  while ((index = text.indexOf(search, index)) !== -1) {
+    count += 1;
+    index += search.length;
+  }
+  return count;
 }
 
 function assertNever(value: never): never {
