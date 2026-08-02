@@ -22,12 +22,24 @@ const PROVIDER_HOSTS = Object.freeze({
 });
 
 export async function loadBridgeConfig() {
+  await restrictStorageAccessLevel();
   const stored = await chrome.storage.local.get(DEFAULT_BRIDGE_CONFIG);
   return normalizeBridgeConfig(stored);
 }
 
+async function restrictStorageAccessLevel() {
+  try {
+    if (chrome.storage.local.setAccessLevel) {
+      await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+    }
+  } catch (error) {
+    console.warn('[openbrowser] Failed to restrict storage access level', error);
+  }
+}
+
 export async function saveBridgeConfig(input) {
   const normalized = normalizeBridgeConfig(input);
+  await restrictStorageAccessLevel();
   await chrome.storage.local.set(normalized);
   return normalized;
 }
