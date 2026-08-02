@@ -15,7 +15,7 @@ function fixtureRoot(): string {
 
 test('prepareAgentRun parses and plans without executing file operations', async () => {
   const projectRoot = fixtureRoot();
-  const conversationId = 'conversation-1';
+  const conversationId = '11111111-1111-4111-8111-111111111111';
 
   const result = await prepareAgentRun(
     {
@@ -45,7 +45,7 @@ test('prepareAgentRun parses and plans without executing file operations', async
 
 test('prepareAgentRun retries invalid responses with the same conversation id', async () => {
   const projectRoot = fixtureRoot();
-  const conversationId = 'conversation-retry';
+  const conversationId = '22222222-2222-4222-8222-222222222222';
   const requests: AgentSubmissionRequest[] = [];
 
   const result = await prepareAgentRun(
@@ -87,7 +87,7 @@ test('runAskWorkflow returns the browser answer without writing project files', 
       projectRoot,
       prompt: 'Explain this empty project',
       contextRefs: [],
-      conversationId: 'ask-conversation',
+      conversationId: '33333333-3333-4333-8333-333333333333',
     },
     {
       submitAndWait: async (request) => {
