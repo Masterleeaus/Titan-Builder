@@ -27,6 +27,7 @@ export type {
   ToolInvocation,
   ToolRegistry,
 } from './types.js';
+export { validateResolvedToolInvocation } from './validation.js';
 export {
   createToolKnowledgeRecords,
 } from './knowledge.js';
