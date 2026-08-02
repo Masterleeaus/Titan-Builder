@@ -30,34 +30,12 @@ The authoritative service listens only on `127.0.0.1` by default.
 
 ## Initial setup
 
-On Windows, the supported repository installer resolves its location independently of the current PowerShell directory, installs and verifies both packages, generates only missing credentials, links the CLI, and runs installation diagnostics:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1
-```
-
-To enable current-user login startup explicitly:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1 -EnableBackgroundService
-```
-
-Manual setup remains available:
-
 ```bash
 pnpm install --frozen-lockfile
 pnpm run verify
 pnpm build
 pnpm setup
 pnpm link --global
-```
-
-The browser-extension companion also has its own locked package and verification command:
-
-```bash
-cd browser-extension
-pnpm install --frozen-lockfile
-pnpm run verify
 ```
 
 Create the secure user configuration if it does not already exist:
@@ -72,29 +50,6 @@ The bridge requires two distinct credentials:
 - `BRIDGE_BROWSER_TOKEN` — restricted extension credential used by browser, project-intelligence, and browser-workflow routes.
 
 Copy only `BRIDGE_BROWSER_TOKEN` into the extension settings.
-
-## Installation diagnostics
-
-Run the read-only installation doctor at any time:
-
-```bash
-openbrowser doctor
-openbrowser doctor --json
-```
-
-It checks:
-
-- Node.js 22+;
-- readable user configuration;
-- strong control and browser tokens;
-- credential separation;
-- secure-mode flags;
-- extension manifest presence;
-- companion package presence;
-- registered projects;
-- detached bridge health.
-
-Warnings, such as no registered project or a stopped service, do not produce a failing exit code. Missing, weak, or identical credentials, insecure development mode, missing extension assets, or an unhealthy running service are blocking failures. Token values are never included in human or JSON output.
 
 ## Register a project
 
@@ -135,7 +90,13 @@ The service manager:
 
 ### Windows login startup
 
-Background startup is opt-in. The installer registers a current-user Scheduled Task named **OpenBrowser Local Agent** only when `-EnableBackgroundService` is supplied. Running it without the switch does not enable automatic startup.
+Background startup is opt-in:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1 -EnableBackgroundService
+```
+
+This registers a current-user Scheduled Task named **OpenBrowser Local Agent**. Running the installer without the switch does not enable automatic startup.
 
 ## Work view
 
@@ -242,9 +203,8 @@ The repository verification pipeline runs on Linux and Windows and includes:
 - TypeScript type checking;
 - all Node and integration tests;
 - complete browser-first queue/claim/respond/review/approve/apply/verify acceptance coverage;
-- CLI, doctor, and service-command smoke tests;
+- CLI and service-command smoke tests;
 - extension Work-view, stale-recovery, monitoring, and security tests;
-- browser-extension companion typecheck, tests, Python tests, script checks, and build;
-- Windows installer source-contract tests.
+- browser-extension companion typecheck, tests, Python tests, script checks, and build.
 
-GitHub Actions does not operate a user's authenticated AI browser session. Before publishing a workstation release, complete the disposable-project procedure in [Browser-First Chrome Smoke Checklist](browser-first-smoke-checklist.md). It covers Ask without writes, Agent preview, two-stage approval, application, verification, stale-preview handling, restart recovery, cancellation, credential separation, and failure evidence capture.
+A real Chrome smoke test is still recommended before publishing a release because GitHub Actions does not operate an authenticated personal AI browser session.

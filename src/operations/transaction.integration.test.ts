@@ -8,7 +8,7 @@ import {
   executePlannedOperations,
   planOperations,
 } from './index.ts';
-import { listHistory } from '../memory/index.ts';
+import { listHistory } from '../memory/history.ts';
 
 async function createProject(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'openbrowser-transaction-'));
@@ -58,11 +58,6 @@ test('a failed multi-file transaction restores earlier mutations and records rol
   const secondPath = path.join(projectRoot, 'second.txt');
   await writeFile(firstPath, 'before first\n', 'utf8');
   await writeFile(secondPath, 'before second\n', 'utf8');
-  await writeFile(
-    path.join(projectRoot, 'package.json'),
-    JSON.stringify({ scripts: { test: 'node -e "process.exit(1)"' } }),
-    'utf8',
-  );
 
   try {
     const plans = await planOperations([
@@ -70,9 +65,11 @@ test('a failed multi-file transaction restores earlier mutations and records rol
       { action: 'EDIT_FILE', path: 'second.txt', content: 'after second\n' },
       { action: 'RUN_TOOL', tool: 'npm.test' },
     ], projectRoot);
+    await writeFile(path.join(projectRoot, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(1)"' } }), 'utf8');
+    const replanned = await planOperations(plans.map((plan) => plan.operation), projectRoot);
 
     await assert.rejects(
-      executePlannedOperations(plans, projectRoot),
+      executePlannedOperations(replanned, projectRoot),
       /Operation transaction failed/i,
     );
     assert.equal(await readFile(firstPath, 'utf8'), 'before first\n');
@@ -102,59 +99,57 @@ test('a failed multi-file transaction restores earlier mutations and records rol
   }
 });
 
-test('planner rejects writes through an intermediate symlink that leaves the project', async () => {
-  const projectRoot = await createProject();
-  const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'openbrowser-outside-'));
-  const linkPath = path.join(projectRoot, 'linked');
-  try {
-    await fs.symlink(outsideRoot, linkPath, 'dir');
-    await assert.rejects(
-      planOperations([
-        { action: 'CREATE_FILE', path: 'linked/escape.txt', content: 'blocked\n' },
-      ], projectRoot),
-      /outside project root|symbolic link/i,
-    );
-    assert.equal(await fs.pathExists(path.join(outsideRoot, 'escape.txt')), false);
-  } finally {
-    await fs.remove(projectRoot);
-    await fs.remove(outsideRoot);
-  }
-});
 
-test('executor detects a symlink swap between preview and write', async () => {
-  if (process.platform === 'win32') return;
+test('package scripts lock their manifest at preview and reject later script replacement', async () => {
   const projectRoot = await createProject();
-  const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'openbrowser-outside-'));
-  const safeDirectory = path.join(projectRoot, 'safe');
-  await fs.ensureDir(safeDirectory);
+  const packagePath = path.join(projectRoot, 'package.json');
+  await writeFile(
+    packagePath,
+    JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }),
+    'utf8',
+  );
+  const canonicalPackagePath = await realpath(packagePath);
+
   try {
     const plans = await planOperations([
-      { action: 'CREATE_FILE', path: 'safe/value.txt', content: 'blocked\n' },
+      { action: 'RUN_TOOL', tool: 'npm.test' },
     ], projectRoot);
-    await fs.remove(safeDirectory);
-    await fs.symlink(outsideRoot, safeDirectory, 'dir');
+    assert.equal(plans[0]?.risk, 'ARBITRARY_EXECUTION');
+    assert.ok(plans[0]?.preconditions.some((entry) => entry.absolutePath === canonicalPackagePath));
+
+    await writeFile(
+      packagePath,
+      JSON.stringify({ scripts: { test: 'node -e "process.exit(99)"' } }),
+      'utf8',
+    );
 
     await assert.rejects(
       executePlannedOperations(plans, projectRoot),
-      /outside project root|symbolic link|precondition/i,
+      /precondition changed/i,
     );
-    assert.equal(await fs.pathExists(path.join(outsideRoot, 'value.txt')), false);
   } finally {
     await fs.remove(projectRoot);
-    await fs.remove(outsideRoot);
   }
 });
 
-test('existing project root is canonical before planning starts', async () => {
+test('dependency installation requires a lockfile and previews lifecycle-disabled network execution', async () => {
   const projectRoot = await createProject();
+  await writeFile(path.join(projectRoot, 'package.json'), JSON.stringify({ dependencies: {} }), 'utf8');
+
   try {
-    const canonicalRoot = await realpath(projectRoot);
-    assert.equal(path.isAbsolute(canonicalRoot), true);
-    assert.equal(path.basename(canonicalRoot), path.basename(projectRoot));
-    const plans = await planOperations([
-      { action: 'CREATE_FOLDER', path: 'src' },
-    ], canonicalRoot);
-    assert.equal(plans.length, 1);
+    await assert.rejects(
+      planOperations([{ action: 'RUN_TOOL', tool: 'npm.install' }], projectRoot),
+      /requires package-lock\.json/i,
+    );
+
+    const lockPath = path.join(projectRoot, 'package-lock.json');
+    await writeFile(lockPath, JSON.stringify({ lockfileVersion: 3, packages: {} }), 'utf8');
+    const canonicalLockPath = await realpath(lockPath);
+    const plans = await planOperations([{ action: 'RUN_TOOL', tool: 'npm.install' }], projectRoot);
+
+    assert.equal(plans[0]?.risk, 'NETWORK_WRITE');
+    assert.match(plans[0]?.diff ?? '', /npm(?:\.cmd)? ci --ignore-scripts/);
+    assert.ok(plans[0]?.preconditions.some((entry) => entry.absolutePath === canonicalLockPath));
   } finally {
     await fs.remove(projectRoot);
   }

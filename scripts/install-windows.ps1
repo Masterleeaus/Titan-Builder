@@ -6,79 +6,37 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$RepositoryRoot = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
-$CompanionRoot = Join-Path $RepositoryRoot 'browser-extension'
-
 function Write-Step([string]$Message) {
     Write-Host "`n==> $Message" -ForegroundColor Cyan
 }
 
-function Require-Command([string]$Name, [string]$Remediation = '') {
+function Require-Command([string]$Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
-        if ($Remediation) {
-            throw "Required command '$Name' was not found in PATH. $Remediation"
-        }
         throw "Required command '$Name' was not found in PATH."
-    }
-}
-
-function Assert-LastCommand([string]$Description) {
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Description failed with exit code $LASTEXITCODE."
     }
 }
 
 Write-Step 'Checking Node.js'
 Require-Command 'node'
 $nodeVersion = (& node --version).Trim().TrimStart('v')
-Assert-LastCommand 'Reading the Node.js version'
 $nodeMajor = [int]($nodeVersion.Split('.')[0])
 if ($nodeMajor -lt 22) {
     throw "OpenBrowser with pnpm 11 requires Node.js 22 or later. Found v$nodeVersion."
 }
 Write-Host "Node.js v$nodeVersion"
 
-Write-Step 'Checking Python for the browser-extension companion'
-Require-Command 'python' 'Install Python 3.12 or later, enable Add Python to PATH, and run this installer again.'
-$pythonVersion = (& python --version 2>&1).ToString().Trim()
-Assert-LastCommand 'Reading the Python version'
-Write-Host $pythonVersion
-
 Write-Step 'Activating pnpm 11.2.2 through Corepack'
 Require-Command 'corepack'
 & corepack enable
-Assert-LastCommand 'Enabling Corepack'
 & corepack prepare pnpm@11.2.2 --activate
-Assert-LastCommand 'Activating pnpm 11.2.2'
 Require-Command 'pnpm'
-$pnpmVersion = (& pnpm --version).Trim()
-Assert-LastCommand 'Reading the pnpm version'
-Write-Host "pnpm $pnpmVersion"
+Write-Host "pnpm $(& pnpm --version)"
 
-Write-Step 'Installing and verifying the root OpenBrowser runtime'
-Push-Location $RepositoryRoot
-try {
-    & pnpm install --frozen-lockfile
-    Assert-LastCommand 'Installing root dependencies'
-    & pnpm run verify
-    Assert-LastCommand 'Verifying the root runtime'
-} finally {
-    Pop-Location
-}
+Write-Step 'Installing locked dependencies'
+& pnpm install --frozen-lockfile
 
-Write-Step 'Installing and verifying the browser-extension companion'
-if (-not (Test-Path (Join-Path $CompanionRoot 'package.json'))) {
-    throw "The browser-extension companion was not found at $CompanionRoot. Use a complete Titan Builder checkout."
-}
-Push-Location $CompanionRoot
-try {
-    & pnpm install --frozen-lockfile
-    Assert-LastCommand 'Installing browser-extension companion dependencies'
-    & pnpm run verify
-    Assert-LastCommand 'Verifying the browser-extension companion'
-} finally {
-    Pop-Location
-}
+Write-Step 'Running type checks, tests, build, CLI smoke test, and extension checks'
+& pnpm run verify
 
 Write-Step 'Creating secure user configuration when missing'
 $configDirectory = Join-Path $HOME '.openbrowser'
@@ -99,24 +57,14 @@ $generatedControlToken = $false
 $generatedBrowserToken = $false
 if ($configText -notmatch '(?m)^BRIDGE_TOKEN=.{32,}$') {
     $tokenBytes = New-Object byte[] 48
-    $controlRng = [Security.Cryptography.RandomNumberGenerator]::Create()
-    try {
-        $controlRng.GetBytes($tokenBytes)
-    } finally {
-        $controlRng.Dispose()
-    }
+    [Security.Cryptography.RandomNumberGenerator]::Fill($tokenBytes)
     $controlToken = [Convert]::ToBase64String($tokenBytes)
     Add-Content -Encoding UTF8 $configPath "BRIDGE_TOKEN=$controlToken"
     $generatedControlToken = $true
 }
 if ($configText -notmatch '(?m)^BRIDGE_BROWSER_TOKEN=.{32,}$') {
     $browserTokenBytes = New-Object byte[] 48
-    $browserRng = [Security.Cryptography.RandomNumberGenerator]::Create()
-    try {
-        $browserRng.GetBytes($browserTokenBytes)
-    } finally {
-        $browserRng.Dispose()
-    }
+    [Security.Cryptography.RandomNumberGenerator]::Fill($browserTokenBytes)
     $browserToken = [Convert]::ToBase64String($browserTokenBytes)
     Add-Content -Encoding UTF8 $configPath "BRIDGE_BROWSER_TOKEN=$browserToken"
     $generatedBrowserToken = $true
@@ -127,9 +75,6 @@ if ($configText -notmatch '(?m)^BRIDGE_EXTENSION_ORIGINS=') {
 if ($configText -notmatch '(?m)^OPENBROWSER_INSECURE_DEV=') {
     Add-Content -Encoding UTF8 $configPath 'OPENBROWSER_INSECURE_DEV=0'
 }
-if ($configText -notmatch '(?m)^OPENBROWSER_ALLOW_UNSAFE_COMMANDS=') {
-    Add-Content -Encoding UTF8 $configPath 'OPENBROWSER_ALLOW_UNSAFE_COMMANDS=0'
-}
 
 if ($generatedControlToken -or $generatedBrowserToken) {
     Write-Host "Created missing secure bridge credentials in $configPath"
@@ -138,31 +83,13 @@ if ($generatedControlToken -or $generatedBrowserToken) {
 }
 
 Write-Step 'Registering the global CLI command'
-Push-Location $RepositoryRoot
-try {
-    & pnpm setup
-    Assert-LastCommand 'Configuring the pnpm global command directory'
-    & pnpm link --global
-    Assert-LastCommand 'Linking the OpenBrowser CLI globally'
-} finally {
-    Pop-Location
-}
-
-$pnpmGlobalBin = (& pnpm bin --global).Trim()
-Assert-LastCommand 'Resolving the pnpm global command directory'
-if ($pnpmGlobalBin -and (($env:Path -split ';') -notcontains $pnpmGlobalBin)) {
-    $env:Path = "$pnpmGlobalBin;$env:Path"
-}
-Require-Command 'openbrowser' 'Open a new PowerShell window if pnpm updated PATH, then run openbrowser doctor.'
-
-Write-Step 'Running the installation doctor'
-& openbrowser doctor
-Assert-LastCommand 'OpenBrowser installation diagnostics'
+& pnpm setup
+& pnpm link --global
 
 if ($EnableBackgroundService) {
     Write-Step 'Enabling the opt-in background bridge service'
+    Require-Command 'openbrowser'
     & openbrowser service start
-    Assert-LastCommand 'Starting the OpenBrowser background service'
 
     $taskName = 'OpenBrowser Local Agent'
     $openBrowserPath = (Get-Command openbrowser -ErrorAction Stop).Source
@@ -176,14 +103,14 @@ if ($EnableBackgroundService) {
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Starts the local OpenBrowser bridge for the current user.' -Force | Out-Null
     Write-Host "Registered current-user Scheduled Task: $taskName"
 } else {
-    Write-Host 'Background startup was not enabled. Run this installer with -EnableBackgroundService to opt in.'
+    Write-Host "Background startup was not enabled. Run this installer with -EnableBackgroundService to opt in."
 }
 
+$extensionPath = Join-Path (Get-Location) 'browser-extension'
 Write-Host "`nInstallation completed." -ForegroundColor Green
-Write-Host '1. Open chrome://extensions'
-Write-Host '2. Enable Developer mode'
-Write-Host "3. Load unpacked: $CompanionRoot"
-Write-Host '4. Open a new PowerShell window and run: openbrowser doctor'
+Write-Host "1. Open chrome://extensions"
+Write-Host "2. Enable Developer mode"
+Write-Host "3. Load unpacked: $extensionPath"
+Write-Host "4. Open a new PowerShell window and run: openbrowser --help"
 Write-Host "5. Copy BRIDGE_BROWSER_TOKEN from $configPath into the extension settings"
-Write-Host '6. Start the bridge with: openbrowser service start'
-Write-Host '7. Follow docs/browser-first-smoke-checklist.md for Ask and Agent validation'
+Write-Host "6. Manage the background bridge with: openbrowser service status|start|stop|logs"

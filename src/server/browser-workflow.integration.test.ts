@@ -33,15 +33,6 @@ async function waitForStatus(
   throw new Error(`Run did not reach ${expected}`);
 }
 
-async function removeFixture(directory: string): Promise<void> {
-  await rm(directory, {
-    recursive: true,
-    force: true,
-    maxRetries: 10,
-    retryDelay: 20,
-  });
-}
-
 test('browser token creates ask and agent runs for registered projects only', async () => {
   const homeDir = await mkdtemp(path.join(os.tmpdir(), 'openbrowser-workflow-home-'));
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'openbrowser-workflow-project-'));
@@ -106,7 +97,7 @@ test('browser token creates ask and agent runs for registered projects only', as
     assert.equal(forbidden.statusCode, 401);
   } finally {
     await app.close();
-    await removeFixture(homeDir);
-    await removeFixture(projectRoot);
+    await rm(homeDir, { recursive: true, force: true });
+    await rm(projectRoot, { recursive: true, force: true });
   }
 });

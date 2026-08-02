@@ -1,13 +1,60 @@
-import { BUILTIN_SKILLS, resolveBuiltinSkillId } from './skill-registry.js';
-
-export { BUILTIN_SKILLS };
-
 const uniqueStrings = (value) => {
   const source = Array.isArray(value) ? value : String(value ?? '').split(',');
   return [...new Set(source.map((item) => String(item).trim()).filter(Boolean))];
 };
 
 const createId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+export const BUILTIN_SKILLS = Object.freeze([
+  {
+    id: 'debugging',
+    title: 'Systematic Debugging',
+    description: 'Trace evidence and isolate root cause before editing.',
+    instructions: 'Reproduce or trace the defect, identify the root cause, then make the smallest coherent fix.',
+    tags: ['debugging', 'root-cause'],
+    custom: false,
+  },
+  {
+    id: 'testing',
+    title: 'Test-Driven Development',
+    description: 'Write focused regression tests before implementation.',
+    instructions: 'Define the expected behaviour with a focused failing test, implement minimally, then run the relevant broader checks.',
+    tags: ['tests', 'tdd'],
+    custom: false,
+  },
+  {
+    id: 'security',
+    title: 'Extension Security',
+    description: 'Review browser, bridge, filesystem, and execution trust boundaries.',
+    instructions: 'Treat page content and model output as untrusted. Validate origins, message sources, paths, commands, secrets, and permissions.',
+    tags: ['security', 'manifest-v3'],
+    custom: false,
+  },
+  {
+    id: 'architecture',
+    title: 'Architecture Review',
+    description: 'Preserve existing boundaries and avoid duplicate runtimes.',
+    instructions: 'Trace existing registrations, lifecycle, state ownership, platform adapters, and tests before proposing structural changes.',
+    tags: ['architecture', 'refactor'],
+    custom: false,
+  },
+  {
+    id: 'git',
+    title: 'Git Discipline',
+    description: 'Keep changes reviewable and branch-safe.',
+    instructions: 'Inspect repository status first, keep changes focused, avoid destructive Git commands, and report the exact diff and verification evidence.',
+    tags: ['git', 'review'],
+    custom: false,
+  },
+  {
+    id: 'performance',
+    title: 'Browser Performance',
+    description: 'Find expensive observers, timers, rendering, and service-worker churn.',
+    instructions: 'Prefer event-driven behaviour, bounded work, cleanup on disposal, and measurable performance evidence.',
+    tags: ['performance', 'browser'],
+    custom: false,
+  },
+]);
 
 export const BUILTIN_AGENT_PROFILES = Object.freeze([
   {
@@ -82,14 +129,10 @@ export function resolveWorkspaceContext({
 } = {}) {
   const skillMap = new Map(skills.map((item) => [item.id, item]));
   const profile = profiles.find((item) => item.id === activeProfileId) ?? null;
-  const requestedIds = uniqueStrings([...(profile?.skillIds ?? []), ...activeSkillIds]);
-  const resolvedIds = uniqueStrings(requestedIds.map((id) => {
-    const canonical = resolveBuiltinSkillId(id);
-    return skillMap.has(canonical) ? canonical : id;
-  }));
+  const ids = uniqueStrings([...(profile?.skillIds ?? []), ...activeSkillIds]);
   return {
     profile,
-    skills: resolvedIds.map((id) => skillMap.get(id)).filter(Boolean),
+    skills: ids.map((id) => skillMap.get(id)).filter(Boolean),
   };
 }
 

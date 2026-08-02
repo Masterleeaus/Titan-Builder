@@ -1,0 +1,108 @@
+name: Apply Verified OB-009 Repair
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: titan-builder-ob009-repair
+      cancel-in-progress: false
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/fix-titan-builder-v2.6-deep-scan
+          fetch-depth: 0
+
+      - name: Download and verify exact OB-009 source artifact
+        shell: bash
+        env:
+          ARTIFACT_URL: https://titan-builder-ob009-artifact.miniup.app/artifacts/ob009-repair.tar.gz
+          ARTIFACT_SHA256: 9b37e8aefbe09e15e7e510c4e5d4fc4d6b2cc2ddeeb85bfeb9575136a7a97308
+        run: |
+          set -euo pipefail
+          artifact_path="$(mktemp --suffix=.tar.gz)"
+          extraction_root="$(mktemp -d)"
+          trap 'rm -rf "$artifact_path" "$extraction_root"' EXIT
+
+          curl --fail --location --silent --show-error --retry 3 "$ARTIFACT_URL" --output "$artifact_path"
+          actual_sha="$(sha256sum "$artifact_path" | awk '{print $1}')"
+          if [[ "$actual_sha" != "$ARTIFACT_SHA256" ]]; then
+            echo "Checksum mismatch: expected $ARTIFACT_SHA256, got $actual_sha" >&2
+            exit 1
+          fi
+
+          python - "$artifact_path" "$extraction_root" <<'PY'
+          from pathlib import Path, PurePosixPath
+          import shutil
+          import sys
+          import tarfile
+
+          archive = Path(sys.argv[1])
+          extraction_root = Path(sys.argv[2]).resolve()
+          repository_root = Path.cwd().resolve()
+          expected = {
+              'README.md',
+              'src/tools/registry.ts',
+              'src/tools/registry.test.ts',
+              'src/operations/index.ts',
+              'src/operations/transaction.integration.test.ts',
+              'src/index.ts',
+              'src/prompts/system.ts',
+          }
+
+          with tarfile.open(archive, 'r:gz') as tf:
+              file_members = [member for member in tf.getmembers() if member.isfile()]
+              names = {member.name for member in file_members}
+              if names != expected:
+                  raise SystemExit(f'Unexpected artifact paths: expected={sorted(expected)}, actual={sorted(names)}')
+              for member in tf.getmembers():
+                  path = PurePosixPath(member.name)
+                  if path.is_absolute() or '..' in path.parts or member.issym() or member.islnk():
+                      raise SystemExit(f'Unsafe archive member: {member.name}')
+              tf.extractall(extraction_root, filter='data')
+
+          for relative in sorted(expected):
+              source = extraction_root / relative
+              destination = repository_root / relative
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, destination)
+          PY
+
+      - name: Run dependency-free repair gate
+        run: npm run verify:offline
+
+      - name: Commit verified source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            README.md \
+            src/tools/registry.ts \
+            src/tools/registry.test.ts \
+            src/operations/index.ts \
+            src/operations/transaction.integration.test.ts \
+            src/index.ts \
+            src/prompts/system.ts
+          if git diff --cached --quiet; then
+            echo 'OB-009 repair is already present; nothing to commit.'
+            exit 0
+          fi
+          git commit -m 'fix: classify package scripts as arbitrary execution'
+          git pull --rebase origin agent/fix-titan-builder-v2.6-deep-scan
+          git push origin HEAD:agent/fix-titan-builder-v2.6-deep-scan

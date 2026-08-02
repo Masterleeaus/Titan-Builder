@@ -52,14 +52,6 @@ export async function appendHistory(
   await fs.writeJson(historyFile, history, { spaces: 2 });
 }
 
-export async function listHistory(projectRoot: string): Promise<HistoryEntry[]> {
-  await ensureMemory(projectRoot);
-  const history = (await fs.readJson(
-    memoryPath(projectRoot, MEMORY_FILES.history),
-  )) as HistoryEntry[];
-  return structuredClone(history);
-}
-
 export async function saveContextSummary(
   projectRoot: string,
   summary: string,
