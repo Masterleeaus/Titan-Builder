@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -101,5 +101,5 @@ test('runAskWorkflow returns the browser answer without writing project files', 
   assert.equal(result.markdownDraft, false);
   assert.equal(requests.length, 1);
   assert.equal(requests[0]?.mode, 'ask');
-  assert.deepEqual(Object.keys(require('node:fs').readdirSync(projectRoot)), []);
+  assert.deepEqual(readdirSync(projectRoot), []);
 });
