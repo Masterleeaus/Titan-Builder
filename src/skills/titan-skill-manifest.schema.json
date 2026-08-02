@@ -52,7 +52,7 @@
     },
     "entrypoint": {
       "type": "string",
-      "pattern": "^(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+#[A-Za-z_$][A-Za-z0-9_$]*$"
+      "pattern": "^(?:[A-Za-z0-9_$](?:[A-Za-z0-9._$-]*[A-Za-z0-9_$-])?/)*[A-Za-z0-9_$](?:[A-Za-z0-9._$-]*[A-Za-z0-9_$-])?#[A-Za-z_$][A-Za-z0-9_$]*$"
     },
     "instructions": {
       "type": "string",
