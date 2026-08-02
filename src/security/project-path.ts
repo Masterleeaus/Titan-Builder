@@ -52,7 +52,7 @@ export async function resolveProjectPath(
     throw new Error('Project path must be a non-empty path without null bytes');
   }
 
-  assertNotReserved(targetPath);
+  assertNotReservedVcsPath(targetPath);
 
   const root = await canonicalizeProjectRoot(projectRoot);
   const candidate = path.resolve(root, targetPath);
@@ -133,11 +133,29 @@ function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
 }
 
-function assertNotReserved(targetPath: string): void {
-  const normalizedPath = path.normalize(targetPath);
-  const firstSegment = normalizedPath.split(path.sep)[0]?.toLowerCase();
+function assertNotReservedVcsPath(targetPath: string): void {
+  const normalized = targetPath.replace(/\\/g, '/').toLowerCase();
+  const segments = normalized.split('/').filter(Boolean);
 
-  if (firstSegment === '.openbrowser') {
-    throw new Error(`Path targets reserved Titan Builder metadata: ${targetPath}`);
+  const vcsReserved = [
+    '.git',
+    '.hg',
+    '.svn',
+    '.fossil',
+    '.darcs',
+    '_darcs',
+    '.pijul',
+    '.jj',
+    '.openbrowser',
+  ];
+
+  for (const segment of segments) {
+    if (vcsReserved.includes(segment)) {
+      throw new Error(`Path cannot access reserved metadata directory: ${targetPath} (contains ${segment})`);
+    }
+  }
+
+  if (normalized.includes('/.git/') || normalized.startsWith('.git/')) {
+    throw new Error(`Path cannot access Git metadata: ${targetPath}`);
   }
 }
