@@ -69,7 +69,7 @@ test('catalog rejects aliases that collide with runtime IDs', () => {
     ...diff,
     manifest: parseToolManifest({
       ...diff.manifest,
-      id: 'titan.tool.git.diff-alias-test',
+      id: 'titan.tool.git.diff.alias-test',
       runtimeId: 'git.diff.alias-test',
       aliases: ['git.status'],
       examples: [{ title: 'Alias collision', tool: 'git.diff.alias-test', args: [] }],
@@ -89,7 +89,7 @@ test('catalog resolves declared aliases to their canonical runtime ID', () => {
     ...status,
     manifest: parseToolManifest({
       ...status.manifest,
-      id: 'titan.tool.git.status-aliased',
+      id: 'titan.tool.git.status.aliased',
       runtimeId: 'git.status.aliased',
       aliases: ['git.state'],
       examples: [{ title: 'Read state', tool: 'git.state', args: [] }],
