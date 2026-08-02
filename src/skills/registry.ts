@@ -1,4 +1,4 @@
-import { discoverSkillPackages, type LoadedSkillPackage } from './loader.ts';
+import { discoverSkillPackages, type LoadedSkillPackage } from './loader.js';
 
 export interface SkillRegistry {
   list(): readonly LoadedSkillPackage[];
