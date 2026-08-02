@@ -1,0 +1,89 @@
+name: Finalize Workspace Tool Files
+
+on:
+  push:
+    branches:
+      - feature/openbrowser-workspace-tools
+    paths:
+      - '.github/workflows/workspace-tools-finalize.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/openbrowser-workspace-tools
+          fetch-depth: 0
+
+      - name: Apply exact compiler corrections
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          file_path = Path('tools/openbrowser-workspace/bridge-server.ts')
+          source = file_path.read_text(encoding='utf-8')
+
+          source = source.replace(
+              "function initializeDatabase(databasePath: string): SqliteDatabase {\n"
+              "  const directory = path.dirname(databasePath);\n"
+              "  const schemaPath = path.join(moduleDirectory, 'schema.sql');\n"
+              "  return new Database(databasePath, { fileMustExist: false });\n"
+              "}",
+              "function initializeDatabase(databasePath: string): SqliteDatabase {\n"
+              "  return new Database(databasePath, { fileMustExist: false });\n"
+              "}",
+          )
+          source = source.replace(
+              "      const code = (error as NodeJS.ErrnoException & { code?: string | number }).code;\n"
+              "      if (code === 1 || code === '1') return { results: [] };",
+              "      const code = (error as { code?: string | number }).code;\n"
+              "      if (String(code) === '1') return { results: [] };",
+          )
+
+          if "const directory = path.dirname(databasePath);" in source:
+              raise SystemExit('Unused directory declaration was not removed')
+          if "code === 1 || code === '1'" in source:
+              raise SystemExit('Exit-code comparison was not corrected')
+
+          file_path.write_text(source, encoding='utf-8')
+          PY
+
+      - name: Activate pnpm 11.2.2
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+
+      - name: Generate deterministic companion lockfile
+        working-directory: tools/openbrowser-workspace
+        run: pnpm install --lockfile-only --no-frozen-lockfile
+
+      - name: Set executable modes
+        run: |
+          chmod +x \
+            tools/openbrowser-workspace/analysis_tools.py \
+            tools/openbrowser-workspace/gh-openbrowser \
+            tools/openbrowser-workspace/hooks/pre-commit
+
+      - name: Commit finalized files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            tools/openbrowser-workspace/bridge-server.ts \
+            tools/openbrowser-workspace/pnpm-lock.yaml \
+            tools/openbrowser-workspace/analysis_tools.py \
+            tools/openbrowser-workspace/gh-openbrowser \
+            tools/openbrowser-workspace/hooks/pre-commit
+          git commit -m 'fix(workspace): finalize compiler and executable metadata'
+          git pull --rebase origin feature/openbrowser-workspace-tools
+          git push origin HEAD:feature/openbrowser-workspace-tools
