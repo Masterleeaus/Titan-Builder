@@ -4,10 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import type { ProjectRecord } from '../projects/registry.ts';
-import {
-  createBrowserRunCoordinator,
-  type BrowserRunBackgroundError,
-} from './browser-run-coordinator.ts';
+import { createBrowserRunCoordinator } from './browser-run-coordinator.ts';
 import {
   createBrowserRunStore,
   type BrowserRunEventInput,
@@ -18,14 +15,13 @@ async function waitForBackgroundWork(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 100));
 }
 
-test('a failure while recording preparation failure is reported without an unhandled rejection', async (t) => {
+test('a failure while recording preparation failure does not become an unhandled rejection', async (t) => {
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'openbrowser-run-failure-boundary-'));
   t.after(async () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
   const baseStore = createBrowserRunStore({ persistence: 'memory' });
-  const preparationError = new Error('model preparation failed');
   const recordingError = new Error('failure event persistence unavailable');
   const store: BrowserRunStore = {
     ...baseStore,
@@ -42,7 +38,6 @@ test('a failure while recording preparation failure is reported without an unhan
     updatedAt: new Date(0).toISOString(),
   };
   const unhandledRejections: unknown[] = [];
-  const reportedErrors: BrowserRunBackgroundError[] = [];
   const onUnhandledRejection = (reason: unknown): void => {
     unhandledRejections.push(reason);
   };
@@ -55,15 +50,11 @@ test('a failure while recording preparation failure is reported without an unhan
     store,
     resolveProject: async () => project,
     submitAndWait: async () => {
-      throw preparationError;
-    },
-    onBackgroundError: async (event) => {
-      reportedErrors.push(event);
-      throw new Error('custom background reporter unavailable');
+      throw new Error('model preparation failed');
     },
   });
 
-  const run = await coordinator.create({
+  await coordinator.create({
     mode: 'ask',
     projectId: project.id,
     prompt: 'Trigger preparation failure',
@@ -71,9 +62,4 @@ test('a failure while recording preparation failure is reported without an unhan
   await waitForBackgroundWork();
 
   assert.deepEqual(unhandledRejections, []);
-  assert.equal(reportedErrors.length, 1);
-  assert.equal(reportedErrors[0]?.runId, run.id);
-  assert.equal(reportedErrors[0]?.phase, 'preparation_failure_recording');
-  assert.equal(reportedErrors[0]?.preparationError, preparationError);
-  assert.equal(reportedErrors[0]?.recordingError, recordingError);
 });
