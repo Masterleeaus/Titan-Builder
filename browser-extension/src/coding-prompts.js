@@ -5,6 +5,10 @@ export const BUILTIN_CODING_PROMPTS = Object.freeze([
     description: 'Trace the full browser-extension runtime and classify evidence-based defects.',
     category: 'Audit',
     tags: ['security', 'manifest-v3', 'runtime'],
+    routingIntents: ['deep audit browser extension', 'scan extension runtime for defects', 'audit extension architecture and security'],
+    negativeRoutingIntents: ['operate live business', 'create customer job'],
+    workModes: ['ask', 'agent'],
+    routingRisk: 'standard',
     content: `Perform an evidence-based deep audit of this browser extension.
 
 Scope: ${'${scope:the full extension runtime}'}
@@ -18,6 +22,10 @@ Trace manifest loading, service-worker startup, content scripts, injected script
     description: 'Reproduce a bug, identify the root cause, and define a minimal tested fix.',
     category: 'Debugging',
     tags: ['root-cause', 'tests', 'regression'],
+    routingIntents: ['debug failing code', 'find root cause', 'investigate a reproducible bug', 'fix regression systematically'],
+    negativeRoutingIntents: ['general architecture audit', 'operate live business'],
+    workModes: ['ask', 'agent'],
+    routingRisk: 'standard',
     content: `Debug this problem systematically:
 
 Observed behaviour: ${'${behaviour}'}
@@ -32,6 +40,10 @@ First identify the reproduction path and evidence. Trace the complete call and s
     description: 'Turn one focused requirement into a test-first implementation plan.',
     category: 'Implementation',
     tags: ['tdd', 'feature', 'minimal'],
+    routingIntents: ['implement feature with tests', 'build focused feature using tdd', 'add functionality test first'],
+    negativeRoutingIntents: ['audit only', 'documentation only', 'operate live business'],
+    workModes: ['agent'],
+    routingRisk: 'elevated',
     content: `Implement this focused feature using test-driven development:
 
 Feature: ${'${feature}'}
@@ -46,6 +58,10 @@ Inspect the current implementation first. Define the smallest public interface. 
     description: 'Review a change for defects, security, regressions, and missing tests.',
     category: 'Review',
     tags: ['diff', 'security', 'quality'],
+    routingIntents: ['review current diff', 'review code changes', 'find defects in this change set', 'perform pull request review'],
+    negativeRoutingIntents: ['implement new feature', 'operate live business'],
+    workModes: ['ask', 'agent'],
+    routingRisk: 'standard',
     content: `Review the current change set as a strict senior engineer.
 
 Focus: ${'${focus:correctness, security, architecture, compatibility, and tests}'}
@@ -58,6 +74,10 @@ Inspect the actual diff and surrounding code. Prioritise actionable defects over
     description: 'Use failing test output to locate the real defect instead of weakening tests.',
     category: 'Testing',
     tags: ['vitest', 'playwright', 'ci'],
+    routingIntents: ['repair failing tests', 'fix ci test failure', 'diagnose broken test suite', 'make tests pass without weakening assertions'],
+    negativeRoutingIntents: ['write new feature from scratch', 'operate live business'],
+    workModes: ['agent'],
+    routingRisk: 'elevated',
     content: `Repair the failing tests without weakening valid assertions.
 
 Failing command: ${'${command}'}
@@ -71,6 +91,10 @@ Classify each failure as product defect, test defect, environment issue, or flak
     description: 'Audit extension permissions, messaging, content injection, and local bridges.',
     category: 'Security',
     tags: ['cors', 'csp', 'messaging', 'localhost'],
+    routingIntents: ['audit browser extension security', 'review local bridge trust boundaries', 'check permissions cors csp and messaging', 'find path traversal or command injection'],
+    negativeRoutingIntents: ['general performance audit', 'operate live business'],
+    workModes: ['ask', 'agent'],
+    routingRisk: 'standard',
     content: `Perform a security review of the extension and local bridge.
 
 Threat model: untrusted webpages, model output, imported files, malicious prompts, and local network peers.
@@ -83,6 +107,10 @@ Check permissions, host access, message sender validation, origin validation, CO
     description: 'Consolidate duplicate systems while preserving reachable behaviour.',
     category: 'Architecture',
     tags: ['refactor', 'duplication', 'boundaries'],
+    routingIntents: ['simplify architecture', 'consolidate duplicate systems', 'remove architectural duplication safely', 'clarify subsystem ownership'],
+    negativeRoutingIntents: ['fix one isolated bug', 'operate live business'],
+    workModes: ['ask', 'agent'],
+    routingRisk: 'elevated',
     content: `Review this subsystem for unnecessary complexity and duplicated responsibility.
 
 Subsystem: ${'${subsystem}'}
@@ -96,6 +124,10 @@ Map current entry points, ownership, state, events, and consumers. Prove which i
     description: 'Inspect service-worker suspension, reconnection, alarms, and state recovery.',
     category: 'Extension',
     tags: ['chrome', 'service-worker', 'lifecycle'],
+    routingIntents: ['audit manifest v3 lifecycle', 'debug service worker suspension', 'review extension restart and state recovery', 'check alarms reconnect and duplicate listeners'],
+    negativeRoutingIntents: ['general provider adapter repair', 'operate live business'],
+    workModes: ['ask', 'agent'],
+    routingRisk: 'standard',
     content: `Audit this Manifest V3 extension for service-worker lifecycle defects.
 
 Trace startup, installation, browser restart, worker suspension, alarms, event listener registration, storage recovery, long-lived connections, retries, duplicate listeners, and cleanup. Identify state that incorrectly lives only in memory. Recommend event-driven repairs and focused lifecycle tests. Preserve Firefox compatibility where applicable.`,
@@ -106,6 +138,10 @@ Trace startup, installation, browser restart, worker suspension, alarms, event l
     description: 'Isolate and harden selectors and streaming detection for one AI platform.',
     category: 'Extension',
     tags: ['chatgpt', 'claude', 'deepseek', 'selectors'],
+    routingIntents: ['repair ai provider adapter', 'fix chatgpt or claude selectors', 'debug streaming completion detection', 'harden provider page integration'],
+    negativeRoutingIntents: ['audit all providers for prompt portability', 'operate live business'],
+    workModes: ['agent'],
+    routingRisk: 'elevated',
     content: `Inspect and repair the ${'${provider:ChatGPT}'} provider adapter.
 
 Verify composer discovery, prompt injection, submit controls, streaming detection, completion detection, stop controls, attachments, navigation, retries, and compatibility with third-party UI extensions. Keep platform-specific selectors isolated. Prefer semantic attributes and bounded fallbacks. Add fixtures or tests that fail gracefully when host markup changes.`,
@@ -116,6 +152,10 @@ Verify composer discovery, prompt injection, submit controls, streaming detectio
     description: 'Turn completed work into a clean reviewable branch and draft PR plan.',
     category: 'Git',
     tags: ['branch', 'commit', 'pull-request'],
+    routingIntents: ['prepare branch for pull request', 'make changes git ready', 'review status diff and commit boundaries', 'draft pull request plan'],
+    negativeRoutingIntents: ['merge immediately', 'force push', 'operate live business'],
+    workModes: ['agent'],
+    routingRisk: 'elevated',
     content: `Prepare this work for a clean Git review.
 
 Target branch: ${'${target:main}'}
@@ -129,6 +169,10 @@ Inspect status and diff, separate unrelated changes, verify generated files and 
     description: 'Create evidence-based architecture and operator documentation.',
     category: 'Documentation',
     tags: ['architecture', 'setup', 'operations'],
+    routingIntents: ['document subsystem', 'write architecture documentation from code', 'create developer setup and troubleshooting docs', 'explain system boundaries and data flow'],
+    negativeRoutingIntents: ['implement feature', 'operate live business'],
+    workModes: ['ask', 'agent'],
+    routingRisk: 'standard',
     content: `Document this subsystem from the implementation rather than assumptions.
 
 Subsystem: ${'${subsystem}'}
@@ -142,6 +186,10 @@ Cover purpose, boundaries, entry points, data flow, configuration, security mode
     description: 'Find expensive observers, polling, bundle, memory, and service-worker behaviour.',
     category: 'Performance',
     tags: ['memory', 'observers', 'bundle'],
+    routingIntents: ['audit extension performance', 'find memory growth or expensive observers', 'review polling and service worker wakeups', 'optimise browser extension startup'],
+    negativeRoutingIntents: ['security audit', 'operate live business'],
+    workModes: ['ask', 'agent'],
+    routingRisk: 'standard',
     content: `Audit extension performance with evidence.
 
 Focus area: ${'${area:startup, content scripts, observers, polling, and memory growth}'}
