@@ -1,7 +1,9 @@
 import path from 'node:path';
 import fg from 'fast-glob';
 import fs from 'fs-extra';
+import { canonicalizeProjectRoot } from '../security/project-path.js';
 import { collectProjectDirectories, scanDirectoryTree, type ContextDirectory } from './directory-tree.js';
+import { normalizeContextReference, resolveContextPath } from './context-path.js';
 
 export const CONTEXT_IGNORE = [
   '**/node_modules/**',
@@ -72,12 +74,26 @@ export interface ContextAttachment {
 export type { ContextDirectory } from './directory-tree.js';
 
 export async function listContextChoices(projectRoot: string): Promise<string[]> {
-  const files = await fg('**/*', {
-    cwd: projectRoot,
+  const root = await canonicalizeProjectRoot(projectRoot);
+  const discoveredFiles = await fg('**/*', {
+    cwd: root,
     dot: false,
     onlyFiles: true,
+    followSymbolicLinks: false,
     ignore: CONTEXT_IGNORE,
   });
+  const files: string[] = [];
+  for (const file of discoveredFiles) {
+    try {
+      const safeFile = await resolveContextPath(root, file, {
+        requireExisting: true,
+        expectedType: 'file',
+      });
+      files.push(safeFile.relativePath);
+    } catch {
+      // Ignore linked, missing, or escaped files.
+    }
+  }
 
   const dirs = new Set<string>();
   for (const file of files) {
@@ -87,15 +103,14 @@ export async function listContextChoices(projectRoot: string): Promise<string[]>
     }
   }
 
-  for (const dir of await collectProjectDirectories(projectRoot)) {
+  for (const dir of await collectProjectDirectories(root)) {
     dirs.add(dir);
   }
 
-  const topLevel = await fs.readdir(projectRoot);
+  const topLevel = await fs.readdir(root, { withFileTypes: true });
   for (const entry of topLevel) {
-    const fullPath = path.join(projectRoot, entry);
-    if ((await fs.stat(fullPath)).isDirectory()) {
-      dirs.add(`${entry}/`);
+    if (entry.isDirectory()) {
+      dirs.add(`${entry.name}/`);
     }
   }
 
@@ -106,22 +121,12 @@ export async function loadContextAttachments(
   projectRoot: string,
   refs: string[],
 ): Promise<ContextAttachment> {
-  const files = await loadContextFiles(projectRoot, refs);
+  const root = await canonicalizeProjectRoot(projectRoot);
+  const files = await loadContextFiles(root, refs);
   const directories: ContextDirectory[] = [];
-  const uniqueRefs = [...new Set(refs.map((ref) => ref.replace(/\\/g, '/').replace(/\/$/, '')))];
 
-  for (const ref of uniqueRefs) {
-    const resolved = path.resolve(projectRoot, ref);
-    if (!(await fs.pathExists(resolved))) {
-      continue;
-    }
-
-    const stat = await fs.stat(resolved);
-    if (!stat.isDirectory()) {
-      continue;
-    }
-
-    const tree = await scanDirectoryTree(projectRoot, ref);
+  for (const ref of normalizeContextReferences(refs)) {
+    const tree = await scanDirectoryTree(root, ref);
     if (tree) {
       directories.push(tree);
     }
@@ -134,40 +139,46 @@ export async function loadContextFiles(
   projectRoot: string,
   refs: string[],
 ): Promise<ContextFile[]> {
-  const uniqueRefs = [...new Set(refs.map((ref) => ref.replace(/\\/g, '/').replace(/\/$/, '')))];
+  const root = await canonicalizeProjectRoot(projectRoot);
   const filePaths = new Set<string>();
 
-  for (const ref of uniqueRefs) {
-    const resolved = path.resolve(projectRoot, ref);
-    if (!resolved.startsWith(path.resolve(projectRoot))) {
+  for (const ref of normalizeContextReferences(refs)) {
+    let resolved;
+    try {
+      resolved = await resolveContextPath(root, ref, { requireExisting: true });
+    } catch {
       continue;
     }
 
-    if (!(await fs.pathExists(resolved))) {
-      continue;
-    }
-
-    const stat = await fs.stat(resolved);
+    const stat = await fs.lstat(resolved.absolutePath);
     if (stat.isDirectory()) {
       const nested = await fg('**/*', {
-        cwd: resolved,
+        cwd: resolved.absolutePath,
         dot: false,
         onlyFiles: true,
+        followSymbolicLinks: false,
         ignore: CONTEXT_IGNORE,
       });
-      const relativeDir = path.relative(projectRoot, resolved).replace(/\\/g, '/');
+      const relativeDir = resolved.relativePath === '.' ? '' : resolved.relativePath;
       for (const nestedFile of nested) {
-        const relativePath = path.posix.join(relativeDir, nestedFile);
-        if (isTextContextFile(relativePath)) {
-          filePaths.add(relativePath);
+        const candidateRef = path.posix.join(relativeDir, nestedFile.replace(/\\/g, '/'));
+        try {
+          const safeFile = await resolveContextPath(root, candidateRef, {
+            requireExisting: true,
+            expectedType: 'file',
+          });
+          if (isTextContextFile(safeFile.relativePath)) {
+            filePaths.add(safeFile.relativePath);
+          }
+        } catch {
+          // Ignore linked, missing, or escaped nested files.
         }
       }
       continue;
     }
 
-    const relativePath = path.relative(projectRoot, resolved).replace(/\\/g, '/');
-    if (isTextContextFile(relativePath)) {
-      filePaths.add(relativePath);
+    if (stat.isFile() && isTextContextFile(resolved.relativePath)) {
+      filePaths.add(resolved.relativePath);
     }
   }
 
@@ -180,20 +191,25 @@ export async function loadContextFiles(
       break;
     }
 
-    const fullPath = path.join(projectRoot, relativePath);
-    if (!(await fs.pathExists(fullPath))) {
+    let safeFile;
+    try {
+      safeFile = await resolveContextPath(root, relativePath, {
+        requireExisting: true,
+        expectedType: 'file',
+      });
+    } catch {
       continue;
     }
 
-    const buffer = await fs.readFile(fullPath);
+    const buffer = await fs.readFile(safeFile.absolutePath);
     const remaining = MAX_TOTAL_BYTES - totalBytes;
     const maxForFile = Math.min(MAX_FILE_BYTES, remaining);
     const truncated = buffer.byteLength > maxForFile;
     const content = buffer.subarray(0, maxForFile).toString('utf8');
 
     loaded.push({
-      path: relativePath.replace(/\\/g, '/'),
-      language: detectLanguage(relativePath),
+      path: safeFile.relativePath,
+      language: detectLanguage(safeFile.relativePath),
       content,
       truncated,
     });
@@ -317,6 +333,18 @@ export function formatAgentContextJson(
   };
 
   return JSON.stringify(payload, null, 2);
+}
+
+function normalizeContextReferences(refs: string[]): string[] {
+  const normalized = new Set<string>();
+  for (const ref of refs) {
+    try {
+      normalized.add(normalizeContextReference(ref));
+    } catch {
+      // Invalid or cross-platform absolute references are ignored.
+    }
+  }
+  return [...normalized];
 }
 
 function addLineNumbers(content: string): string {

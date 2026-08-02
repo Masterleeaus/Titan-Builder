@@ -50,7 +50,7 @@
     "verify:offline": "npm run test:node && npm run test:skills && npm run check:skills && npm run check:prompts && npm run check:extension",
     "verify": "pnpm run typecheck && pnpm run test && pnpm run build && pnpm run smoke:cli && pnpm run check:skills && pnpm run check:prompts && pnpm run check:extension",
     "ci": "pnpm run verify",
-    "test:integration": "tsx --test src/diagnostics/install-doctor.test.ts src/diagnostics/doctor-cli.test.ts src/server/workflow.integration.ts src/server/browser-workflow.integration.test.ts src/server/browser-workflow.e2e.test.ts src/operations/transaction.integration.test.ts src/service/service-manager.test.ts src/workflows/browser-run-recovery.test.ts src/workflows/agent-preparation.test.ts src/workflows/agent-application.test.ts"
+    "test:integration": "tsx --test src/context/context-path-loaders.test.ts src/diagnostics/install-doctor.test.ts src/diagnostics/doctor-cli.test.ts src/server/workflow.integration.ts src/server/browser-workflow.integration.test.ts src/server/browser-workflow.e2e.test.ts src/operations/transaction.integration.test.ts src/service/service-manager.test.ts src/workflows/browser-run-recovery.test.ts src/workflows/agent-preparation.test.ts src/workflows/agent-application.test.ts"
   },
   "engines": {
     "node": ">=22"

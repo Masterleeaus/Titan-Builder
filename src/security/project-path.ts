@@ -3,6 +3,24 @@ import path from 'node:path';
 
 export type ExpectedPathType = 'file' | 'directory';
 
+const RESERVED_VCS_METADATA_NAMES = new Set([
+  '.git',
+  '.hg',
+  '.svn',
+  '_darcs',
+  '.bzr',
+  '.fslckout',
+  '.fossil-settings',
+  '_fossil_',
+  '.jj',
+  '.pijul',
+  '.sl',
+  '_mtn',
+  '.mtn',
+  '.arch-ids',
+  'cvs',
+]);
+
 export interface ResolveProjectPathOptions {
   requireExisting?: boolean;
   expectedType?: ExpectedPathType;
@@ -33,6 +51,8 @@ export async function resolveProjectPath(
   if (!targetPath || targetPath.includes('\0')) {
     throw new Error('Project path must be a non-empty path without null bytes');
   }
+
+  assertNoReservedVcsMetadata(targetPath);
 
   const root = await canonicalizeProjectRoot(projectRoot);
   const candidate = path.resolve(root, targetPath);
@@ -89,6 +109,18 @@ export async function resolveProjectPath(
 export function isPathInsideProject(projectRoot: string, targetPath: string): boolean {
   const relative = path.relative(projectRoot, targetPath);
   return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
+}
+
+function assertNoReservedVcsMetadata(targetPath: string): void {
+  const normalizedPath = targetPath.normalize('NFKC');
+  const segments = normalizedPath.split(/[\\/]+/u).filter(Boolean);
+
+  for (const segment of segments) {
+    const canonicalSegment = segment.replace(/[ .]+$/u, '').toLocaleLowerCase('en-US');
+    if (RESERVED_VCS_METADATA_NAMES.has(canonicalSegment)) {
+      throw new Error(`Project path targets reserved version-control metadata: ${targetPath}`);
+    }
+  }
 }
 
 function assertContained(projectRoot: string, targetPath: string, originalPath: string): void {
