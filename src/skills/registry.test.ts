@@ -77,3 +77,67 @@ test('rejects instruction paths that escape the package', async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('rejects entrypoint paths that escape the package', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'titan-skills-'));
+  try {
+    const execManifest = {
+      ...manifest('titan.executable.escaped', [], undefined),
+      kind: 'executable',
+      runtimeTargets: ['root'],
+      instructions: undefined,
+      entrypoint: '../outside.js#execute',
+    };
+    await writePackage(root, 'escaped', execManifest, '');
+    await writeFile(path.join(root, 'outside.js'), 'export function execute() {}');
+    await assert.rejects(
+      () => loadSkillRegistry(root),
+      /relative module path|escape|boundary|traversal/i,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('rejects entrypoint modules that do not exist', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'titan-skills-'));
+  try {
+    const execManifest = {
+      ...manifest('titan.executable.missing', [], undefined),
+      kind: 'executable',
+      runtimeTargets: ['root'],
+      instructions: undefined,
+      entrypoint: 'missing.js#execute',
+    };
+    await writePackage(root, 'missing', execManifest, '');
+    await assert.rejects(
+      () => loadSkillRegistry(root),
+      /unable to resolve|not found/i,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('accepts valid executable entrypoint modules', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'titan-skills-'));
+  try {
+    const execManifest = {
+      ...manifest('titan.executable.valid', [], undefined),
+      kind: 'executable',
+      runtimeTargets: ['root'],
+      instructions: undefined,
+      entrypoint: 'handler.js#execute',
+    };
+    await writePackage(root, 'valid', execManifest, '');
+    await writeFile(path.join(root, 'valid', 'handler.js'), 'export function execute() {}');
+    const registry = await loadSkillRegistry(root);
+    const skill = registry.resolve('titan.executable.valid');
+    assert(skill, 'Should load executable skill');
+    assert(skill.entrypoint, 'Should have resolved entrypoint');
+    assert.match(skill.entrypoint.modulePath, /handler\.js$/);
+    assert.equal(skill.entrypoint.exportName, 'execute');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
