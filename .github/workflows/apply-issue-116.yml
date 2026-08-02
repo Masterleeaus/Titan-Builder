@@ -33,6 +33,17 @@ jobs:
         with:
           node-version: 22
 
+      - name: Normalize patch template escaping
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const patchPath = '.github/scripts/apply-issue-116.mjs';
+          let source = fs.readFileSync(patchPath, 'utf8');
+          source = source.replace('const safeRollback = String.raw`', 'const safeRollback = `');
+          source = source.replace('const rollbackTests = String.raw`', 'const rollbackTests = `');
+          fs.writeFileSync(patchPath, source);
+          NODE
+
       - name: Apply rollback security patch
         run: node .github/scripts/apply-issue-116.mjs
 
