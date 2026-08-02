@@ -127,7 +127,6 @@ test('rejects Git discovery argument injection and unsupported modes', () => {
     'main:path',
     'main path',
     'main\\path',
-    'main\nnext',
   ]) {
     assert.throws(
       () => resolveToolInvocation('git.show', [revision], '/tmp/project'),
@@ -135,6 +134,10 @@ test('rejects Git discovery argument injection and unsupported modes', () => {
     );
   }
 
+  assert.throws(
+    () => resolveToolInvocation('git.show', ['main\nnext'], '/tmp/project'),
+    /control characters/,
+  );
   assert.throws(() => resolveToolInvocation('git.show', [], '/tmp/project'), /exactly one revision/);
   assert.throws(
     () => resolveToolInvocation('git.show', ['main', 'README.md'], '/tmp/project'),
