@@ -40,7 +40,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Wire same-connection transport into production
-        run: python .github/issue223/integrate.py
+        run: |
+          python .github/issue223/integrate.py
+          python .github/issue223/fix-verification.py
 
       - name: Verify companion on Linux
         working-directory: browser-extension
