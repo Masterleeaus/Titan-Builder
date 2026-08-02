@@ -104,6 +104,13 @@ const manifestSchema = z.object({
   }).strict().optional(),
 }).strict().superRefine((value, context) => {
   const aliases = value.aliases ?? [];
+  if (value.id !== `titan.tool.${value.runtimeId}`) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['id'],
+      message: 'Canonical tool ID must equal titan.tool.<runtimeId>.',
+    });
+  }
   if (aliases.includes(value.runtimeId)) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
