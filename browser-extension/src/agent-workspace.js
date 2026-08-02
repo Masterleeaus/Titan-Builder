@@ -1,3 +1,5 @@
+import { createRunEventMonitor } from './browser-run-events.js';
+
 const TERMINAL_STATUSES = new Set(['completed', 'rejected', 'cancelled', 'failed']);
 
 export function buildCreateRunPayload(input = {}) {
@@ -139,6 +141,7 @@ export function createAgentWorkspaceController({ bridgeRequest, storage, render 
               notice: 'The project changed after this preview. Review the updated diff and approve again.',
             },
             error.snapshot || {
+              id: state.id,
               status: 'awaiting_approval',
               previewRevision: error.replacementPreviewRevision,
               operations: error.replacementOperations || [],
@@ -176,19 +179,84 @@ function clampNumber(value, min, max, fallback) {
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, Math.round(parsed))) : fallback;
 }
 
+function toBridgeRequest(message) {
+  switch (message?.type) {
+    case 'OPENBROWSER_LIST_PROJECTS':
+      return { type: 'BRIDGE_REQUEST', path: '/projects', init: { method: 'GET' } };
+    case 'OPENBROWSER_CREATE_RUN':
+      return {
+        type: 'BRIDGE_REQUEST',
+        path: '/workspace/runs',
+        init: { method: 'POST', body: JSON.stringify(message.payload) },
+      };
+    case 'OPENBROWSER_GET_RUN':
+      return {
+        type: 'BRIDGE_REQUEST',
+        path: `/workspace/runs/${encodeURIComponent(message.runId)}`,
+        init: { method: 'GET' },
+      };
+    case 'OPENBROWSER_APPROVE_RUN':
+      return {
+        type: 'BRIDGE_REQUEST',
+        path: `/workspace/runs/${encodeURIComponent(message.runId)}/approve`,
+        init: {
+          method: 'POST',
+          body: JSON.stringify({
+            previewRevision: message.previewRevision,
+            selectedOperationIds: message.selectedOperationIds,
+          }),
+        },
+      };
+    case 'OPENBROWSER_APPLY_RUN':
+      return {
+        type: 'BRIDGE_REQUEST',
+        path: `/workspace/runs/${encodeURIComponent(message.runId)}/apply`,
+        init: { method: 'POST', body: JSON.stringify({ approvalToken: message.approvalToken }) },
+      };
+    case 'OPENBROWSER_REJECT_RUN':
+      return {
+        type: 'BRIDGE_REQUEST',
+        path: `/workspace/runs/${encodeURIComponent(message.runId)}/reject`,
+        init: { method: 'POST', body: '{}' },
+      };
+    case 'OPENBROWSER_CANCEL_RUN':
+      return {
+        type: 'BRIDGE_REQUEST',
+        path: `/workspace/runs/${encodeURIComponent(message.runId)}/cancel`,
+        init: { method: 'POST', body: '{}' },
+      };
+    default:
+      return message;
+  }
+}
+
 function runtimeRequest(message) {
   return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(message, (response) => {
+    chrome.runtime.sendMessage(toBridgeRequest(message), (response) => {
       const runtimeError = chrome.runtime.lastError;
       if (runtimeError) return reject(new Error(runtimeError.message));
-      if (!response?.ok) {
-        const error = new Error(response?.error || 'OpenBrowser request failed');
-        Object.assign(error, response || {});
-        return reject(error);
-      }
+      if (!response?.ok) return reject(parseBridgeError(response?.error));
       resolve(response.data);
     });
   });
+}
+
+function parseBridgeError(value) {
+  const text = String(value || 'OpenBrowser request failed');
+  const error = new Error(text);
+  const jsonStart = text.indexOf('{');
+  if (jsonStart >= 0) {
+    try {
+      const details = JSON.parse(text.slice(jsonStart));
+      error.code = details.error;
+      error.replacementPreviewRevision = details.replacementPreviewRevision;
+      error.replacementOperations = details.replacementOperations || details.replacementPlans;
+      error.message = details.message || details.error || text;
+    } catch {
+      // Preserve the original bridge error.
+    }
+  }
+  return error;
 }
 
 function chromeStorage() {
@@ -206,11 +274,13 @@ function renderDom(state) {
   const review = document.querySelector('#work-review-actions');
   const apply = document.querySelector('#work-apply-actions');
   const notice = document.querySelector('#work-notice');
+  const cancel = document.querySelector('#work-cancel');
   if (status) status.textContent = state.status && state.status !== 'idle' ? state.status.replaceAll('_', ' ') : 'No active run';
   if (answer) answer.textContent = state.responseText || '';
   if (notice) notice.textContent = state.notice || state.error || '';
   if (review) review.hidden = !state.showReview;
   if (apply) apply.hidden = !state.showApply;
+  if (cancel) cancel.hidden = !state.showCancel;
   if (!operations) return;
   operations.replaceChildren();
   for (const operation of state.operations || []) {
@@ -239,6 +309,7 @@ function renderDom(state) {
 }
 
 let controller;
+let monitor;
 if (typeof document !== 'undefined' && typeof chrome !== 'undefined') {
   document.addEventListener('DOMContentLoaded', async () => {
     const form = document.querySelector('#work-form');
@@ -247,6 +318,10 @@ if (typeof document !== 'undefined' && typeof chrome !== 'undefined') {
       bridgeRequest: runtimeRequest,
       storage: chromeStorage(),
       render: renderDom,
+    });
+    monitor = createRunEventMonitor({
+      request: (path) => runtimeRequest({ type: 'BRIDGE_REQUEST', path, init: { method: 'GET' } }),
+      onSnapshot: (snapshot) => controller.acceptSnapshot(snapshot),
     });
     const projects = await runtimeRequest({ type: 'OPENBROWSER_LIST_PROJECTS' }).catch(() => ({ projects: [] }));
     const projectSelect = document.querySelector('#work-project');
@@ -260,20 +335,22 @@ if (typeof document !== 'undefined' && typeof chrome !== 'undefined') {
       event.preventDefault();
       const fields = new FormData(form);
       try {
-        await controller.start(Object.fromEntries(fields.entries()));
+        const snapshot = await controller.start(Object.fromEntries(fields.entries()));
+        await monitor.start(snapshot.id);
       } catch (error) {
         controller.acceptSnapshot({ error: error.message, notice: error.message });
       }
     });
     document.querySelector('#work-approve')?.addEventListener('click', () => controller.approve().catch((error) => controller.acceptSnapshot({ notice: error.message })));
-    document.querySelector('#work-apply')?.addEventListener('click', () => controller.apply().catch((error) => controller.acceptSnapshot({ notice: error.message })));
+    document.querySelector('#work-apply')?.addEventListener('click', () => controller.apply().then(() => monitor.start(controller.getState().id)).catch((error) => controller.acceptSnapshot({ notice: error.message })));
     document.querySelector('#work-reject')?.addEventListener('click', () => controller.reject());
     document.querySelector('#work-cancel')?.addEventListener('click', () => controller.cancel());
     document.querySelector('#work-refresh')?.addEventListener('click', () => controller.refresh());
     const saved = await chrome.storage.local.get('openbrowserActiveRunId');
     if (saved.openbrowserActiveRunId) {
       controller.acceptSnapshot({ id: saved.openbrowserActiveRunId });
-      await controller.refresh().catch(() => undefined);
+      await monitor.start(saved.openbrowserActiveRunId).catch(() => undefined);
     }
+    window.addEventListener('pagehide', () => monitor.stop(), { once: true });
   });
 }
