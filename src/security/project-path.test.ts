@@ -72,8 +72,15 @@ test('requires an existing directory for tool working directories', async () => 
 test('rejects version-control administrative namespaces', async () => {
   const { project } = await fixture();
   const paths = [
+    '.git',
     '.git/config',
+    '.git/index',
+    '.git/info/attributes',
+    '.git/refs/heads/main',
+    '.git/modules/child/config',
+    '.git/worktrees/linked/HEAD',
     'nested/.git/hooks/pre-commit',
+    'packages/child/.git/config',
     '.hg/store/data',
     '.svn/wc.db',
     '_darcs/hashed_inventory',
@@ -97,6 +104,25 @@ test('rejects version-control administrative namespaces', async () => {
       target,
     );
   }
+});
+
+test('rejects worktree and submodule gitfiles before following indirection', async () => {
+  const { project, outside } = await fixture();
+  await writeFile(path.join(project, '.git'), `gitdir: ${path.join(outside, 'worktrees', 'main')}\n`);
+  await mkdir(path.join(project, 'packages', 'child'), { recursive: true });
+  await writeFile(
+    path.join(project, 'packages', 'child', '.git'),
+    `gitdir: ${path.join(project, '.git', 'modules', 'child')}\n`,
+  );
+
+  await assert.rejects(
+    () => resolveProjectPath(project, '.git', { requireExisting: true }),
+    /version-control metadata|reserved/i,
+  );
+  await assert.rejects(
+    () => resolveProjectPath(project, 'packages/child/.git', { requireExisting: true }),
+    /version-control metadata|reserved/i,
+  );
 });
 
 test('rejects case, separator, Unicode, and trailing-dot aliases for VCS metadata', async () => {
