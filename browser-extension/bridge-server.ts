@@ -11,10 +11,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { WebSocket, WebSocketServer } from 'ws';
 import yazl from 'yazl';
 import { z } from 'zod';
-import {
-  BridgeConnectionError,
-  requestAuthenticatedBridge,
-} from './bridge-connection-transport.js';
+import { requestAuthenticatedBridge } from './bridge-connection-transport.js';
 import { parseTrustedBridgeEndpoint } from './bridge-trust.js';
 
 config();
@@ -790,21 +787,13 @@ export async function createWorkspaceServer(
       throw new WorkspaceHttpError('BRIDGE_TOKEN is required for main-bridge operations', 503);
     }
 
-    let response: Response;
-    try {
-      response = await authenticatedBridgeRequest({
-        endpoint: bridgeEndpoint,
-        controlToken: bridgeToken,
-        method,
-        route,
-        body,
-      });
-    } catch (error) {
-      if (error instanceof BridgeConnectionError) {
-        throw new WorkspaceHttpError(error.message, error.statusCode);
-      }
-      throw error;
-    }
+    const response = await authenticatedBridgeRequest({
+      endpoint: bridgeEndpoint,
+      controlToken: bridgeToken,
+      method,
+      route,
+      body,
+    });
 
     const text = await response.text();
     let payload: unknown = text;
