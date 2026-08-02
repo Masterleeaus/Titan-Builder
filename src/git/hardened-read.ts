@@ -5,7 +5,8 @@ import path from 'node:path';
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BUFFER_BYTES = 512 * 1024;
 const CONFIGURED_HELPER_PATTERN = '^(filter\\..*\\.(clean|smudge|process)|diff\\..*\\.(command|textconv))$';
-const disabledHooksPath = path.join(os.tmpdir(), 'openbrowser-disabled-git-hooks');
+const disabledHooksPath = path.join(os.tmpdir(), 'openbrowser-disabled-git-hooks')
+  .replaceAll('\\', '/');
 const trustedCommandConfig = [
   ['core.fsmonitor', 'false'],
   ['core.hooksPath', disabledHooksPath],
@@ -111,9 +112,19 @@ export function buildHardenedGitInvocation(
   commandArgs: string[],
   environment: NodeJS.ProcessEnv = process.env,
 ): HardenedGitInvocation {
+  const trustedConfigArgs = trustedCommandConfig.flatMap(([key, value]) => [
+    '-c',
+    `${key}=${value}`,
+  ]);
+
   return {
     executable: 'git',
-    args: [...commandArgs],
+    args: [
+      '--no-pager',
+      '--no-optional-locks',
+      ...trustedConfigArgs,
+      ...commandArgs,
+    ],
     env: createHardenedGitEnvironment(environment),
   };
 }
