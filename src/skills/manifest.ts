@@ -45,6 +45,7 @@ const canonicalId = /^titan\.[a-z0-9]+(?:[.-][a-z0-9]+)*$/u;
 const compatibleId = /^(?:titan\.)?[a-z0-9]+(?:[.-][a-z0-9]+)*$/u;
 const semver = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 const slug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+const entrypoint = /^(?![A-Za-z]:[\\/])(?![\\/])(?!.*(?:^|[\\/])\.\.(?:[\\/]|$))[A-Za-z0-9_/.-]+#[A-Za-z_$][A-Za-z0-9_$]*$/u;
 const relativeAsset = /^(?![A-Za-z]:[\\/])(?![\\/])(?!.*(?:^|[\\/])\.\.(?:[\\/]|$)).+$/u;
 const highSideEffectRisks = new Set(['NETWORK_WRITE', 'ARBITRARY_EXECUTION', 'DESTRUCTIVE', 'PUBLISH']);
 

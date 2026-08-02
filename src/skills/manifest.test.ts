@@ -96,3 +96,79 @@ test('rejects undeclared manifest fields', () => {
     /surprise/i,
   );
 });
+
+test('accepts valid entrypoint paths', () => {
+  const validEntrypoints = [
+    'handler.js#execute',
+    'lib/handler.js#execute',
+    'lib/nested/handler.js#execute',
+    'handler#_execute',
+    'handler#$default',
+  ];
+  for (const ep of validEntrypoints) {
+    const result = validateSkillManifest({
+      ...guidanceManifest,
+      id: 'titan.test.valid-entrypoint',
+      kind: 'executable',
+      runtimeTargets: ['root'],
+      instructions: undefined,
+      entrypoint: ep,
+    });
+    assert.equal(result.success, true, `Should accept entrypoint: ${ep}`);
+  }
+});
+
+test('rejects entrypoint path traversal', () => {
+  const traversalPaths = [
+    '../handler.js#execute',
+    'lib/../../../etc/passwd#execute',
+    './handler/../../etc/passwd#execute',
+  ];
+  for (const ep of traversalPaths) {
+    const result = validateSkillManifest({
+      ...guidanceManifest,
+      id: 'titan.test.traversal',
+      kind: 'executable',
+      runtimeTargets: ['root'],
+      instructions: undefined,
+      entrypoint: ep,
+    });
+    assert.equal(result.success, false, `Should reject entrypoint: ${ep}`);
+  }
+});
+
+test('rejects absolute entrypoint paths', () => {
+  const absolutePaths = [
+    '/etc/passwd#execute',
+    '\\\\server\\share\\handler.js#execute',
+  ];
+  for (const ep of absolutePaths) {
+    const result = validateSkillManifest({
+      ...guidanceManifest,
+      id: 'titan.test.absolute',
+      kind: 'executable',
+      runtimeTargets: ['root'],
+      instructions: undefined,
+      entrypoint: ep,
+    });
+    assert.equal(result.success, false, `Should reject entrypoint: ${ep}`);
+  }
+});
+
+test('rejects Windows drive-qualified entrypoint paths', () => {
+  const windowsPaths = [
+    'C:\\handler.js#execute',
+    'D:/lib/handler.js#execute',
+  ];
+  for (const ep of windowsPaths) {
+    const result = validateSkillManifest({
+      ...guidanceManifest,
+      id: 'titan.test.windows',
+      kind: 'executable',
+      runtimeTargets: ['root'],
+      instructions: undefined,
+      entrypoint: ep,
+    });
+    assert.equal(result.success, false, `Should reject entrypoint: ${ep}`);
+  }
+});
