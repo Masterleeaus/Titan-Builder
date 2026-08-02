@@ -89,6 +89,7 @@ import {
   startSessionHeartbeat,
   writeCorsPreflight,
 } from './sse-hub.js';
+import { createRateLimiter } from './rate-limiter.js';
 
 loadOpenBrowserEnvironment();
 
@@ -156,6 +157,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
       ((request, selectedProjectRoot) =>
         queueBrowserWorkflowPromptAndWait(request, selectedProjectRoot)),
   });
+  const claimRateLimiter = createRateLimiter({ windowMs: 60_000, maxFailures: 10, penaltyMs: 5_000 });
 
   await app.register(cors, {
     origin: (origin, callback) => {
@@ -520,8 +522,18 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
   app.post('/browser/claim', bridgeBodyLimit('/browser/claim'), async (request) => {
     const body = request.body as { sessionId?: string; claimantId?: string };
     if (!body.sessionId) throw new Error('sessionId is required');
+
+    const clientId = request.ip;
+    if (!claimRateLimiter.recordFailure(clientId)) {
+      throw new Error('Too many claim attempts, please retry later');
+    }
+
     const claim = tryClaimSession(body.sessionId, { claimantId: body.claimantId });
-    if (!claim) return { claimed: false };
+    if (!claim) {
+      return { claimed: false };
+    }
+
+    claimRateLimiter.recordSuccess(clientId);
     return {
       claimed: true,
       claimToken: claim.claimToken,
