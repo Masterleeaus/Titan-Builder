@@ -131,7 +131,10 @@ test('loads a contained regular entrypoint through the closed dispatcher', async
     const packageRoot = await writeExecutablePackage(root, 'project-path');
     const registry = await loadSkillRegistry(root);
     const loaded = registry.resolve('titan.security.project-path-containment');
-    assert.equal(loaded?.entrypoint?.absolutePath, path.join(packageRoot, 'runtime', 'entrypoint.js'));
+    assert.equal(
+      loaded?.entrypoint?.absolutePath,
+      await realpath(path.join(packageRoot, 'runtime', 'entrypoint.js')),
+    );
     assert.equal(typeof loaded?.entrypoint?.handler, 'function');
     assert.deepEqual(await loaded?.entrypoint?.handler({ projectRoot: root, requestedPath: 'project-path' }), {
       resolvedPath: path.join(await realpath(root), 'project-path'),
