@@ -47,32 +47,48 @@ export async function submitPrompt(
   input: SubmitPromptInput,
   port = DEFAULT_PORT,
 ): Promise<{ sessionId: string }> {
-  const response = await fetch(`${baseUrl(port)}/session/prompt`, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify(input),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
 
-  if (!response.ok) {
-    throw new Error(`Failed to submit prompt (${response.status})`);
+  try {
+    const response = await fetch(`${baseUrl(port)}/session/prompt`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(input),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to submit prompt (${response.status})`);
+    }
+
+    return (await response.json()) as { sessionId: string };
+  } finally {
+    clearTimeout(timeout);
   }
-
-  return (await response.json()) as { sessionId: string };
 }
 
 export async function getSessionStatus(
   sessionId: string,
   port = DEFAULT_PORT,
 ): Promise<SessionStatusResponse> {
-  const response = await fetch(`${baseUrl(port)}/session/${sessionId}/status`, {
-    headers: authHeaders(),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
 
-  if (!response.ok) {
-    throw new Error(`Failed to read session status (${response.status})`);
+  try {
+    const response = await fetch(`${baseUrl(port)}/session/${sessionId}/status`, {
+      headers: authHeaders(),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to read session status (${response.status})`);
+    }
+
+    return (await response.json()) as SessionStatusResponse;
+  } finally {
+    clearTimeout(timeout);
   }
-
-  return (await response.json()) as SessionStatusResponse;
 }
 
 export async function waitForSessionResponse(
@@ -116,9 +132,18 @@ async function waitForSessionSse(
     onChunk?: (text: string) => void;
   },
 ): Promise<string> {
-  const response = await fetch(`${baseUrl(options.port)}/session/${sessionId}/events`, {
-    headers: authHeaders(),
-  });
+  const controller = new AbortController();
+  const connectTimeout = setTimeout(() => controller.abort(), Math.min(30_000, options.totalTimeoutMs));
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl(options.port)}/session/${sessionId}/events`, {
+      headers: authHeaders(),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(connectTimeout);
+  }
 
   if (!response.ok || !response.body) {
     throw new Error(`Failed to open session SSE stream (${response.status})`);
@@ -131,6 +156,7 @@ async function waitForSessionSse(
 
     let settled = false;
     let idleTimeout: ReturnType<typeof setTimeout>;
+    const startTime = Date.now();
 
     const finish = (callback: () => void): void => {
       if (settled) return;
@@ -143,18 +169,22 @@ async function waitForSessionSse(
 
     const resetIdleTimeout = (): void => {
       clearTimeout(idleTimeout);
+      const elapsedMs = Date.now() - startTime;
+      const remainingMs = options.totalTimeoutMs - elapsedMs;
+      const nextTimeoutMs = Math.min(options.idleTimeoutMs, Math.max(1000, remainingMs));
       idleTimeout = setTimeout(() => {
         finish(() => reject(new Error(
           `No bridge activity for ${Math.round(options.idleTimeoutMs / 1000)} seconds while waiting for browser AI.`,
         )));
-      }, options.idleTimeoutMs);
+      }, nextTimeoutMs);
     };
 
+    const remainingMs = options.totalTimeoutMs - (Date.now() - startTime);
     const totalTimeout = setTimeout(() => {
       finish(() => reject(new Error(
         `Browser AI did not finish within ${Math.round(options.totalTimeoutMs / 60000)} minutes.`,
       )));
-    }, options.totalTimeoutMs);
+    }, Math.max(1000, remainingMs));
 
     resetIdleTimeout();
 
