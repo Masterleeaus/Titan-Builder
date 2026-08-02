@@ -80,7 +80,13 @@ test('rejects version-control administrative namespaces', async () => {
     '.bzr/branch/format',
     '.fslckout',
     '.fossil-settings/ignore-glob',
+    '_FOSSIL_',
     '.jj/repo/store',
+    '.pijul/pristine/db',
+    '.sl/store',
+    '_MTN/options',
+    '.mtn/revision',
+    '.arch-ids/entries',
     'CVS/Root',
   ];
 
