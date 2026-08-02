@@ -113,8 +113,8 @@ jobs:
       - name: Install policy checker dependency
         run: python -m pip install --disable-pip-version-check PyYAML==6.0.2
 
-      - name: Run workflow policy tests
-        run: python -m unittest scripts.tests.test_check_github_workflows -v
+      - name: Run repository policy tests
+        run: python -m unittest scripts.tests.test_check_github_workflows scripts.tests.test_scan_committed_secrets -v
 
       - name: Enforce workflow policy
         run: python scripts/check_github_workflows.py .
