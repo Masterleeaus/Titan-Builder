@@ -50,10 +50,7 @@ test('catalog rejects duplicate runtime IDs', () => {
   assert.ok(original);
   const duplicate: BuiltinToolDefinition = {
     ...original,
-    manifest: parseToolManifest({
-      ...original.manifest,
-      id: 'titan.tool.git.status-duplicate',
-    }),
+    manifest: parseToolManifest({ ...original.manifest }),
   };
 
   assert.throws(
