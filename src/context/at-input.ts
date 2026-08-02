@@ -64,8 +64,15 @@ export async function readLineWithAtCompletion(
     },
   });
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error): void => {
+      rl.removeListener('error', onError);
+      rl.close();
+      reject(error);
+    };
+    rl.on('error', onError);
     rl.question(prompt, (answer) => {
+      rl.removeListener('error', onError);
       rl.close();
       resolve(answer);
     });
