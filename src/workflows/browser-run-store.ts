@@ -8,12 +8,12 @@ import {
   type BrowserRunEvent,
   type BrowserRunStore,
   type BrowserRunStoreOptions,
-} from './browser-run-store-core.js';
+} from './browser-run-store-core.ts';
 import {
   BrowserRunIntegrityError,
   createIntegrityBoundPreparedArtifact,
   verifyIntegrityBoundPreparedArtifact,
-} from './browser-run-integrity.js';
+} from './browser-run-integrity.ts';
 
 export type {
   BrowserPreparedArtifact,
@@ -21,8 +21,8 @@ export type {
   BrowserRunEventInput,
   BrowserRunStore,
   BrowserRunStoreOptions,
-} from './browser-run-store-core.js';
-export { getBrowserRunDirectory } from './browser-run-store-core.js';
+} from './browser-run-store-core.ts';
+export { getBrowserRunDirectory } from './browser-run-store-core.ts';
 
 export function createBrowserRunStore(
   options: BrowserRunStoreOptions = {},
