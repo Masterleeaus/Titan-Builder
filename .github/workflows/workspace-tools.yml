@@ -3,7 +3,7 @@ name: Verify OpenBrowser Workspace Tools
 on:
   pull_request:
     paths:
-      - 'tools/openbrowser-workspace/**'
+      - 'browser-extension/**'
       - '.github/workflows/workspace-tools.yml'
       - 'docs/superpowers/specs/2026-08-02-openbrowser-workspace-tools-design.md'
       - 'docs/superpowers/plans/2026-08-02-openbrowser-workspace-tools.md'
@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: tools/openbrowser-workspace
+        working-directory: browser-extension
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -64,7 +64,7 @@ jobs:
     timeout-minutes: 25
     defaults:
       run:
-        working-directory: tools/openbrowser-workspace
+        working-directory: browser-extension
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
