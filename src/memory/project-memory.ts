@@ -1,6 +1,9 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import {
+  readOpenBrowserStateFile,
+  writeOpenBrowserStateFile,
+} from '../security/internal-state.js';
 
 export interface ProjectMemoryEntry {
   id: string;
@@ -14,11 +17,13 @@ const MEMORY_FILE = 'memory.json';
 
 export async function listProjectMemory(projectRoot: string): Promise<ProjectMemoryEntry[]> {
   try {
-    const parsed = JSON.parse(await readFile(memoryFilePath(projectRoot), 'utf8')) as unknown;
+    const parsed = JSON.parse(
+      await readOpenBrowserStateFile(projectRoot, MEMORY_FILE),
+    ) as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(isMemoryEntry).map((entry) => ({ ...entry, tags: [...entry.tags] }));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if (isNotFound(error)) return [];
     throw error;
   }
 }
@@ -82,22 +87,18 @@ export function formatProjectMemory(entries: ProjectMemoryEntry[]): string {
 }
 
 export function projectMemoryFilePath(projectRoot: string): string {
-  return memoryFilePath(projectRoot);
+  return path.join(path.resolve(projectRoot), '.openbrowser', MEMORY_FILE);
 }
 
 async function writeMemory(projectRoot: string, entries: ProjectMemoryEntry[]): Promise<void> {
-  const filePath = memoryFilePath(projectRoot);
-  await mkdir(path.dirname(filePath), { recursive: true });
   const ordered = [...entries].sort(
     (left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
   );
-  const tempPath = `${filePath}.${process.pid}.tmp`;
-  await writeFile(tempPath, `${JSON.stringify(ordered, null, 2)}\n`, 'utf8');
-  await rename(tempPath, filePath);
-}
-
-function memoryFilePath(projectRoot: string): string {
-  return path.join(path.resolve(projectRoot), '.openbrowser', MEMORY_FILE);
+  await writeOpenBrowserStateFile(
+    projectRoot,
+    MEMORY_FILE,
+    `${JSON.stringify(ordered, null, 2)}\n`,
+  );
 }
 
 function normalizeMemoryText(value: string): string {
@@ -125,4 +126,8 @@ function isMemoryEntry(value: unknown): value is ProjectMemoryEntry {
     typeof item.createdAt === 'string' &&
     typeof item.updatedAt === 'string'
   );
+}
+
+function isNotFound(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
 }

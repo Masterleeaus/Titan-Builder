@@ -1,0 +1,385 @@
+name: Apply issue 131 transaction state integration
+
+on:
+  push:
+    branches:
+      - fix/issue-131-secure-openbrowser-state-v2
+    paths:
+      - .github/workflows/apply-issue-131-transaction-state.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/issue-131-secure-openbrowser-state-v2
+
+      - name: Apply guarded transaction-state edits
+        shell: python
+        run: |
+          from pathlib import Path
+          import json
+
+          operations_path = Path('src/operations/index.ts')
+          source = operations_path.read_text()
+
+          replacements = []
+          replacements.append((
+              "import { canonicalizeProjectRoot, resolveProjectPath } from '../security/project-path.js';",
+              "import { openProjectInternalState, type ProjectInternalState } from '../security/internal-state.js';\nimport { canonicalizeProjectRoot, resolveProjectPath } from '../security/project-path.js';",
+              'internal-state import',
+          ))
+          replacements.append((
+              """interface PreparedTransaction {
+            journal: TransactionJournal;
+            journalPath: string;
+            backupRoot: string;
+            snapshots: RollbackSnapshot[];
+          }""",
+              """interface PreparedTransaction {
+            state: ProjectInternalState;
+            journal: TransactionJournal;
+            journalPath: string;
+            backupRoot: string;
+            snapshots: RollbackSnapshot[];
+          }""",
+              'prepared transaction state',
+          ))
+          replacements.append((
+              "await fs.remove(transaction.backupRoot);",
+              "await transaction.state.removeTree(\n      path.relative(transaction.state.stateRoot, transaction.backupRoot),\n    );",
+              'post-commit cleanup',
+          ))
+
+          old_prepare = """async function prepareTransaction(
+            projectRoot: string,
+            plans: PlannedOperation[],
+            conversationId?: string,
+          ): Promise<PreparedTransaction> {
+            const id = crypto.randomUUID();
+            const transactionsRoot = path.join(projectRoot, '.openbrowser', 'transactions');
+            const journalPath = path.join(transactionsRoot, `${id}.json`);
+            const backupRoot = path.join(transactionsRoot, `${id}.backup`);
+            const projectRootIdentity = await readFilesystemIdentity(projectRoot);
+            const firstPreconditions = new Map<string, PathPrecondition>();
+
+            for (const plan of plans) {
+              for (const precondition of plan.preconditions) {
+                if (!firstPreconditions.has(precondition.absolutePath)) {
+                  firstPreconditions.set(precondition.absolutePath, precondition);
+                }
+              }
+            }
+
+            for (const precondition of firstPreconditions.values()) {
+              await verifyPreconditions([precondition]);
+            }
+
+            const snapshots: RollbackSnapshot[] = [];
+            for (const absolutePath of firstPreconditions.keys()) {
+              const snapshot = await readPathSnapshot(absolutePath);
+              snapshots.push({
+                ...snapshot,
+                absolutePath,
+                relativePath: path.relative(projectRoot, absolutePath),
+                role: 'target',
+              });
+            }
+
+            const parentPaths = collectParentPaths(projectRoot, [...firstPreconditions.keys()]);
+            for (const absolutePath of parentPaths) {
+              const snapshot = await readPathSnapshot(absolutePath);
+              snapshots.push({
+                ...snapshot,
+                absolutePath,
+                relativePath: path.relative(projectRoot, absolutePath),
+                role: 'parent',
+              });
+            }
+
+            await fs.ensureDir(backupRoot);
+            let backupIndex = 0;
+            for (const snapshot of snapshots) {
+              if (snapshot.kind !== 'file') {
+                continue;
+              }
+              const backupPath = path.join(backupRoot, `${backupIndex}.bak`);
+              backupIndex += 1;
+              await fs.copyFile(snapshot.absolutePath, backupPath);
+              snapshot.backupPath = backupPath;
+            }
+
+            const now = new Date().toISOString();
+            const journal: TransactionJournal = {
+              id,
+              status: 'prepared',
+              projectRoot,
+              projectRootIdentity,
+              conversationId,
+              operationCount: plans.length,
+              createdAt: now,
+              updatedAt: now,
+              externalEffectsPossible: plans.some((plan) =>
+                plan.operation.action === 'RUN_COMMAND' ||
+                (plan.operation.action === 'RUN_TOOL' && plan.risk !== 'READ')
+              ),
+              snapshots: snapshots.map((snapshot) => ({
+                relativePath: snapshot.relativePath,
+                kind: snapshot.kind,
+                hash: snapshot.hash,
+                role: snapshot.role,
+                backupPath: snapshot.backupPath ? path.relative(transactionsRoot, snapshot.backupPath) : undefined,
+              })),
+            };
+
+            const transaction = { journal, journalPath, backupRoot, snapshots };
+            await writeTransactionJournal(transaction);
+            return transaction;
+          }"""
+          new_prepare = """async function prepareTransaction(
+            projectRoot: string,
+            plans: PlannedOperation[],
+            conversationId?: string,
+          ): Promise<PreparedTransaction> {
+            const state = await openProjectInternalState(projectRoot);
+            const id = crypto.randomUUID();
+            const transactionsRoot = await state.ensureDirectory('transactions');
+            const journalPath = path.join(transactionsRoot, `${id}.json`);
+            const backupRootRelative = path.join('transactions', `${id}.backup`);
+            const backupRoot = await state.ensureDirectory(backupRootRelative);
+            const projectRootIdentity = await readFilesystemIdentity(projectRoot);
+            const firstPreconditions = new Map<string, PathPrecondition>();
+
+            for (const plan of plans) {
+              for (const precondition of plan.preconditions) {
+                if (!firstPreconditions.has(precondition.absolutePath)) {
+                  firstPreconditions.set(precondition.absolutePath, precondition);
+                }
+              }
+            }
+
+            for (const precondition of firstPreconditions.values()) {
+              await verifyPreconditions([precondition]);
+            }
+
+            const snapshots: RollbackSnapshot[] = [];
+            for (const absolutePath of firstPreconditions.keys()) {
+              const snapshot = await readPathSnapshot(absolutePath);
+              snapshots.push({
+                ...snapshot,
+                absolutePath,
+                relativePath: path.relative(projectRoot, absolutePath),
+                role: 'target',
+              });
+            }
+
+            const parentPaths = collectParentPaths(projectRoot, [...firstPreconditions.keys()]);
+            for (const absolutePath of parentPaths) {
+              const snapshot = await readPathSnapshot(absolutePath);
+              snapshots.push({
+                ...snapshot,
+                absolutePath,
+                relativePath: path.relative(projectRoot, absolutePath),
+                role: 'parent',
+              });
+            }
+
+            let backupIndex = 0;
+            for (const snapshot of snapshots) {
+              if (snapshot.kind !== 'file') {
+                continue;
+              }
+              const backupRelativePath = path.join(backupRootRelative, `${backupIndex}.bak`);
+              backupIndex += 1;
+              await state.copyFromFile(backupRelativePath, snapshot.absolutePath);
+              snapshot.backupPath = path.join(state.stateRoot, backupRelativePath);
+            }
+
+            const now = new Date().toISOString();
+            const journal: TransactionJournal = {
+              id,
+              status: 'prepared',
+              projectRoot,
+              projectRootIdentity,
+              conversationId,
+              operationCount: plans.length,
+              createdAt: now,
+              updatedAt: now,
+              externalEffectsPossible: plans.some((plan) =>
+                plan.operation.action === 'RUN_COMMAND' ||
+                (plan.operation.action === 'RUN_TOOL' && plan.risk !== 'READ')
+              ),
+              snapshots: snapshots.map((snapshot) => ({
+                relativePath: snapshot.relativePath,
+                kind: snapshot.kind,
+                hash: snapshot.hash,
+                role: snapshot.role,
+                backupPath: snapshot.backupPath ? path.relative(transactionsRoot, snapshot.backupPath) : undefined,
+              })),
+            };
+
+            const transaction = { state, journal, journalPath, backupRoot, snapshots };
+            await writeTransactionJournal(transaction);
+            return transaction;
+          }"""
+          replacements.append((old_prepare, new_prepare, 'transaction preparation'))
+
+          replacements.append((
+              """      const backupPath = await resolveRollbackBackupPath(
+                projectRoot,
+                validated.backupRoot,
+                entry.snapshot,
+              );
+              await fs.remove(absolutePath);
+              await resolveRollbackParent(projectRoot, entry.snapshot.relativePath);
+              await fs.copyFile(backupPath, absolutePath);""",
+              """      const backupPath = await resolveRollbackBackupPath(
+                projectRoot,
+                validated.backupRoot,
+                entry.snapshot,
+              );
+              const backupContent = await transaction.state.readBuffer(
+                path.relative(transaction.state.stateRoot, backupPath),
+              );
+              await fs.remove(absolutePath);
+              await resolveRollbackParent(projectRoot, entry.snapshot.relativePath);
+              await fs.writeFile(absolutePath, backupContent);""",
+              'rollback backup read',
+          ))
+          replacements.append((
+              "await fs.remove(validated.backupRoot);",
+              "await transaction.state.removeTree(\n      path.relative(transaction.state.stateRoot, validated.backupRoot),\n    );",
+              'rollback cleanup',
+          ))
+
+          old_metadata = """async function resolveTransactionMetadataPath(
+            transaction: PreparedTransaction,
+            relativePath: string,
+          ): Promise<string> {
+            const projectRoot = await assertRollbackProjectIdentity(transaction);
+            assertSafeRollbackRelativePath(relativePath, 'transaction metadata');
+
+            const parentRelativePath = path.dirname(relativePath);
+            const resolvedParent = await resolveProjectPath(projectRoot, parentRelativePath, {
+              requireExisting: true,
+              expectedType: 'directory',
+            });
+            const expectedParent = path.resolve(projectRoot, parentRelativePath);
+            if (resolvedParent !== expectedParent) {
+              throw new Error(`Transaction metadata parent identity changed: ${parentRelativePath}`);
+            }
+
+            const resolvedPath = await resolveProjectPath(projectRoot, relativePath, {
+              expectedType: 'file',
+            });
+            const expectedPath = path.resolve(projectRoot, relativePath);
+            if (resolvedPath !== expectedPath) {
+              throw new Error(`Transaction metadata path identity changed: ${relativePath}`);
+            }
+            return resolvedPath;
+          }
+
+          """
+          replacements.append((old_metadata, '', 'obsolete metadata resolver'))
+
+          old_history = """async function appendTransactionHistory(
+            transaction: PreparedTransaction,
+            entry: HistoryEntry,
+          ): Promise<void> {
+            const relativePath = path.join('.openbrowser', 'history.json');
+            let historyPath = await resolveTransactionMetadataPath(transaction, relativePath);
+            const snapshot = await readPathSnapshot(historyPath);
+            let history: HistoryEntry[] = [];
+
+            if (snapshot.kind === 'file') {
+              const parsed = JSON.parse(snapshot.content ?? '[]') as unknown;
+              if (!Array.isArray(parsed)) {
+                throw new Error('Transaction history file must contain an array');
+              }
+              history = parsed as HistoryEntry[];
+            }
+
+            history.push(entry);
+            historyPath = await resolveTransactionMetadataPath(transaction, relativePath);
+            await safeWriteFile(historyPath, JSON.stringify(history, null, 2));
+          }"""
+          new_history = """async function appendTransactionHistory(
+            transaction: PreparedTransaction,
+            entry: HistoryEntry,
+          ): Promise<void> {
+            await assertRollbackProjectIdentity(transaction);
+            const relativePath = 'history.json';
+            let history: HistoryEntry[] = [];
+
+            if (await transaction.state.fileExists(relativePath)) {
+              const parsed = await transaction.state.readJson<unknown>(relativePath);
+              if (!Array.isArray(parsed)) {
+                throw new Error('Transaction history file must contain an array');
+              }
+              history = parsed as HistoryEntry[];
+            }
+
+            history.push(entry);
+            await transaction.state.writeJson(relativePath, history);
+          }"""
+          replacements.append((old_history, new_history, 'transaction history'))
+
+          old_journal = """async function writeTransactionJournal(transaction: PreparedTransaction): Promise<void> {
+            const relativePath = path.relative(
+              transaction.journal.projectRoot,
+              transaction.journalPath,
+            );
+            const journalPath = await resolveTransactionMetadataPath(transaction, relativePath);
+            await safeWriteFile(journalPath, JSON.stringify(transaction.journal, null, 2));
+          }"""
+          new_journal = """async function writeTransactionJournal(transaction: PreparedTransaction): Promise<void> {
+            await assertRollbackProjectIdentity(transaction);
+            await transaction.state.writeJson(
+              path.relative(transaction.state.stateRoot, transaction.journalPath),
+              transaction.journal,
+            );
+          }"""
+          replacements.append((old_journal, new_journal, 'transaction journal'))
+
+          for old, new, label in replacements:
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one exact match, found {count}')
+              source = source.replace(old, new)
+
+          operations_path.write_text(source)
+
+          package_path = Path('package.json')
+          package = json.loads(package_path.read_text())
+          old_test = 'src/operations/transaction.integration.test.ts src/operations/rollback-metadata.integration.test.ts'
+          new_test = 'src/operations/transaction.integration.test.ts src/operations/internal-state-security.integration.test.ts src/operations/rollback-metadata.integration.test.ts'
+          integration = package['scripts']['test:integration']
+          if integration.count(old_test) != 1:
+              raise SystemExit('package integration anchor did not match exactly once')
+          package['scripts']['test:integration'] = integration.replace(old_test, new_test)
+          package_path.write_text(json.dumps(package, indent=2) + '\n')
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Run targeted verification
+        run: |
+          pnpm run typecheck
+          node --experimental-strip-types --test src/security/internal-state.test.ts
+          pnpm exec tsx --test src/operations/transaction.integration.test.ts src/operations/internal-state-security.integration.test.ts src/operations/rollback-metadata.integration.test.ts
+
+      - name: Commit integration and remove this workflow
+        run: |
+          rm .github/workflows/apply-issue-131-transaction-state.yml
+          git config user.name "titan-builder-agent"
+          git config user.email "titan-builder-agent@users.noreply.github.com"
+          git add src/operations/index.ts package.json .github/workflows/apply-issue-131-transaction-state.yml
+          git commit -m "fix(operations): secure transaction state storage (#131)"
+          git push origin HEAD:fix/issue-131-secure-openbrowser-state-v2
