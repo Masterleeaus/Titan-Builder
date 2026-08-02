@@ -44,6 +44,36 @@ const blockedEnvironmentNames = new Set([
   'VISUAL',
 ]);
 
+const inheritedExecutionEnvironmentNames = new Set([
+  'EDITOR',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_ASKPASS',
+  'GIT_CEILING_DIRECTORIES',
+  'GIT_COMMON_DIR',
+  'GIT_CONFIG_GLOBAL',
+  'GIT_CONFIG_PARAMETERS',
+  'GIT_CONFIG_SYSTEM',
+  'GIT_DIR',
+  'GIT_DISCOVERY_ACROSS_FILESYSTEM',
+  'GIT_EDITOR',
+  'GIT_EXEC_PATH',
+  'GIT_EXTERNAL_DIFF',
+  'GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE',
+  'GIT_INDEX_FILE',
+  'GIT_NAMESPACE',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_PAGER',
+  'GIT_PROXY_COMMAND',
+  'GIT_SEQUENCE_EDITOR',
+  'GIT_SSH',
+  'GIT_SSH_COMMAND',
+  'GIT_SSH_VARIANT',
+  'GIT_WORK_TREE',
+  'PAGER',
+  'SSH_ASKPASS',
+  'VISUAL',
+]);
+
 export interface HardenedGitInvocation {
   executable: 'git';
   args: string[];
@@ -134,18 +164,44 @@ export async function runHardenedGit(
   commandArgs: string[],
   options: HardenedGitRunOptions = {},
 ): Promise<HardenedGitResult> {
+  const environment = options.env ?? process.env;
   if (options.rejectConfiguredHelpers) {
-    const configKeys = await findConfiguredGitHelpers(cwd, options.env ?? process.env, options);
+    const inheritedKeys = findInheritedGitExecutionSettings(environment);
+    if (inheritedKeys.length > 0) {
+      throw new GitConfiguredHelperError(inheritedKeys);
+    }
+
+    const configKeys = await findConfiguredGitHelpers(cwd, environment, options);
     if (configKeys.length > 0) {
       throw new GitConfiguredHelperError(configKeys);
     }
   }
 
   return executeGit(
-    buildHardenedGitInvocation(commandArgs, options.env ?? process.env),
+    buildHardenedGitInvocation(commandArgs, environment),
     cwd,
     options,
   );
+}
+
+function findInheritedGitExecutionSettings(environment: NodeJS.ProcessEnv): string[] {
+  return [...new Set(Object.entries(environment)
+    .flatMap(([key, value]) => {
+      if (value === undefined || value === '') return [];
+      const normalized = key.toUpperCase();
+      if (normalized === 'GIT_CONFIG_COUNT' && value === '0') return [];
+      if (
+        inheritedExecutionEnvironmentNames.has(normalized)
+        || normalized === 'GIT_CONFIG_COUNT'
+        || normalized.startsWith('GIT_CONFIG_KEY_')
+        || normalized.startsWith('GIT_CONFIG_VALUE_')
+        || normalized.startsWith('GIT_TRACE')
+      ) {
+        return [`environment:${normalized}`];
+      }
+      return [];
+    }))]
+    .sort((left, right) => left.localeCompare(right));
 }
 
 async function findConfiguredGitHelpers(
