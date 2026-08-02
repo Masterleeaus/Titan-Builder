@@ -39,6 +39,24 @@ jobs:
               ("import { config } from 'dotenv';", "import { loadWorkspaceEnvironment } from './environment.js';"),
               ("config();\n\nconst moduleDirectory = path.dirname(fileURLToPath(import.meta.url));", "const workspaceConfigPath = loadWorkspaceEnvironment();\n\nconst moduleDirectory = path.dirname(fileURLToPath(import.meta.url));"),
               ("  console.log(`OpenBrowser Workspace companion listening on http://${host}:${port}`);", "  console.log(`OpenBrowser Workspace companion listening on http://${host}:${port} (config: ${workspaceConfigPath ?? 'process environment only'})`);"),
+              (
+                  "    const statusCode = typeof error.statusCode === 'number' ? error.statusCode : 500;\n"
+                  "    return reply.code(statusCode).send({\n"
+                  "      error: statusCode >= 500 ? 'Workspace operation failed' : error.message,\n"
+                  "      detail: statusCode >= 500 ? error.message : undefined,\n"
+                  "    });",
+                  "    const statusCode = typeof error === 'object'\n"
+                  "      && error !== null\n"
+                  "      && 'statusCode' in error\n"
+                  "      && typeof error.statusCode === 'number'\n"
+                  "      ? error.statusCode\n"
+                  "      : 500;\n"
+                  "    const message = error instanceof Error ? error.message : 'Unknown workspace error';\n"
+                  "    return reply.code(statusCode).send({\n"
+                  "      error: statusCode >= 500 ? 'Workspace operation failed' : message,\n"
+                  "      detail: statusCode >= 500 ? message : undefined,\n"
+                  "    });",
+              ),
           )
 
           for old, new in replacements:
