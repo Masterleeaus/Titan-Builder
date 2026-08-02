@@ -39,6 +39,7 @@ export interface BrowserRunStore {
 
 const DEFAULT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_TERMINAL_RECORDS = 100;
+const REGISTERED_PROJECT_ID_PATTERN = /^project-[A-Za-z0-9_-]+$/u;
 
 const TERMINAL_STATUSES = new Set<BrowserRunStatus>([
   'completed',
@@ -129,7 +130,7 @@ export function createBrowserRunStore(
   const store: BrowserRunStore = {
     async create(input) {
       await ensureLoaded();
-      const projectId = normalizeRequiredText(input.projectId, 'projectId');
+      const projectId = normalizeProjectId(input.projectId);
       const prompt = normalizeRequiredText(input.prompt, 'prompt');
       const timestamp = now().toISOString();
       const id = idFactory();
@@ -290,6 +291,18 @@ function isSafeRunId(value: string): boolean {
   return /^run-[A-Za-z0-9-]{8,}$/u.test(value);
 }
 
+function normalizeProjectId(value: string): string {
+  const normalized = normalizeRequiredText(value, 'projectId');
+  if (!isRegisteredProjectId(normalized)) {
+    throw new Error('projectId must be a registered project id');
+  }
+  return normalized;
+}
+
+function isRegisteredProjectId(value: string): boolean {
+  return REGISTERED_PROJECT_ID_PATTERN.test(value);
+}
+
 function normalizeRequiredText(value: string, field: string): string {
   const normalized = String(value ?? '').trim();
   if (!normalized) throw new Error(`${field} is required`);
@@ -354,6 +367,7 @@ function isBrowserRunRecord(value: unknown): value is BrowserRunRecord {
     typeof record.status === 'string' &&
     RUN_STATUSES.has(record.status as BrowserRunStatus) &&
     typeof record.projectId === 'string' &&
+    isRegisteredProjectId(record.projectId) &&
     typeof record.prompt === 'string' &&
     Array.isArray(record.contextRefs) &&
     typeof record.provider === 'string' &&
