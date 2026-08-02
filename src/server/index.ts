@@ -67,12 +67,14 @@ import {
   createSession,
   failSession,
   getSession,
+  initializeSessionStore,
   listDispatchableSessions,
   releaseClaim,
   renewSessionClaim,
   tryClaimSession,
   updateSessionPartial,
 } from './session-store.js';
+import { createPersistentSessionStore } from './persistent-session-store.js';
 import {
   addBrowserClient,
   addSessionClient,
@@ -107,6 +109,9 @@ export interface ServerOptions {
     request: AgentSubmissionRequest,
     projectRoot: string,
   ) => Promise<string>;
+  maxSessionEntries?: number;
+  maxSessionTotalBytes?: number;
+  maxSessionFieldBytes?: number;
 }
 
 export async function createBridgeServer(options: ServerOptions = {}): Promise<FastifyInstance> {
@@ -132,6 +137,16 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     allowInsecureDev: insecureDevelopment,
   });
   const operationApprovals = createOperationApprovalStore({ ttlMs: options.approvalTtlMs });
+
+  // Initialize persistent session store
+  const sessionStore = createPersistentSessionStore(projectRoot, {
+    maxEntries: options.maxSessionEntries,
+    maxTotalBytes: options.maxSessionTotalBytes,
+    maxFieldBytes: options.maxSessionFieldBytes,
+  });
+  const recoveryResult = await initializeSessionStore(sessionStore);
+  logger.info({ recoveredSessions: recoveryResult.recovered }, 'Session store initialized');
+
   const browserRunStore = createBrowserRunStore({
     homeDir: options.projectRegistryOptions?.homeDir,
   });

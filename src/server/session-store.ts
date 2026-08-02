@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { PromptDelivery } from '../shared/prompt-delivery.js';
+import type { PersistentSessionStore } from './persistent-session-store.js';
 
 export type SessionMode = 'ask' | 'agent';
 
@@ -59,9 +60,24 @@ export const DEFAULT_CLAIM_LEASE_MS = 120_000;
 export const DEFAULT_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 const sessions = new Map<string, PromptSession>();
+let persistenceStore: PersistentSessionStore | undefined;
 
 export function createSession(input: CreateSessionInput): PromptSession {
   const now = new Date().toISOString();
+
+  // Validate field sizes before creating session
+  if (persistenceStore) {
+    if (!persistenceStore.validateFieldSize('prompt', input.prompt)) {
+      throw new Error('Prompt exceeds maximum field size');
+    }
+    if (!persistenceStore.validateFieldSize('systemPrompt', input.systemPrompt)) {
+      throw new Error('System prompt exceeds maximum field size');
+    }
+    if (!persistenceStore.validateFieldSize('message', input.message)) {
+      throw new Error('Message exceeds maximum field size');
+    }
+  }
+
   const session: PromptSession = {
     id: crypto.randomUUID(),
     mode: input.mode,
@@ -79,6 +95,8 @@ export function createSession(input: CreateSessionInput): PromptSession {
   };
 
   sessions.set(session.id, session);
+  // Persist async (don't wait)
+  void persistSessions();
   return session;
 }
 
@@ -125,6 +143,7 @@ export function renewSessionClaim(
   const session = requireClaim(sessionId, claimToken, nowMs);
   session.claimExpiresAt = new Date(nowMs + (input.leaseMs ?? DEFAULT_CLAIM_LEASE_MS)).toISOString();
   session.lastActivityAt = new Date(nowMs).toISOString();
+  void persistSessions();
   return session;
 }
 
@@ -135,6 +154,7 @@ export function releaseClaim(
 ): PromptSession | undefined {
   const session = requireClaim(sessionId, claimToken, nowMs);
   resetClaim(session, nowMs);
+  void persistSessions();
   return session;
 }
 
@@ -149,8 +169,15 @@ export function updateSessionPartial(
   nowMs = Date.now(),
 ): PromptSession | undefined {
   const session = requireClaim(sessionId, claimToken, nowMs);
+
+  // Validate partial response size
+  if (persistenceStore && !persistenceStore.validateFieldSize('partialText', partialText)) {
+    throw new Error('Partial response exceeds maximum field size');
+  }
+
   session.partialText = partialText;
   session.lastActivityAt = new Date(nowMs).toISOString();
+  void persistSessions();
   return session;
 }
 
@@ -161,12 +188,19 @@ export function completeSession(
   nowMs = Date.now(),
 ): PromptSession | undefined {
   const session = requireClaim(sessionId, claimToken, nowMs);
+
+  // Validate response size
+  if (persistenceStore && !persistenceStore.validateFieldSize('response', response)) {
+    throw new Error('Response exceeds maximum field size');
+  }
+
   session.status = 'complete';
   session.response = response;
   delete session.partialText;
   session.completedAt = new Date(nowMs).toISOString();
   session.lastActivityAt = session.completedAt;
   clearClaim(session);
+  void persistSessions();
   return session;
 }
 
@@ -177,12 +211,19 @@ export function failSession(
   nowMs = Date.now(),
 ): PromptSession | undefined {
   const session = requireClaim(sessionId, claimToken, nowMs);
+
+  // Validate error message size
+  if (persistenceStore && !persistenceStore.validateFieldSize('error', error)) {
+    throw new Error('Error message exceeds maximum field size');
+  }
+
   session.status = 'error';
   session.error = error;
   delete session.partialText;
   session.completedAt = new Date(nowMs).toISOString();
   session.lastActivityAt = session.completedAt;
   clearClaim(session);
+  void persistSessions();
   return session;
 }
 
@@ -212,7 +253,15 @@ export function pruneSessions(
     sessions.delete(id);
   }
 
+  void persistSessions();
   return { removed: idsToRemove.length, remaining: sessions.size };
+}
+
+export function getSessionStorageStats(): { entryCount: number; totalBytes: number; byStatus: Record<string, number> } {
+  if (!persistenceStore) {
+    return { entryCount: 0, totalBytes: 0, byStatus: {} };
+  }
+  return persistenceStore.getStorageStats(Array.from(sessions.values()));
 }
 
 function claimSession(
@@ -276,4 +325,39 @@ function requireClaim(
     throw new Error('Session claim expired');
   }
   return session;
+}
+
+async function persistSessions(): Promise<void> {
+  if (!persistenceStore) return;
+  await persistenceStore.saveSessions(Array.from(sessions.values()));
+}
+
+export async function initializeSessionStore(
+  store: PersistentSessionStore,
+): Promise<{ recovered: number }> {
+  persistenceStore = store;
+  const persisted = await store.loadSessions();
+  const nowMs = Date.now();
+
+  for (const session of persisted) {
+    // Recovery for pending and claimed sessions
+    if (session.status === 'claimed') {
+      resetClaim(session, nowMs);
+    }
+    sessions.set(session.id, session);
+  }
+
+  // Prune old sessions according to retention policy
+  const pruned = persistenceStore.pruneByPolicy(Array.from(sessions.values()), nowMs);
+  sessions.clear();
+  for (const session of pruned) {
+    sessions.set(session.id, session);
+  }
+
+  await persistSessions();
+  return { recovered: persisted.length };
+}
+
+export function setPersistenceStore(store: PersistentSessionStore): void {
+  persistenceStore = store;
 }
