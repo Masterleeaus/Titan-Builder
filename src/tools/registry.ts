@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   parseToolManifest,
@@ -82,11 +83,14 @@ function hardenGitInvocation(candidate: ToolInvocation): ToolInvocation {
   }
 
   const gitArgs = hardenedGitArgs(candidate.toolId, candidate.args);
-  const sourceRuntime = import.meta.url.endsWith('.ts');
-  const runnerPath = fileURLToPath(new URL(
-    `../git/hardened-cli.${sourceRuntime ? 'ts' : 'js'}`,
-    import.meta.url,
-  ));
+  const modulePath = fileURLToPath(import.meta.url);
+  const sourceRuntime = path.extname(modulePath) === '.ts';
+  const runnerPath = path.resolve(
+    path.dirname(modulePath),
+    '..',
+    'git',
+    sourceRuntime ? 'hardened-cli.ts' : 'hardened-cli.js',
+  );
   const runnerArgs = [
     ...(sourceRuntime ? ['--experimental-strip-types'] : []),
     runnerPath,
