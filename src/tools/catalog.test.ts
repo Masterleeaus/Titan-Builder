@@ -28,6 +28,23 @@ test('catalog delegates invocation resolution to the registered trusted definiti
   assert.deepEqual(invocation.args, ['status', '--short', '--branch']);
 });
 
+test('catalog validates manifests again at the registration boundary', () => {
+  const original = builtinToolRegistry.resolve('git.status');
+  assert.ok(original);
+  const malformed = {
+    ...original,
+    manifest: {
+      ...original.manifest,
+      id: 'git.status',
+    },
+  } as unknown as BuiltinToolDefinition;
+
+  assert.throws(
+    () => createToolRegistry([malformed]),
+    /Invalid Titan tool manifest/u,
+  );
+});
+
 test('catalog rejects duplicate runtime IDs', () => {
   const original = builtinToolRegistry.resolve('git.status');
   assert.ok(original);
@@ -84,5 +101,6 @@ test('catalog resolves declared aliases to their canonical runtime ID', () => {
   const registry = createToolRegistry([aliased]);
 
   assert.equal(registry.canonicalId('git.state'), 'git.status.aliased');
-  assert.equal(registry.resolve('git.state'), aliased);
+  assert.notEqual(registry.resolve('git.state'), aliased);
+  assert.equal(registry.resolve('git.state')?.manifest, aliased.manifest);
 });
