@@ -1,0 +1,70 @@
+name: Repair issue 131 typecheck and retry integration
+
+on:
+  push:
+    branches:
+      - fix/issue-131-secure-openbrowser-state-v2
+    paths:
+      - .github/workflows/fix-issue-131-typecheck.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/issue-131-secure-openbrowser-state-v2
+
+      - name: Replace PromiseLike-sensitive this usage
+        shell: python
+        run: |
+          from pathlib import Path
+
+          state_path = Path('src/security/internal-state.ts')
+          source = state_path.read_text()
+          old = """    async ensureJson(relativePath, value) {
+                if (!(await this.fileExists(relativePath))) {
+                  await this.writeJson(relativePath, value);
+                }
+              },"""
+          new = """    async ensureJson(relativePath, value) {
+                try {
+                  await readOpenBrowserStateBuffer(authority.projectRoot, relativePath);
+                } catch (error) {
+                  if (!isNotFound(error)) throw error;
+                  await writeOpenBrowserStateFile(
+                    authority.projectRoot,
+                    relativePath,
+                    `${JSON.stringify(value, null, 2)}\\n`,
+                  );
+                }
+              },"""
+          if source.count(old) != 1:
+              raise SystemExit('ensureJson typing anchor did not match exactly once')
+          state_path.write_text(source.replace(old, new))
+
+          retry_path = Path('.github/workflows/apply-issue-131-transaction-state.yml')
+          retry = retry_path.read_text()
+          marker = '# retry-after-internal-state-type-fix'
+          if marker not in retry:
+              retry_path.write_text(retry.rstrip() + '\n\n' + marker + '\n')
+
+      - name: Verify typecheck
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm run typecheck
+
+      - name: Commit repair and retrigger transaction integration
+        run: |
+          rm .github/workflows/fix-issue-131-typecheck.yml
+          git config user.name "titan-builder-agent"
+          git config user.email "titan-builder-agent@users.noreply.github.com"
+          git add src/security/internal-state.ts \
+            .github/workflows/apply-issue-131-transaction-state.yml \
+            .github/workflows/fix-issue-131-typecheck.yml
+          git commit -m "fix(security): avoid PromiseLike state method typing (#131)"
+          git push origin HEAD:fix/issue-131-secure-openbrowser-state-v2
