@@ -85,6 +85,30 @@ class WorkspaceHttpError extends Error {
   }
 }
 
+export interface NormalizedWorkspaceError {
+  statusCode: number;
+  message: string;
+}
+
+export function normalizeWorkspaceError(error: unknown): NormalizedWorkspaceError {
+  const statusCode = readHttpStatusCode(error);
+  const message = error instanceof Error && error.message.trim()
+    ? error.message
+    : 'Unknown workspace error';
+  return { statusCode, message };
+}
+
+function readHttpStatusCode(error: unknown): number {
+  if (!error || typeof error !== 'object' || !('statusCode' in error)) return 500;
+  const candidate = (error as { statusCode?: unknown }).statusCode;
+  return typeof candidate === 'number'
+    && Number.isInteger(candidate)
+    && candidate >= 400
+    && candidate <= 599
+    ? candidate
+    : 500;
+}
+
 const RegisterProjectSchema = z.object({
   root: z.string().trim().min(1),
   name: z.string().trim().min(1).max(200).optional(),
@@ -755,16 +779,10 @@ export async function createWorkspaceServer(
     if (error instanceof WorkspaceHttpError) {
       return reply.code(error.statusCode).send({ error: error.message });
     }
-    const errorRecord = typeof error === 'object' && error !== null
-      ? error as Record<string, unknown>
-      : {};
-    const statusCode = typeof errorRecord.statusCode === 'number'
-      ? errorRecord.statusCode
-      : 500;
-    const message = error instanceof Error ? error.message : String(error);
-    return reply.code(statusCode).send({
-      error: statusCode >= 500 ? 'Workspace operation failed' : message,
-      detail: statusCode >= 500 ? message : undefined,
+    const normalized = normalizeWorkspaceError(error);
+    return reply.code(normalized.statusCode).send({
+      error: normalized.statusCode >= 500 ? 'Workspace operation failed' : normalized.message,
+      detail: normalized.statusCode >= 500 ? normalized.message : undefined,
     });
   });
 
