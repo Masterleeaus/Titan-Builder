@@ -541,7 +541,8 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     return { accepted: true };
   });
 
-  app.post('/browser/response', bridgeBodyLimit('/browser/response'), async (request) => {
+  app.post('/browser/response', async (request) => {
+    const MAX_RESPONSE_BYTES = 16 * 1024 * 1024; // 16 MiB
     const body = request.body as {
       sessionId?: string;
       claimToken?: string;
@@ -552,15 +553,23 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
       throw new Error('sessionId and claimToken are required');
     }
     if (body.error) {
+      const errorSize = Buffer.byteLength(body.error, 'utf8');
+      if (errorSize > MAX_RESPONSE_BYTES) {
+        throw new Error(`Browser error message exceeds ${MAX_RESPONSE_BYTES} bytes`);
+      }
       failSession(body.sessionId, body.error, body.claimToken);
       notifySessionError(body.sessionId, { error: body.error });
-      logger.warn({ sessionId: body.sessionId, error: body.error }, 'Browser session failed');
+      logger.warn({ sessionId: body.sessionId, errorSize }, 'Browser session failed');
       return { accepted: true, status: 'error' };
     }
     if (!body.text) throw new Error('text or error is required');
+    const textSize = Buffer.byteLength(body.text, 'utf8');
+    if (textSize > MAX_RESPONSE_BYTES) {
+      throw new Error(`Browser response exceeds ${MAX_RESPONSE_BYTES} bytes`);
+    }
     completeSession(body.sessionId, body.text, body.claimToken);
     notifySessionComplete(body.sessionId, { response: body.text });
-    logger.info({ sessionId: body.sessionId }, 'Browser response received');
+    logger.info({ sessionId: body.sessionId, responseSize: textSize }, 'Browser response received');
     return { accepted: true, status: 'complete' };
   });
 
