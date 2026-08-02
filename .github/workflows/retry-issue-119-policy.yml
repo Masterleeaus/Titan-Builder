@@ -1,0 +1,204 @@
+name: Retry issue 119 protected branch policy
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/retry-issue-119-policy.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-verify-publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out exact issue branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: fix/issue-119-repository-identity-approvals-v2
+          fetch-depth: 0
+
+      - name: Confirm expected issue head
+        env:
+          EXPECTED_HEAD: 3ab984d4378b095b73cec69792833f1f41922b0a
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Implement opt-in protected branch policy
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(source: str, before: str, after: str, label: str) -> str:
+              if source.count(before) != 1:
+                  raise SystemExit(f'{label} was not found exactly once')
+              return source.replace(before, after, 1)
+
+          identity_path = Path('src/security/repository-identity.ts')
+          identity = identity_path.read_text()
+          identity_marker = '\nexport function repositoryIdentityDigest(identity: RepositoryIdentity): string {'
+          policy_functions = '''
+
+          export function normalizeProtectedBranches(
+            value: readonly string[] | string | undefined,
+          ): string[] {
+            const values = typeof value === 'string' ? value.split(',') : value ?? [];
+            const normalized: string[] = [];
+            const seen = new Set<string>();
+            for (const entry of values) {
+              const branch = String(entry ?? '').trim();
+              if (!branch || seen.has(branch)) continue;
+              seen.add(branch);
+              normalized.push(branch);
+            }
+            return normalized;
+          }
+
+          export function assertRepositoryApprovalPolicy(
+            identity: RepositoryIdentity,
+            protectedBranches: readonly string[] | string | undefined,
+          ): void {
+            if (identity.kind !== 'git' || identity.branch === null) return;
+            if (normalizeProtectedBranches(protectedBranches).includes(identity.branch)) {
+              throw new Error(
+                `Operation approval is forbidden on protected branch ${identity.branch}`,
+              );
+            }
+          }
+          '''
+          if identity.count(identity_marker) != 1:
+              raise SystemExit('repository policy insertion marker was not found exactly once')
+          identity_path.write_text(identity.replace(identity_marker, policy_functions + identity_marker, 1))
+
+          agent_path = Path('src/workflows/agent-application.ts')
+          agent = agent_path.read_text()
+          agent = replace_once(
+              agent,
+              "import {\n  captureRepositoryIdentity,\n  sameRepositoryIdentity,\n  type RepositoryIdentity,\n} from '../security/repository-identity.js';",
+              "import {\n  assertRepositoryApprovalPolicy,\n  captureRepositoryIdentity,\n  sameRepositoryIdentity,\n  type RepositoryIdentity,\n} from '../security/repository-identity.js';",
+              'agent repository identity import',
+          )
+          agent = replace_once(
+              agent,
+              "  captureIdentity?: typeof captureRepositoryIdentity;\n  onStep?: ExecuteOptions['onStep'];",
+              "  captureIdentity?: typeof captureRepositoryIdentity;\n  protectedBranches?: readonly string[];\n  onStep?: ExecuteOptions['onStep'];",
+              'agent dependency policy field',
+          )
+          policy_marker = '\n  const reviewedSelectedRevision = createPlannedOperationRevision('
+          policy_start = agent.index('  const identityAfterPlan = await captureIdentityForApproval(')
+          policy_index = agent.index(policy_marker, policy_start)
+          policy_call = '''
+
+          try {
+            assertRepositoryApprovalPolicy(
+              identityAfterPlan,
+              dependencies.protectedBranches,
+            );
+          } catch (error) {
+            throw new AgentApplicationError(
+              'APPROVAL_INVALID',
+              formatUnknownError(error),
+              { cause: error },
+            );
+          }
+          '''
+          agent = agent[:policy_index] + policy_call + agent[policy_index:]
+          agent_path.write_text(agent)
+
+          server_path = Path('src/server/index.ts')
+          server = server_path.read_text()
+          server = replace_once(
+              server,
+              "import {\n  captureRepositoryIdentity,\n  sameRepositoryIdentity,\n} from '../security/repository-identity.js';",
+              "import {\n  assertRepositoryApprovalPolicy,\n  captureRepositoryIdentity,\n  normalizeProtectedBranches,\n  sameRepositoryIdentity,\n} from '../security/repository-identity.js';",
+              'server repository identity import',
+          )
+          server = replace_once(
+              server,
+              '  approvalTtlMs?: number;\n  projectRegistryOptions?: ProjectRegistryOptions;',
+              '  approvalTtlMs?: number;\n  protectedBranches?: string[];\n  projectRegistryOptions?: ProjectRegistryOptions;',
+              'server protected branch option',
+          )
+          root_line = '  const projectRoot = await canonicalizeProjectRoot(options.projectRoot ?? process.cwd());'
+          protected_setup = '''
+          const protectedBranches = normalizeProtectedBranches(
+            options.protectedBranches ?? process.env.OPENBROWSER_PROTECTED_BRANCHES,
+          );'''
+          if server.count(root_line) != 1:
+              raise SystemExit('server project root marker was not found exactly once')
+          server = server.replace(root_line, root_line + '\n' + protected_setup, 1)
+          preview_start = server.index("  app.post('/operations/preview'")
+          preview_end = server.index("\n\n  app.post('/operations/apply'", preview_start)
+          preview = server[preview_start:preview_end]
+          return_marker = '\n    return {\n      operations: plans,'
+          policy_response = '''
+            try {
+              assertRepositoryApprovalPolicy(identityAfterPlan, protectedBranches);
+            } catch (error) {
+              return reply.code(403).send({
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          '''
+          if preview.count(return_marker) != 1:
+              raise SystemExit('server preview return marker was not found exactly once')
+          preview = preview.replace(return_marker, policy_response + return_marker, 1)
+          server_path.write_text(server[:preview_start] + preview + server[preview_end:])
+
+          package_path = Path('package.json')
+          package = package_path.read_text()
+          package = replace_once(
+              package,
+              'src/security/repository-identity.test.ts src/security/project-path.test.ts',
+              'src/security/repository-identity.test.ts src/security/repository-policy.test.ts src/security/project-path.test.ts',
+              'test:node policy registration',
+          )
+          package = replace_once(
+              package,
+              'src/server/body-limits.test.ts src/context/context-path-loaders.test.ts',
+              'src/server/body-limits.test.ts src/server/protected-branch.integration.test.ts src/context/context-path-loaders.test.ts',
+              'server policy integration registration',
+          )
+          package = replace_once(
+              package,
+              'src/workflows/agent-preparation.test.ts src/workflows/agent-application.test.ts',
+              'src/workflows/agent-preparation.test.ts src/workflows/agent-application.test.ts src/workflows/agent-protected-branch.integration.test.ts',
+              'agent policy integration registration',
+          )
+          package_path.write_text(package)
+          PY
+          rm .github/workflows/issue-119-policy-red.yml
+          git diff --check
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+          pnpm install --frozen-lockfile
+
+      - name: Verify policy and complete root tests
+        run: |
+          pnpm run typecheck
+          pnpm exec tsx --test src/security/repository-policy.test.ts src/workflows/agent-protected-branch.integration.test.ts src/server/protected-branch.integration.test.ts
+          pnpm run test
+          pnpm run build
+
+      - name: Publish verified policy implementation
+        env:
+          EXPECTED_OLD_HEAD: 3ab984d4378b095b73cec69792833f1f41922b0a
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/security/repository-identity.ts src/workflows/agent-application.ts src/server/index.ts package.json .github/workflows/issue-119-policy-red.yml
+          git commit -m "fix(security): enforce configured protected branches (#119)"
+          git push \
+            --force-with-lease=refs/heads/fix/issue-119-repository-identity-approvals-v2:${EXPECTED_OLD_HEAD} \
+            origin HEAD:fix/issue-119-repository-identity-approvals-v2
