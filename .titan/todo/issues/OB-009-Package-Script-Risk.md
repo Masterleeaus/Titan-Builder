@@ -2,12 +2,15 @@
 
 - Severity: High
 - Branch: `agent/titan-builder-repairs-pass2`
-- Status: FIXED — full dependency-backed verification pending
+- Status: VERIFIED
 - Source commit before squash merge: `1683f2ab81d2ed4ac36b53855ac89a4e7ce86677`
 - Merged main commit: `9e9eb58be03e65018cf5ad5544f1acff6172705d`
+- Continuation verification commit: `6f88f036ff908cccc4267d58946f154c572dbb16`
 - Artifact SHA-256: `9b37e8aefbe09e15e7e510c4e5d4fc4d6b2cc2ddeeb85bfeb9575136a7a97308`
 - Offline applicator run: `30724994166`
 - Offline applicator job: `91434886053`
+- Full verification run: `30725094613`
+- Full verification job: `91435158403`
 
 ## Confirmed defect
 
@@ -57,7 +60,7 @@ Package-manager scripts and installs were presented as safer than their actual e
 - a changed package manifest invalidates an approved script plan before execution.
 - package-input preconditions participate in transactional execution.
 
-## Current verification
+## Green evidence
 
 The guarded applicator passed:
 
@@ -66,4 +69,13 @@ The guarded applicator passed:
 - Manifest V3 extension integrity.
 - Commit and push before the squash merge.
 
-The merged `main` tree contains the implementation. Do not mark this issue VERIFIED until the permanent read-only GitHub verification pipeline passes typecheck, all Node tests, all integrations, build, CLI smoke, and extension integrity on this continuation branch.
+The permanent read-only GitHub verification pipeline passed on draft PR #2:
+
+- TypeScript typecheck.
+- 128/128 Node tests.
+- 7/7 dependency-backed integration tests, including stale-manifest rejection and required-lockfile previews.
+- Production build.
+- CLI smoke test.
+- Manifest V3 extension integrity.
+
+The acceptance criteria are satisfied. Package scripts are treated as arbitrary project code, installs are lifecycle-disabled and lockfile-enforced by default, and reviewed package inputs are bound to execution through precondition hashes.
