@@ -47,6 +47,33 @@ test('approval token is one-time, short lived, and bound to exact project and pr
   assert.throws(() => store.consume(expired.token, '/project'), /expired/i);
 });
 
+test('browser approval is bound to run, conversation, revision, and selected operations', () => {
+  const expected = {
+    projectRoot: '/project',
+    runId: 'run-browser-12345678',
+    conversationId: 'conversation-123',
+    previewRevision: 'a'.repeat(64),
+    selectedOperationIds: ['op-1'],
+  };
+
+  for (const mismatch of [
+    { ...expected, runId: 'run-browser-87654321' },
+    { ...expected, conversationId: 'conversation-other' },
+    { ...expected, previewRevision: 'b'.repeat(64) },
+    { ...expected, selectedOperationIds: ['op-2'] },
+  ]) {
+    const store = createOperationApprovalStore();
+    const approval = store.issue({ ...expected, plans: fixturePlan() });
+    assert.throws(() => store.consume(approval.token, mismatch), /bound to|different/i);
+  }
+
+  const store = createOperationApprovalStore();
+  const approval = store.issue({ ...expected, plans: fixturePlan() });
+  assert.equal(store.inspect(approval.token, expected).runId, expected.runId);
+  assert.equal(store.consume(approval.token, expected).length, 1);
+  assert.throws(() => store.consume(approval.token, expected), /already used|invalid/i);
+});
+
 test('approval store bounds outstanding capabilities and never stores raw bearer tokens as keys', () => {
   const store = createOperationApprovalStore({ maxEntries: 2, ttlMs: 60_000 });
   const first = store.issue({ projectRoot: '/project', plans: fixturePlan() });
