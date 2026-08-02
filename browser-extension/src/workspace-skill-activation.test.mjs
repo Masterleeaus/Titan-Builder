@@ -6,7 +6,7 @@ import {
   resolveWorkspaceContext,
 } from './workspace-library.js';
 
-test('legacy profile IDs activate the canonical migrated skill', () => {
+test('legacy profile IDs activate canonical migrated skills', () => {
   const context = resolveWorkspaceContext({
     skills: BUILTIN_SKILLS,
     profiles: BUILTIN_AGENT_PROFILES,
@@ -14,7 +14,10 @@ test('legacy profile IDs activate the canonical migrated skill', () => {
   });
 
   assert.ok(context.skills.some((skill) => skill.id === 'titan.guidance.systematic-debugging'));
-  assert.ok(context.skills.some((skill) => skill.id === 'testing'));
-  assert.ok(context.skills.some((skill) => skill.id === 'git'));
-  assert.equal(context.skills.some((skill) => skill.id === 'debugging'), false);
+  assert.ok(context.skills.some((skill) => skill.id === 'titan.guidance.test-driven-development'));
+  assert.ok(context.skills.some((skill) => skill.id === 'titan.guidance.git-discipline'));
+  assert.equal(
+    context.skills.some((skill) => ['debugging', 'testing', 'git'].includes(skill.id)),
+    false,
+  );
 });
