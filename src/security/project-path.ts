@@ -11,7 +11,13 @@ const RESERVED_VCS_METADATA_NAMES = new Set([
   '.bzr',
   '.fslckout',
   '.fossil-settings',
+  '_fossil_',
   '.jj',
+  '.pijul',
+  '.sl',
+  '_mtn',
+  '.mtn',
+  '.arch-ids',
   'cvs',
 ]);
 
