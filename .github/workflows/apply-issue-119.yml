@@ -35,131 +35,107 @@ jobs:
           source_path = Path('src/server/index.ts')
           source = source_path.read_text()
           import_anchor = "import { canonicalizeProjectRoot } from '../security/project-path.js';\n"
-          import_replacement = import_anchor + "import {\n  captureRepositoryIdentity,\n  sameRepositoryIdentity,\n} from '../security/repository-identity.js';\n"
+          import_replacement = import_anchor + (
+              "import {\n"
+              "  captureRepositoryIdentity,\n"
+              "  sameRepositoryIdentity,\n"
+              "} from '../security/repository-identity.js';\n"
+          )
           if source.count(import_anchor) != 1:
               raise SystemExit('repository identity import anchor was not found exactly once')
           source = source.replace(import_anchor, import_replacement, 1)
 
-          preview_before = '''  app.post('/operations/preview', bridgeBodyLimit('/operations/preview'), async (request) => {
-            const operations = validateOperations((request.body as { operations?: unknown }).operations);
-            const plans = await planOperations(operations, projectRoot);
-            return {
-              operations: plans,
-              approval: operationApprovals.issue({ projectRoot, plans }),
-            };
-          });'''
-          preview_after = '''  app.post('/operations/preview', bridgeBodyLimit('/operations/preview'), async (request, reply) => {
-            const operations = validateOperations((request.body as { operations?: unknown }).operations);
-            const identityBeforePlan = await captureRepositoryIdentity(projectRoot);
-            const plans = await planOperations(operations, identityBeforePlan.projectRoot);
-            const identityAfterPlan = await captureRepositoryIdentity(identityBeforePlan.projectRoot);
-            if (!sameRepositoryIdentity(identityBeforePlan, identityAfterPlan)) {
-              return reply.code(409).send({
-                error: 'Operation preview is stale because repository identity changed during planning',
-              });
-            }
-            return {
-              operations: plans,
-              approval: operationApprovals.issue({
-                projectRoot: identityAfterPlan.projectRoot,
-                repositoryIdentity: identityAfterPlan,
-                plans,
-              }),
-            };
-          });'''
-          if source.count(preview_before) != 1:
-              raise SystemExit('operations preview block was not found exactly once')
-          source = source.replace(preview_before, preview_after, 1)
+          preview_start = source.index("  app.post('/operations/preview'")
+          preview_end = source.index("\n\n  app.post('/operations/apply'", preview_start)
+          preview_after = (
+              "  app.post('/operations/preview', bridgeBodyLimit('/operations/preview'), async (request, reply) => {\n"
+              "    const operations = validateOperations((request.body as { operations?: unknown }).operations);\n"
+              "    const identityBeforePlan = await captureRepositoryIdentity(projectRoot);\n"
+              "    const plans = await planOperations(operations, identityBeforePlan.projectRoot);\n"
+              "    const identityAfterPlan = await captureRepositoryIdentity(identityBeforePlan.projectRoot);\n"
+              "    if (!sameRepositoryIdentity(identityBeforePlan, identityAfterPlan)) {\n"
+              "      return reply.code(409).send({\n"
+              "        error: 'Operation preview is stale because repository identity changed during planning',\n"
+              "      });\n"
+              "    }\n"
+              "    return {\n"
+              "      operations: plans,\n"
+              "      approval: operationApprovals.issue({\n"
+              "        projectRoot: identityAfterPlan.projectRoot,\n"
+              "        repositoryIdentity: identityAfterPlan,\n"
+              "        plans,\n"
+              "      }),\n"
+              "    };\n"
+              "  });"
+          )
+          source = source[:preview_start] + preview_after + source[preview_end:]
 
-          apply_before = '''  app.post('/operations/apply', bridgeBodyLimit('/operations/apply'), async (request, reply) => {
-            const body = request.body as { approvalToken?: string; conversationId?: string };
-            if (!body.approvalToken) {
-              return reply.code(400).send({ error: 'approvalToken is required' });
-            }
-
-            let plans: Awaited<ReturnType<typeof planOperations>>;
-            try {
-              plans = operationApprovals.consume(body.approvalToken, projectRoot);
-            } catch (error) {
-              const message = error instanceof Error ? error.message : 'Invalid operation approval';
-              return reply.code(403).send({ error: message });
-            }
-
-            return {
-              operations: await executePlannedOperations(plans, projectRoot, {
-                conversationId: body.conversationId,
-              }),
-            };
-          });'''
-          apply_after = '''  app.post('/operations/apply', bridgeBodyLimit('/operations/apply'), async (request, reply) => {
-            const body = request.body as { approvalToken?: string; conversationId?: string };
-            if (!body.approvalToken) {
-              return reply.code(400).send({ error: 'approvalToken is required' });
-            }
-
-            let identityBeforeInspect;
-            try {
-              identityBeforeInspect = await captureRepositoryIdentity(projectRoot);
-            } catch (error) {
-              return reply.code(409).send({
-                error: `Operation approval is stale because repository identity could not be captured: ${error instanceof Error ? error.message : String(error)}`,
-              });
-            }
-
-            let inspection;
-            try {
-              inspection = operationApprovals.inspect(body.approvalToken, {
-                projectRoot: identityBeforeInspect.projectRoot,
-                repositoryIdentity: identityBeforeInspect,
-              });
-            } catch (error) {
-              const message = error instanceof Error ? error.message : 'Invalid operation approval';
-              if (/repository identity/i.test(message)) {
-                operationApprovals.revoke(body.approvalToken);
-                return reply.code(409).send({ error: message });
-              }
-              return reply.code(403).send({ error: message });
-            }
-
-            let identityBeforeConsume;
-            try {
-              identityBeforeConsume = await captureRepositoryIdentity(identityBeforeInspect.projectRoot);
-            } catch (error) {
-              operationApprovals.revoke(body.approvalToken);
-              return reply.code(409).send({
-                error: `Operation approval is stale because repository identity could not be revalidated: ${error instanceof Error ? error.message : String(error)}`,
-              });
-            }
-            if (
-              !sameRepositoryIdentity(identityBeforeInspect, identityBeforeConsume) ||
-              !sameRepositoryIdentity(inspection.repositoryIdentity, identityBeforeConsume)
-            ) {
-              operationApprovals.revoke(body.approvalToken);
-              return reply.code(409).send({
-                error: 'Operation approval is stale because repository identity changed before consumption',
-              });
-            }
-
-            let plans: Awaited<ReturnType<typeof planOperations>>;
-            try {
-              plans = operationApprovals.consume(body.approvalToken, {
-                projectRoot: identityBeforeConsume.projectRoot,
-                repositoryIdentity: identityBeforeConsume,
-              });
-            } catch (error) {
-              const message = error instanceof Error ? error.message : 'Invalid operation approval';
-              return reply.code(/repository identity/i.test(message) ? 409 : 403).send({ error: message });
-            }
-
-            return {
-              operations: await executePlannedOperations(plans, identityBeforeConsume.projectRoot, {
-                conversationId: body.conversationId,
-              }),
-            };
-          });'''
-          if source.count(apply_before) != 1:
-              raise SystemExit('operations apply block was not found exactly once')
-          source = source.replace(apply_before, apply_after, 1)
+          apply_start = source.index("  app.post('/operations/apply'")
+          apply_end = source.index("\n\n  app.post('/session'", apply_start)
+          apply_after = (
+              "  app.post('/operations/apply', bridgeBodyLimit('/operations/apply'), async (request, reply) => {\n"
+              "    const body = request.body as { approvalToken?: string; conversationId?: string };\n"
+              "    if (!body.approvalToken) {\n"
+              "      return reply.code(400).send({ error: 'approvalToken is required' });\n"
+              "    }\n\n"
+              "    let identityBeforeInspect;\n"
+              "    try {\n"
+              "      identityBeforeInspect = await captureRepositoryIdentity(projectRoot);\n"
+              "    } catch (error) {\n"
+              "      return reply.code(409).send({\n"
+              "        error: `Operation approval is stale because repository identity could not be captured: ${error instanceof Error ? error.message : String(error)}`,\n"
+              "      });\n"
+              "    }\n\n"
+              "    let inspection;\n"
+              "    try {\n"
+              "      inspection = operationApprovals.inspect(body.approvalToken, {\n"
+              "        projectRoot: identityBeforeInspect.projectRoot,\n"
+              "        repositoryIdentity: identityBeforeInspect,\n"
+              "      });\n"
+              "    } catch (error) {\n"
+              "      const message = error instanceof Error ? error.message : 'Invalid operation approval';\n"
+              "      if (/repository identity/i.test(message)) {\n"
+              "        operationApprovals.revoke(body.approvalToken);\n"
+              "        return reply.code(409).send({ error: message });\n"
+              "      }\n"
+              "      return reply.code(403).send({ error: message });\n"
+              "    }\n\n"
+              "    let identityBeforeConsume;\n"
+              "    try {\n"
+              "      identityBeforeConsume = await captureRepositoryIdentity(identityBeforeInspect.projectRoot);\n"
+              "    } catch (error) {\n"
+              "      operationApprovals.revoke(body.approvalToken);\n"
+              "      return reply.code(409).send({\n"
+              "        error: `Operation approval is stale because repository identity could not be revalidated: ${error instanceof Error ? error.message : String(error)}`,\n"
+              "      });\n"
+              "    }\n"
+              "    if (\n"
+              "      !sameRepositoryIdentity(identityBeforeInspect, identityBeforeConsume) ||\n"
+              "      !sameRepositoryIdentity(inspection.repositoryIdentity, identityBeforeConsume)\n"
+              "    ) {\n"
+              "      operationApprovals.revoke(body.approvalToken);\n"
+              "      return reply.code(409).send({\n"
+              "        error: 'Operation approval is stale because repository identity changed before consumption',\n"
+              "      });\n"
+              "    }\n\n"
+              "    let plans: Awaited<ReturnType<typeof planOperations>>;\n"
+              "    try {\n"
+              "      plans = operationApprovals.consume(body.approvalToken, {\n"
+              "        projectRoot: identityBeforeConsume.projectRoot,\n"
+              "        repositoryIdentity: identityBeforeConsume,\n"
+              "      });\n"
+              "    } catch (error) {\n"
+              "      const message = error instanceof Error ? error.message : 'Invalid operation approval';\n"
+              "      return reply.code(/repository identity/i.test(message) ? 409 : 403).send({ error: message });\n"
+              "    }\n\n"
+              "    return {\n"
+              "      operations: await executePlannedOperations(plans, identityBeforeConsume.projectRoot, {\n"
+              "        conversationId: body.conversationId,\n"
+              "      }),\n"
+              "    };\n"
+              "  });"
+          )
+          source = source[:apply_start] + apply_after + source[apply_end:]
           source_path.write_text(source)
 
           package_path = Path('package.json')
