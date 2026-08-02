@@ -550,7 +550,7 @@ Supported tool IDs:
 - `pnpm.install`, `pnpm.test`, `pnpm.run`
 - `node.version`, `vscode.open`
 
-`npm.run` and `pnpm.run` accept verification-oriented scripts beginning with `test`, `build`, `lint`, `typecheck`, `check`, or `verify`. Legacy `RUN_COMMAND` is blocked by default; explicitly set `OPENBROWSER_ALLOW_UNSAFE_COMMANDS=1` only when you understand the risk.
+`npm.run` and `pnpm.run` accept verification-oriented script names beginning with `test`, `build`, `lint`, `typecheck`, `check`, or `verify`, but those scripts are still repository-controlled arbitrary code. They are labelled `ARBITRARY_EXECUTION` and require explicit per-operation approval. `npm.install` runs `npm ci --ignore-scripts` and requires `package-lock.json`; `pnpm.install` runs with `--frozen-lockfile --ignore-scripts` and requires `pnpm-lock.yaml`. Install operations are labelled `NETWORK_WRITE`. Package manifests, lockfiles, workspace configuration, and `.npmrc` inputs are hashed during preview and revalidated immediately before execution. Legacy `RUN_COMMAND` is blocked by default; explicitly set `OPENBROWSER_ALLOW_UNSAFE_COMMANDS=1` only when you understand the risk.
 
 Paths must be relative to the project root. Directory traversal (`../`) is rejected.
 

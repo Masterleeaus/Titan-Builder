@@ -15,6 +15,7 @@ import { preserveOperationOrder } from './operation-order.js';
 import {
   isUnsafeLegacyCommandEnabled,
   resolveToolInvocation,
+  toolInputFiles,
   type ToolInvocation,
   type ToolRisk,
 } from '../tools/registry.js';
@@ -103,13 +104,14 @@ export async function planOperations(
         ? await resolveProjectPath(root, operation.path, { requireExisting: true, expectedType: 'directory' })
         : root;
       const invocation = resolveToolInvocation(operation.tool ?? '', operation.args ?? [], cwd);
+      const toolInputs = await planToolInputs(invocation, root, virtualState);
       plans.push({
         operation,
         absolutePath: cwd,
         diff: `RUN_TOOL [${invocation.risk}] ${invocation.displayCommand}`,
         risk: invocation.risk,
-        preconditions: [],
-        affectedPaths: [],
+        preconditions: toolInputs.preconditions,
+        affectedPaths: toolInputs.affectedPaths,
       });
       continue;
     }
@@ -265,12 +267,46 @@ function riskForFileOperation(operation: FileOperation): ToolRisk {
     case 'CREATE_FOLDER':
       return 'WRITE';
     case 'RUN_TOOL':
-      return 'SAFE_EXECUTION';
+      return 'ARBITRARY_EXECUTION';
     case 'RUN_COMMAND':
       return 'DESTRUCTIVE';
     default:
       return 'WRITE';
   }
+}
+
+async function planToolInputs(
+  invocation: ToolInvocation,
+  projectRoot: string,
+  virtualState: Map<string, PathSnapshot>,
+): Promise<{ preconditions: PathPrecondition[]; affectedPaths: string[] }> {
+  const preconditions: PathPrecondition[] = [];
+  const affectedPaths: string[] = [];
+  const bases = invocation.cwd === projectRoot ? [projectRoot] : [invocation.cwd, projectRoot];
+
+  for (const input of toolInputFiles(invocation)) {
+    const snapshots: Array<{ absolutePath: string; snapshot: PathSnapshot }> = [];
+    for (const base of bases) {
+      const candidate = path.join(base, input.path);
+      const relative = path.relative(projectRoot, candidate);
+      const absolutePath = await resolveProjectPath(projectRoot, relative, { expectedType: 'file' });
+      if (snapshots.some((entry) => entry.absolutePath === absolutePath)) {
+        continue;
+      }
+      const snapshot = await getVirtualSnapshot(virtualState, absolutePath);
+      snapshots.push({ absolutePath, snapshot });
+      preconditions.push(toPrecondition(absolutePath, snapshot));
+      affectedPaths.push(absolutePath);
+    }
+
+    if (input.required && !snapshots.some((entry) => entry.snapshot.kind === 'file')) {
+      throw new Error(
+        `${invocation.toolId} requires ${input.path} before execution so the approved input can be locked`,
+      );
+    }
+  }
+
+  return { preconditions, affectedPaths };
 }
 
 async function planFileOperation(

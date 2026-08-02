@@ -60,6 +60,11 @@ test('a failed multi-file transaction restores earlier mutations and records rol
   const firstPath = path.join(projectRoot, 'first.txt');
   const createdPath = path.join(projectRoot, 'created.txt');
   await writeFile(firstPath, 'original\n', 'utf8');
+  await writeFile(
+    path.join(projectRoot, 'package.json'),
+    JSON.stringify({ scripts: { test: 'node -e \"process.exit(1)\"' } }),
+    'utf8',
+  );
 
   try {
     await assert.rejects(
@@ -98,6 +103,60 @@ test('a failed multi-file transaction restores earlier mutations and records rol
     assert.equal(journal.status, 'rolled_back');
     assert.equal(journal.rollbackStatus, 'rolled_back');
     assert.equal(journal.externalEffectsPossible, true);
+  } finally {
+    await fs.remove(projectRoot);
+  }
+});
+
+
+test('package scripts lock their manifest at preview and reject later script replacement', async () => {
+  const projectRoot = await createProject();
+  const packagePath = path.join(projectRoot, 'package.json');
+  await writeFile(
+    packagePath,
+    JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }),
+    'utf8',
+  );
+
+  try {
+    const plans = await planOperations([
+      { action: 'RUN_TOOL', tool: 'npm.test' },
+    ], projectRoot);
+    assert.equal(plans[0]?.risk, 'ARBITRARY_EXECUTION');
+    assert.ok(plans[0]?.preconditions.some((entry) => entry.absolutePath === packagePath));
+
+    await writeFile(
+      packagePath,
+      JSON.stringify({ scripts: { test: 'node -e "process.exit(99)"' } }),
+      'utf8',
+    );
+
+    await assert.rejects(
+      executePlannedOperations(plans, projectRoot),
+      /precondition changed/i,
+    );
+  } finally {
+    await fs.remove(projectRoot);
+  }
+});
+
+test('dependency installation requires a lockfile and previews lifecycle-disabled network execution', async () => {
+  const projectRoot = await createProject();
+  await writeFile(path.join(projectRoot, 'package.json'), JSON.stringify({ dependencies: {} }), 'utf8');
+
+  try {
+    await assert.rejects(
+      planOperations([{ action: 'RUN_TOOL', tool: 'npm.install' }], projectRoot),
+      /requires package-lock\.json/i,
+    );
+
+    const lockPath = path.join(projectRoot, 'package-lock.json');
+    await writeFile(lockPath, JSON.stringify({ lockfileVersion: 3, packages: {} }), 'utf8');
+    const plans = await planOperations([{ action: 'RUN_TOOL', tool: 'npm.install' }], projectRoot);
+
+    assert.equal(plans[0]?.risk, 'NETWORK_WRITE');
+    assert.match(plans[0]?.diff ?? '', /npm ci --ignore-scripts/);
+    assert.ok(plans[0]?.preconditions.some((entry) => entry.absolutePath === lockPath));
   } finally {
     await fs.remove(projectRoot);
   }

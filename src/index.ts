@@ -35,6 +35,7 @@ import {
   setActiveProject,
 } from './projects/registry.js';
 import { executePlannedOperations, planOperations } from './operations/index.js';
+import { requiresExplicitApproval } from './tools/registry.js';
 import {
   buildAgentSystemPrompt,
   buildAskSystemPrompt,
@@ -613,7 +614,7 @@ ${colors.bold}Changes preview${colors.reset} ${colors.dim}(${plans.length} opera
 
       const approvedOperations: typeof operations = [];
       for (const plan of plans) {
-        if (plan.risk !== 'DESTRUCTIVE' && plan.risk !== 'PUBLISH') {
+        if (!requiresExplicitApproval(plan.risk)) {
           approvedOperations.push(plan.operation);
           continue;
         }
@@ -734,7 +735,15 @@ function writeRiskSummary(plans: Awaited<ReturnType<typeof planOperations>>): vo
     counts.set(plan.risk, (counts.get(plan.risk) ?? 0) + 1);
   }
 
-  const order = ['READ', 'SAFE_EXECUTION', 'WRITE', 'DESTRUCTIVE', 'PUBLISH'];
+  const order = [
+    'READ',
+    'SAFE_EXECUTION',
+    'WRITE',
+    'NETWORK_WRITE',
+    'ARBITRARY_EXECUTION',
+    'DESTRUCTIVE',
+    'PUBLISH',
+  ];
   const summary = order
     .filter((risk) => counts.has(risk))
     .map((risk) => `${risk}:${counts.get(risk)}`)

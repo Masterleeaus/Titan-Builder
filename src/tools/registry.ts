@@ -1,6 +1,13 @@
 import path from 'node:path';
 
-export type ToolRisk = 'READ' | 'SAFE_EXECUTION' | 'WRITE' | 'DESTRUCTIVE' | 'PUBLISH';
+export type ToolRisk =
+  | 'READ'
+  | 'SAFE_EXECUTION'
+  | 'WRITE'
+  | 'NETWORK_WRITE'
+  | 'ARBITRARY_EXECUTION'
+  | 'DESTRUCTIVE'
+  | 'PUBLISH';
 
 export type ToolId =
   | 'git.status'
@@ -15,6 +22,11 @@ export type ToolId =
   | 'pnpm.run'
   | 'node.version'
   | 'vscode.open';
+
+export interface ToolInputFile {
+  path: string;
+  required: boolean;
+}
 
 export interface ToolInvocation {
   toolId: ToolId;
@@ -67,18 +79,24 @@ export function resolveToolInvocation(
       return invocation(validatedToolId, 'git', ['rev-parse', '--abbrev-ref', 'HEAD'], cwd, 'READ');
     case 'npm.install':
       requireArgCount(validatedToolId, normalizedArgs, 0);
-      return invocation(validatedToolId, platformCommand('npm'), ['install'], cwd, 'WRITE');
+      return invocation(validatedToolId, platformCommand('npm'), ['ci', '--ignore-scripts'], cwd, 'NETWORK_WRITE');
     case 'npm.test':
       requireArgCount(validatedToolId, normalizedArgs, 0);
-      return invocation(validatedToolId, platformCommand('npm'), ['test'], cwd, 'SAFE_EXECUTION');
+      return invocation(validatedToolId, platformCommand('npm'), ['test'], cwd, 'ARBITRARY_EXECUTION');
     case 'npm.run':
       return runScriptInvocation(validatedToolId, platformCommand('npm'), normalizedArgs, cwd);
     case 'pnpm.install':
       requireArgCount(validatedToolId, normalizedArgs, 0);
-      return invocation(validatedToolId, platformCommand('pnpm'), ['install'], cwd, 'WRITE');
+      return invocation(
+        validatedToolId,
+        platformCommand('pnpm'),
+        ['install', '--frozen-lockfile', '--ignore-scripts'],
+        cwd,
+        'NETWORK_WRITE',
+      );
     case 'pnpm.test':
       requireArgCount(validatedToolId, normalizedArgs, 0);
-      return invocation(validatedToolId, platformCommand('pnpm'), ['test'], cwd, 'SAFE_EXECUTION');
+      return invocation(validatedToolId, platformCommand('pnpm'), ['test'], cwd, 'ARBITRARY_EXECUTION');
     case 'pnpm.run':
       return runScriptInvocation(validatedToolId, platformCommand('pnpm'), normalizedArgs, cwd);
     case 'node.version':
@@ -99,6 +117,49 @@ export function resolveToolInvocation(
   }
 }
 
+
+
+export function requiresExplicitApproval(risk: ToolRisk): boolean {
+  return risk === 'NETWORK_WRITE'
+    || risk === 'ARBITRARY_EXECUTION'
+    || risk === 'DESTRUCTIVE'
+    || risk === 'PUBLISH';
+}
+
+export function toolInputFiles(invocation: ToolInvocation): ToolInputFile[] {
+  switch (invocation.toolId) {
+    case 'npm.install':
+      return [
+        { path: 'package.json', required: true },
+        { path: 'package-lock.json', required: true },
+        { path: '.npmrc', required: false },
+      ];
+    case 'npm.test':
+    case 'npm.run':
+      return [
+        { path: 'package.json', required: true },
+        { path: 'package-lock.json', required: false },
+        { path: '.npmrc', required: false },
+      ];
+    case 'pnpm.install':
+      return [
+        { path: 'package.json', required: true },
+        { path: 'pnpm-lock.yaml', required: true },
+        { path: 'pnpm-workspace.yaml', required: false },
+        { path: '.npmrc', required: false },
+      ];
+    case 'pnpm.test':
+    case 'pnpm.run':
+      return [
+        { path: 'package.json', required: true },
+        { path: 'pnpm-lock.yaml', required: false },
+        { path: 'pnpm-workspace.yaml', required: false },
+        { path: '.npmrc', required: false },
+      ];
+    default:
+      return [];
+  }
+}
 
 function assertToolId(value: string): ToolId {
   const supported: readonly ToolId[] = [
@@ -136,7 +197,7 @@ function runScriptInvocation(
   if (!APPROVED_SCRIPT.test(script)) {
     throw new Error(`${script || '(empty)'} is not an approved verification script`);
   }
-  return invocation(toolId, executable, ['run', script], cwd, 'SAFE_EXECUTION');
+  return invocation(toolId, executable, ['run', script], cwd, 'ARBITRARY_EXECUTION');
 }
 
 function invocation(
