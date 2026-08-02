@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import cors from '@fastify/cors';
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
+import { ensureBridgeSecurityEnvironment } from '../config/bridge-security.js';
 import { loadOpenBrowserEnvironment } from '../config/environment.js';
 import { buildBudgetedContext, generateContext } from '../context/index.js';
 import {
@@ -12,8 +13,9 @@ import {
   writePromptFile,
   readPromptFile,
 } from '../memory/index.js';
-import { executeOperations, planOperations } from '../operations/index.js';
+import { executePlannedOperations, planOperations } from '../operations/index.js';
 import { validateOperations } from '../protocol/index.js';
+import { canonicalizeProjectRoot } from '../security/project-path.js';
 import { logger } from '../shared/index.js';
 import { readProjectStatus } from '../project/status.js';
 import {
@@ -54,109 +56,131 @@ import {
   tryClaimSession,
   updateSessionPartial,
 } from './session-store.js';
-import { authorizeBridgeRequest, isAllowedBridgeOrigin } from './security.js';
+import { createOperationApprovalStore } from './operation-approvals.js';
+import {
+  createBridgeSecurityPolicy,
+  parseAllowedExtensionOrigins,
+  resolveBridgeRouteScope,
+} from './security.js';
 
 loadOpenBrowserEnvironment();
 
 const PORT = Number(process.env.PORT ?? 5000);
 
-interface ServerOptions {
+export interface ServerOptions {
   port?: number;
   host?: string;
+  projectRoot?: string;
+  controlToken?: string;
+  browserToken?: string;
+  allowedExtensionOrigins?: string[];
+  allowInsecureDev?: boolean;
+  approvalTtlMs?: number;
 }
 
-export async function createBridgeServer(): Promise<FastifyInstance> {
+export async function createBridgeServer(options: ServerOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
+  const projectRoot = await canonicalizeProjectRoot(options.projectRoot ?? process.cwd());
+  const insecureDevelopment = options.allowInsecureDev ?? process.env.OPENBROWSER_INSECURE_DEV === '1';
+  const securityPolicy = createBridgeSecurityPolicy({
+    controlToken: options.controlToken ?? process.env.BRIDGE_TOKEN,
+    browserToken: options.browserToken ?? process.env.BRIDGE_BROWSER_TOKEN,
+    allowedExtensionOrigins:
+      options.allowedExtensionOrigins ?? parseAllowedExtensionOrigins(process.env.BRIDGE_EXTENSION_ORIGINS),
+    allowInsecureDev: insecureDevelopment,
+  });
+  const operationApprovals = createOperationApprovalStore({ ttlMs: options.approvalTtlMs });
 
   await app.register(cors, {
     origin: (origin, callback) => {
-      callback(null, isAllowedBridgeOrigin(origin));
+      callback(null, securityPolicy.isAllowedPreflightOrigin(origin));
     },
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
   app.addHook('onSend', async (request, reply) => {
-    if (request.headers.origin && isAllowedBridgeOrigin(request.headers.origin)) {
+    if (request.headers.origin && securityPolicy.isAllowedPreflightOrigin(request.headers.origin)) {
       reply.header('Access-Control-Allow-Private-Network', 'true');
     }
   });
 
   app.options('/browser/events', async (request, reply) => {
-    assertAllowedOrigin(request.headers.origin);
+    assertAllowedOrigin(securityPolicy, request.headers.origin);
     reply.hijack();
     writeCorsPreflight(reply.raw, request.headers.origin);
   });
 
   app.options('/browser/claim', async (request, reply) => {
-    assertAllowedOrigin(request.headers.origin);
+    assertAllowedOrigin(securityPolicy, request.headers.origin);
     reply.hijack();
     writeCorsPreflight(reply.raw, request.headers.origin);
   });
 
   app.options('/browser/pending', async (request, reply) => {
-    assertAllowedOrigin(request.headers.origin);
+    assertAllowedOrigin(securityPolicy, request.headers.origin);
     reply.hijack();
     writeCorsPreflight(reply.raw, request.headers.origin);
   });
 
   app.options('/browser/heartbeat', async (request, reply) => {
-    assertAllowedOrigin(request.headers.origin);
+    assertAllowedOrigin(securityPolicy, request.headers.origin);
     reply.hijack();
     writeCorsPreflight(reply.raw, request.headers.origin);
   });
 
   app.options('/browser/release', async (request, reply) => {
-    assertAllowedOrigin(request.headers.origin);
+    assertAllowedOrigin(securityPolicy, request.headers.origin);
     reply.hijack();
     writeCorsPreflight(reply.raw, request.headers.origin);
   });
 
   app.options('/browser/chunk', async (request, reply) => {
-    assertAllowedOrigin(request.headers.origin);
+    assertAllowedOrigin(securityPolicy, request.headers.origin);
     reply.hijack();
     writeCorsPreflight(reply.raw, request.headers.origin);
   });
 
   app.options('/browser/response', async (request, reply) => {
-    assertAllowedOrigin(request.headers.origin);
+    assertAllowedOrigin(securityPolicy, request.headers.origin);
     reply.hijack();
     writeCorsPreflight(reply.raw, request.headers.origin);
   });
 
   app.options('/browser/prompt-file/:sessionId', async (request, reply) => {
-    assertAllowedOrigin(request.headers.origin);
+    assertAllowedOrigin(securityPolicy, request.headers.origin);
     reply.hijack();
     writeCorsPreflight(reply.raw, request.headers.origin);
   });
 
   app.addHook('preHandler', async (request, reply) => {
-    if (!isAllowedBridgeOrigin(request.headers.origin)) {
+    const scope = resolveBridgeRouteScope(request.method, request.url);
+    const origin = request.headers.origin;
+
+    if (!securityPolicy.isAllowedPreflightOrigin(origin)) {
       return reply.code(403).send({ error: 'Forbidden bridge origin' });
     }
 
-    const url = request.url.split('?')[0] ?? request.url;
-    if (request.method === 'OPTIONS' || url === '/health') {
-      return;
-    }
-
-    if (
-      !authorizeBridgeRequest({
-        configuredToken: process.env.BRIDGE_TOKEN,
-        authorization: request.headers.authorization,
-      })
-    ) {
+    if (!securityPolicy.authorize({
+      scope,
+      authorization: request.headers.authorization,
+      origin,
+    })) {
       return reply.code(401).send({ error: 'Unauthorized bridge request' });
     }
   });
 
-  app.get('/health', async () => ({ status: 'ok' }));
+  app.get('/health', async () => ({
+    status: 'ok',
+    authentication: insecureDevelopment ? 'insecure-development' : 'required',
+    extensionOrigins: securityPolicy.allowedExtensionOrigins(),
+  }));
 
   app.get('/project/status', async () => {
     const [status, memory, registered] = await Promise.all([
-      readProjectStatus(process.cwd()),
-      listProjectMemory(process.cwd()),
-      registerProject(process.cwd()),
+      readProjectStatus(projectRoot),
+      listProjectMemory(projectRoot),
+      registerProject(projectRoot),
     ]);
     return { ...status, registeredProjectId: registered.id, memoryCount: memory.length };
   });
@@ -168,7 +192,7 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
 
   app.post('/projects/register-current', async (request) => {
     const body = request.body as { name?: string } | undefined;
-    const project = await registerProject(process.cwd(), { name: body?.name });
+    const project = await registerProject(projectRoot, { name: body?.name });
     await setActiveProject(project.id);
     return { project };
   });
@@ -180,22 +204,22 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
   });
 
   app.get('/project/memory', async () => ({
-    entries: await listProjectMemory(process.cwd()),
+    entries: await listProjectMemory(projectRoot),
   }));
 
   app.post('/project/memory', async (request) => {
     const body = request.body as { text?: string; tags?: string[] };
     if (!body.text?.trim()) throw new Error('text is required');
-    return { entry: await addProjectMemory(process.cwd(), body.text, body.tags ?? []) };
+    return { entry: await addProjectMemory(projectRoot, body.text, body.tags ?? []) };
   });
 
   app.delete('/project/memory/:memoryId', async (request) => {
     const { memoryId } = request.params as { memoryId: string };
-    return { removed: await removeProjectMemory(process.cwd(), memoryId) };
+    return { removed: await removeProjectMemory(projectRoot, memoryId) };
   });
 
   app.post('/project/memory/clear', async () => {
-    await clearProjectMemory(process.cwd());
+    await clearProjectMemory(projectRoot);
     return { cleared: true };
   });
 
@@ -206,7 +230,7 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
       perFileCharacters?: number;
       maxFiles?: number;
     };
-    const result = await buildBudgetedContext(process.cwd(), body.refs ?? ['.'], {
+    const result = await buildBudgetedContext(projectRoot, body.refs ?? ['.'], {
       totalCharacters: body.totalCharacters,
       perFileCharacters: body.perFileCharacters,
       maxFiles: body.maxFiles,
@@ -224,22 +248,37 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
   });
 
   app.get('/summary', async () => ({
-    context: await generateContext(process.cwd()),
+    context: await generateContext(projectRoot),
   }));
 
   app.post('/operations/preview', async (request) => {
     const operations = validateOperations((request.body as { operations?: unknown }).operations);
-    return { operations: await planOperations(operations, process.cwd()) };
+    const plans = await planOperations(operations, projectRoot);
+    return {
+      operations: plans,
+      approval: operationApprovals.issue({ projectRoot, plans }),
+    };
   });
 
-  app.post('/operations/apply', async (request) => {
+  app.post('/operations/apply', async (request, reply) => {
     const body = request.body as {
-      operations?: unknown;
+      approvalToken?: string;
       conversationId?: string;
     };
-    const operations = validateOperations(body.operations);
+    if (!body.approvalToken) {
+      return reply.code(400).send({ error: 'approvalToken is required' });
+    }
+
+    let plans: Awaited<ReturnType<typeof planOperations>>;
+    try {
+      plans = operationApprovals.consume(body.approvalToken, projectRoot);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid operation approval';
+      return reply.code(403).send({ error: message });
+    }
+
     return {
-      operations: await executeOperations(operations, process.cwd(), {
+      operations: await executePlannedOperations(plans, projectRoot, {
         conversationId: body.conversationId,
       }),
     };
@@ -280,7 +319,7 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
     });
 
     if (delivery === 'file') {
-      await writePromptFile(process.cwd(), session.id, body.message);
+      await writePromptFile(projectRoot, session.id, body.message);
       logger.info(
         { sessionId: session.id, chars: body.message.length },
         'Prompt saved as attachment file (exceeds injection limit)',
@@ -424,7 +463,7 @@ export async function createBridgeServer(): Promise<FastifyInstance> {
       throw new Error('Prompt file not found');
     }
 
-    const content = await readPromptFile(process.cwd(), sessionId);
+    const content = await readPromptFile(projectRoot, sessionId);
     return {
       fileName: PROMPT_FILE_NAME,
       content,
@@ -507,16 +546,34 @@ function toBrowserJob(session: PromptSession) {
 }
 
 export async function startServer(options: ServerOptions = {}): Promise<FastifyInstance> {
-  const app = await createBridgeServer();
+  let generatedSecurity: Awaited<ReturnType<typeof ensureBridgeSecurityEnvironment>> | undefined;
+  if (
+    options.controlToken === undefined &&
+    options.browserToken === undefined &&
+    options.allowInsecureDev !== true
+  ) {
+    generatedSecurity = await ensureBridgeSecurityEnvironment();
+  }
+
+  const app = await createBridgeServer(options);
   const port = options.port ?? PORT;
   const host = options.host ?? '127.0.0.1';
   await app.listen({ port, host });
-  logger.info({ port, host }, 'Bridge server listening');
+  logger.info({
+    port,
+    host,
+    generatedControlToken: generatedSecurity?.generatedControlToken ?? false,
+    generatedBrowserToken: generatedSecurity?.generatedBrowserToken ?? false,
+    securityConfigPath: generatedSecurity?.configPath,
+  }, 'Bridge server listening');
   return app;
 }
 
-function assertAllowedOrigin(origin?: string): void {
-  if (!isAllowedBridgeOrigin(origin)) {
+function assertAllowedOrigin(
+  securityPolicy: ReturnType<typeof createBridgeSecurityPolicy>,
+  origin?: string,
+): void {
+  if (!securityPolicy.isAllowedPreflightOrigin(origin)) {
     throw new Error('Forbidden bridge origin');
   }
 }

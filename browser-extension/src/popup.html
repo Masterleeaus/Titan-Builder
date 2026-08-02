@@ -38,9 +38,10 @@
           <input id="bridge-port" type="number" min="1024" max="65535" inputmode="numeric" />
         </label>
         <label class="field">
-          <span>Bridge token</span>
-          <input id="bridge-token" type="password" autocomplete="off" placeholder="Optional but recommended" />
+          <span>Browser bridge token</span>
+          <input id="bridge-token" type="password" autocomplete="off" placeholder="Required BRIDGE_BROWSER_TOKEN" />
         </label>
+        <small>Use <code>BRIDGE_BROWSER_TOKEN</code> from <code>~/.openbrowser/.env</code>. The first authenticated extension origin is pinned unless <code>BRIDGE_EXTENSION_ORIGINS</code> is configured.</small>
         <label class="field">
           <span>Preferred AI tab</span>
           <select id="preferred-provider">

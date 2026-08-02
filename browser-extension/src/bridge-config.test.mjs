@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   getBridgeUrl,
   hostMatchesPreferredProvider,
+  isStrongBridgeToken,
   normalizeBridgeConfig,
   withBridgeAuth,
 } from './bridge-config.js';
@@ -22,13 +23,18 @@ test('normalizes bridge settings and rejects invalid ports', () => {
   assert.equal(getBridgeUrl(config), 'http://127.0.0.1:5000');
 });
 
-test('adds bearer authentication only when configured', () => {
+test('adds bearer authentication only for a strong configured browser token', () => {
   assert.deepEqual(withBridgeAuth({ bridgeToken: '' }, { Accept: 'text/plain' }), {
     Accept: 'text/plain',
   });
-  assert.deepEqual(withBridgeAuth({ bridgeToken: 'secret' }, {}), {
-    Authorization: 'Bearer secret',
+  assert.deepEqual(withBridgeAuth({ bridgeToken: 'secret' }, {}), {});
+  assert.equal(isStrongBridgeToken('secret'), false);
+
+  const token = 'browser-'.padEnd(56, 'b');
+  assert.deepEqual(withBridgeAuth({ bridgeToken: token }, {}), {
+    Authorization: `Bearer ${token}`,
   });
+  assert.equal(isStrongBridgeToken(token), true);
 });
 
 test('routes only to the preferred provider when one is selected', () => {

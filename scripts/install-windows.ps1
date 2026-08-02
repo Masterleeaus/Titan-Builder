@@ -38,18 +38,43 @@ $configDirectory = Join-Path $HOME '.openbrowser'
 $configPath = Join-Path $configDirectory '.env'
 New-Item -ItemType Directory -Force -Path $configDirectory | Out-Null
 if (-not (Test-Path $configPath)) {
-    $tokenBytes = New-Object byte[] 48
-    [Security.Cryptography.RandomNumberGenerator]::Fill($tokenBytes)
-    $token = [Convert]::ToBase64String($tokenBytes)
     @(
         'PORT=5000'
-        "BRIDGE_TOKEN=$token"
         'PROMPT_INJECTION_CHAR_LIMIT=40000'
+        'BRIDGE_EXTENSION_ORIGINS='
+        'OPENBROWSER_INSECURE_DEV=0'
         'OPENBROWSER_ALLOW_UNSAFE_COMMANDS=0'
     ) | Set-Content -Encoding UTF8 $configPath
-    Write-Host "Created $configPath with a random bridge token."
+}
+
+$configText = Get-Content -Raw $configPath
+$generatedControlToken = $false
+$generatedBrowserToken = $false
+if ($configText -notmatch '(?m)^BRIDGE_TOKEN=.{32,}$') {
+    $tokenBytes = New-Object byte[] 48
+    [Security.Cryptography.RandomNumberGenerator]::Fill($tokenBytes)
+    $controlToken = [Convert]::ToBase64String($tokenBytes)
+    Add-Content -Encoding UTF8 $configPath "BRIDGE_TOKEN=$controlToken"
+    $generatedControlToken = $true
+}
+if ($configText -notmatch '(?m)^BRIDGE_BROWSER_TOKEN=.{32,}$') {
+    $browserTokenBytes = New-Object byte[] 48
+    [Security.Cryptography.RandomNumberGenerator]::Fill($browserTokenBytes)
+    $browserToken = [Convert]::ToBase64String($browserTokenBytes)
+    Add-Content -Encoding UTF8 $configPath "BRIDGE_BROWSER_TOKEN=$browserToken"
+    $generatedBrowserToken = $true
+}
+if ($configText -notmatch '(?m)^BRIDGE_EXTENSION_ORIGINS=') {
+    Add-Content -Encoding UTF8 $configPath 'BRIDGE_EXTENSION_ORIGINS='
+}
+if ($configText -notmatch '(?m)^OPENBROWSER_INSECURE_DEV=') {
+    Add-Content -Encoding UTF8 $configPath 'OPENBROWSER_INSECURE_DEV=0'
+}
+
+if ($generatedControlToken -or $generatedBrowserToken) {
+    Write-Host "Created missing secure bridge credentials in $configPath"
 } else {
-    Write-Host "Preserved existing $configPath"
+    Write-Host "Preserved existing secure credentials in $configPath"
 }
 
 Write-Step 'Registering the global CLI command'
@@ -62,4 +87,4 @@ Write-Host "1. Open chrome://extensions"
 Write-Host "2. Enable Developer mode"
 Write-Host "3. Load unpacked: $extensionPath"
 Write-Host "4. Open a new PowerShell window and run: openbrowser --help"
-Write-Host "5. Copy the BRIDGE_TOKEN from $configPath into the extension settings"
+Write-Host "5. Copy BRIDGE_BROWSER_TOKEN from $configPath into the extension settings"

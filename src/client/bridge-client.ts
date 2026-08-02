@@ -30,9 +30,11 @@ function baseUrl(port = DEFAULT_PORT): string {
 }
 
 function authHeaders(): Record<string, string> {
-  const token = process.env.BRIDGE_TOKEN;
-  if (!token) {
-    return { 'content-type': 'application/json' };
+  const token = process.env.BRIDGE_TOKEN?.trim();
+  if (!token || token.length < 32) {
+    throw new Error(
+      'A strong BRIDGE_TOKEN is required. Start OpenBrowser once to generate secure bridge credentials.',
+    );
   }
 
   return {

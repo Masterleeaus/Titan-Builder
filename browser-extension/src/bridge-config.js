@@ -66,10 +66,14 @@ export function getBridgeUrl(config) {
 
 export function withBridgeAuth(config, headers = {}) {
   const merged = { ...headers };
-  if (config.bridgeToken) {
+  if (isStrongBridgeToken(config.bridgeToken)) {
     merged.Authorization = `Bearer ${config.bridgeToken}`;
   }
   return merged;
+}
+
+export function isStrongBridgeToken(value) {
+  return String(value ?? '').trim().length >= 32;
 }
 
 export function hostMatchesPreferredProvider(hostname, preferredProvider) {

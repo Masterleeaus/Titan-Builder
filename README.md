@@ -260,9 +260,16 @@ Copy-Item .env.example "$HOME\.openbrowser\.env"
 | ----------------------------- | ------------ | -------------------------------------------------------------- |
 | `OPENBROWSER_CONFIG`          | _(optional)_ | Explicit path to the OpenBrowser environment file              |
 | `PORT`                        | `5000`       | Bridge server port                                             |
-| `BRIDGE_TOKEN`                | _(optional)_ | Bearer token for every non-health bridge request               |
+| `BRIDGE_TOKEN`                | _(generated)_ | High-privilege CLI/control token; never store it in the extension |
+| `BRIDGE_BROWSER_TOKEN`        | _(generated)_ | Separate browser-extension token for browser and shared routes |
+| `BRIDGE_EXTENSION_ORIGINS`    | _(optional)_ | Exact comma-separated extension origins; otherwise first authenticated origin is pinned until restart |
+| `OPENBROWSER_INSECURE_DEV`    | `0`          | Explicit development-only missing-token bypass; never enable for normal use |
 | `PROMPT_INJECTION_CHAR_LIMIT` | `40000`      | Above this length, prompts are sent as a `.txt` file attachment |
 | `OPENBROWSER_ALLOW_UNSAFE_COMMANDS` | `0` | Set to `1` only to re-enable legacy arbitrary `RUN_COMMAND` execution |
+
+The bridge generates distinct control and browser credentials when they are missing. The browser token cannot call session-control or file-operation endpoints. `POST /operations/apply` accepts only a short-lived, one-time approval capability issued for the exact server-side preview; it no longer accepts raw operation arrays.
+
+For isolated local development only, missing-token startup can be enabled explicitly with `OPENBROWSER_INSECURE_DEV=1`. Never use that setting for normal operation, shared machines, or any non-loopback exposure.
 
 ### 3. Build
 
@@ -488,7 +495,7 @@ The extension watches supported AI chat pages, injects prompts, captures respons
 
 6. **Pin the extension** — click the puzzle icon in the Chrome toolbar → pin **OpenBrowser Bridge**.
 
-7. **Configure and verify** — click the extension icon, set the same port and `BRIDGE_TOKEN` used by the CLI, choose a preferred provider if desired, then click **Save Bridge Settings**.
+7. **Configure and verify** — click the extension icon, set the same port and the separate `BRIDGE_BROWSER_TOKEN` from `~/.openbrowser/.env`, choose a preferred provider if desired, then click **Save Bridge Settings**.
 
    The popup reports bridge, SSE, active-provider, and open-tab status. If it shows **Offline**, make sure `openbrowser server` is running and the port matches.
 
@@ -614,7 +621,7 @@ OpenBrowser/
 1. Confirm the server is running (started automatically by `openbrowser ask` / `openbrowser agent`).
 2. Check port 5000 is free: `curl http://127.0.0.1:5000/health`
 3. Reload the extension on `chrome://extensions`
-4. Confirm the popup token exactly matches `BRIDGE_TOKEN` in `~/.openbrowser/.env`
+4. Confirm the popup token exactly matches `BRIDGE_BROWSER_TOKEN` in `~/.openbrowser/.env`
 
 ### Long prompt not attaching
 

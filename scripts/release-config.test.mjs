@@ -50,6 +50,22 @@ test('package and extension versions match for a coherent release', () => {
   assert.equal(manifest.version, packageJson.version);
 });
 
+
+test('release documents distinct secure bridge credentials and the explicit development escape hatch', () => {
+  const example = fs.readFileSync(path.join(root, '.env.example'), 'utf8');
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+  const installer = fs.readFileSync(path.join(root, 'scripts', 'install-windows.ps1'), 'utf8');
+  const popup = fs.readFileSync(path.join(root, 'browser-extension', 'src', 'popup.html'), 'utf8');
+
+  assert.match(example, /^BRIDGE_TOKEN=/m);
+  assert.match(example, /^BRIDGE_BROWSER_TOKEN=/m);
+  assert.match(example, /^OPENBROWSER_INSECURE_DEV=0$/m);
+  assert.match(readme, /BRIDGE_BROWSER_TOKEN/);
+  assert.match(readme, /OPENBROWSER_INSECURE_DEV=1/);
+  assert.match(installer, /BRIDGE_BROWSER_TOKEN=/);
+  assert.match(popup, /BRIDGE_BROWSER_TOKEN/);
+});
+
 test('test scripts use the Node test runner once and include bridge integration', () => {
   const testScript = packageJson.scripts?.test || '';
   const verifyScript = packageJson.scripts?.verify || '';

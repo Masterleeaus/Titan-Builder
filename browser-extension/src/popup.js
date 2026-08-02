@@ -69,10 +69,15 @@ function renderSettings(config) {
 }
 
 async function saveSettings() {
+  const browserToken = tokenInput.value.trim();
+  if (browserToken.length < 32) {
+    settingsResult.textContent = 'A BRIDGE_BROWSER_TOKEN of at least 32 characters is required.';
+    return;
+  }
   settingsResult.textContent = 'Saving...';
   const config = await saveBridgeConfig({
     bridgePort: Number(portInput.value),
-    bridgeToken: tokenInput.value,
+    bridgeToken: browserToken,
     preferredProvider: providerSelect.value,
     superpowerCompatibility: superpowerCheckbox.checked,
   });
@@ -106,7 +111,9 @@ async function refreshStatus() {
   } else {
     setDot(bridgeDot, 'offline');
     bridgeStatus.textContent = 'Offline';
-    bridgeMeta.textContent = `Run openbrowser on port ${config.bridgePort} in your project folder`;
+    bridgeMeta.textContent = config.bridgeToken.length >= 32
+      ? `Run openbrowser on port ${config.bridgePort} in your project folder`
+      : 'Paste BRIDGE_BROWSER_TOKEN from ~/.openbrowser/.env';
   }
 
   const activeHost = getHostname(activeTab[0]?.url);
