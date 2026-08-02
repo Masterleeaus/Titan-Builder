@@ -4,7 +4,7 @@ import {
   extractBalancedJson,
   mergeMarkdownFencesIntoOperations,
   mergeYamlFencesIntoOperations,
-} from './markdown-agent.js';
+} from './markdown-agent.ts';
 
 test('mergeMarkdownFencesIntoOperations', async (t) => {
   await t.test('one unlabeled fence with one pending markdown operation succeeds', () => {

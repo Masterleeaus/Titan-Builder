@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rmdir } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { createPersistentSessionStore } from './persistent-session-store.js';
-import type { PromptSession } from './session-store.js';
+import { createPersistentSessionStore } from './persistent-session-store.ts';
+import type { PromptSession } from './session-store.ts';
 
 describe('PersistentSessionStore', () => {
   let projectRoot: string;

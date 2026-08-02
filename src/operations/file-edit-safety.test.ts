@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { FileOperation } from '../core/types/index.js';
-import { planOperations } from './index.js';
+import type { FileOperation } from '../core/types/index.ts';
+import { planOperations } from './index.ts';
 
 // Helper to extract edit errors from planned operations
 async function getEditError(operation: FileOperation, existingContent: string): Promise<string | null> {
@@ -110,7 +110,7 @@ test('search/replace operations', async (t) => {
     let index = 0;
     while ((index = before.indexOf(search, index)) !== -1) {
       count += 1;
-      index += search.length;
+      index += 1;
     }
 
     assert.equal(count, 3);
@@ -207,10 +207,12 @@ test('line edit operations', async (t) => {
   await t.test('rejects extending endLine beyond file in middle edit', () => {
     const before = 'line 1\nline 2\nline 3';
     const lines = before.split('\n');
+    const endLine = 5;
+    const startLine = 1;
 
     assert.throws(
       () => {
-        if (5 === lines.length + 1 && 1 <= lines.length) {
+        if (endLine > lines.length && !(startLine === lines.length + 1 && endLine === lines.length + 1)) {
           throw new Error(
             `endLine cannot extend beyond file length. ` +
             `File has ${lines.length} lines. To append, use startLine=${lines.length + 1} and endLine=${lines.length + 1}.`,
