@@ -17,6 +17,6 @@
     "sourceMap": true,
     "declaration": true
   },
-  "include": ["bridge-server.ts", "seed-db.ts"],
+  "include": ["bridge-server.ts", "environment.ts", "seed-db.ts"],
   "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }
