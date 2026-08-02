@@ -9,6 +9,10 @@ import fs from 'fs-extra';
 import type { FileOperation } from '../core/index.js';
 import { normalizeMultilineText } from '../parser/markdown-agent.js';
 import { appendHistory } from '../memory/index.js';
+import {
+  openProjectInternalState,
+  type ProjectInternalState,
+} from '../security/internal-state.js';
 import { canonicalizeProjectRoot, resolveProjectPath } from '../security/project-path.js';
 import { expandMkdirOperations, looksLikePowerShellCommand } from './mkdir-normalize.js';
 import { preserveOperationOrder } from './operation-order.js';
@@ -81,6 +85,7 @@ interface TransactionJournal {
 }
 
 interface PreparedTransaction {
+  state: ProjectInternalState;
   journal: TransactionJournal;
   journalPath: string;
   backupRoot: string;
@@ -192,7 +197,7 @@ export async function executePlannedOperations(
     transaction.journal.activeOperation = undefined;
     transaction.journal.updatedAt = new Date().toISOString();
     await writeTransactionJournal(transaction);
-    await fs.remove(transaction.backupRoot);
+    await transaction.state.removeTree(transaction.backupRoot);
 
     await appendHistory(root, {
       timestamp: new Date().toISOString(),
@@ -473,7 +478,8 @@ async function prepareTransaction(
   conversationId?: string,
 ): Promise<PreparedTransaction> {
   const id = crypto.randomUUID();
-  const transactionsRoot = path.join(projectRoot, '.openbrowser', 'transactions');
+  const state = await openProjectInternalState(projectRoot);
+  const transactionsRoot = 'transactions';
   const journalPath = path.join(transactionsRoot, `${id}.json`);
   const backupRoot = path.join(transactionsRoot, `${id}.backup`);
   const firstPreconditions = new Map<string, PathPrecondition>();
@@ -512,7 +518,7 @@ async function prepareTransaction(
     });
   }
 
-  await fs.ensureDir(backupRoot);
+  await state.ensureDirectory(backupRoot);
   let backupIndex = 0;
   for (const snapshot of snapshots) {
     if (snapshot.kind !== 'file') {
@@ -520,7 +526,7 @@ async function prepareTransaction(
     }
     const backupPath = path.join(backupRoot, `${backupIndex}.bak`);
     backupIndex += 1;
-    await fs.copyFile(snapshot.absolutePath, backupPath);
+    await state.copyFromFile(backupPath, snapshot.absolutePath);
     snapshot.backupPath = backupPath;
   }
 
@@ -546,7 +552,7 @@ async function prepareTransaction(
     })),
   };
 
-  const transaction = { journal, journalPath, backupRoot, snapshots };
+  const transaction = { state, journal, journalPath, backupRoot, snapshots };
   await writeTransactionJournal(transaction);
   return transaction;
 }
@@ -597,9 +603,10 @@ async function rollbackTransaction(
       if (!snapshot.backupPath) {
         throw new Error(`Missing rollback backup for ${snapshot.relativePath}`);
       }
+      const backup = await transaction.state.readBuffer(snapshot.backupPath);
       await fs.remove(snapshot.absolutePath);
       await fs.ensureDir(path.dirname(snapshot.absolutePath));
-      await fs.copyFile(snapshot.backupPath, snapshot.absolutePath);
+      await fs.writeFile(snapshot.absolutePath, backup);
       if (snapshot.mode !== undefined) {
         await fs.chmod(snapshot.absolutePath, snapshot.mode);
       }
@@ -626,7 +633,7 @@ async function rollbackTransaction(
     transaction.journal.status = 'rolled_back';
     transaction.journal.rollbackStatus = 'rolled_back';
     transaction.journal.updatedAt = new Date().toISOString();
-    await fs.remove(transaction.backupRoot);
+    await transaction.state.removeTree(transaction.backupRoot);
     await writeTransactionJournal(transaction);
     return 'rolled_back';
   } catch (rollbackError) {
@@ -640,10 +647,7 @@ async function rollbackTransaction(
 }
 
 async function writeTransactionJournal(transaction: PreparedTransaction): Promise<void> {
-  await fs.ensureDir(path.dirname(transaction.journalPath));
-  const temporaryPath = `${transaction.journalPath}.${crypto.randomUUID()}.tmp`;
-  await fs.writeJson(temporaryPath, transaction.journal, { spaces: 2 });
-  await renamePath(temporaryPath, transaction.journalPath);
+  await transaction.state.writeJson(transaction.journalPath, transaction.journal);
 }
 
 function pathDepth(value: string): number {
