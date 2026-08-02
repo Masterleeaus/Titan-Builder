@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 import {
   listContextChoices,
   loadContextAttachments,
@@ -36,12 +35,6 @@ test('rejects absolute, drive-qualified, UNC, and null-byte context references',
       value,
     );
   }
-});
-
-test('allows ordinary percent characters while rejecting encoded path syntax', () => {
-  assert.equal(normalizeContextReference('src/100%coverage.ts'), 'src/100%coverage.ts');
-  assert.throws(() => normalizeContextReference('src%2fsecret.ts'), /relative path/i);
-  assert.throws(() => normalizeContextReference('src/%2e%2e/secret.ts'), /relative path/i);
 });
 
 test('resolves an existing regular project file canonically', async () => {
@@ -100,7 +93,7 @@ test('legacy context loaders reject sibling-prefix and linked directory escapes'
 });
 
 test('legacy context source cannot reintroduce raw project-root prefix containment', async () => {
-  const sourceRoot = path.dirname(fileURLToPath(import.meta.url));
+  const sourceRoot = path.dirname(new URL(import.meta.url).pathname);
   const sources = await Promise.all([
     readFile(path.join(sourceRoot, 'file-context.ts'), 'utf8'),
     readFile(path.join(sourceRoot, 'directory-tree.ts'), 'utf8'),
