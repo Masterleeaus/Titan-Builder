@@ -174,6 +174,9 @@ test('quarantines record, audit-prefix, duplicate-event, and truncation mismatch
 
     const restarted = createBrowserRunStore({ runsDir: fixture.directory });
     assert.equal(await restarted.getPrepared(fixture.runId), null);
+    const events = await restarted.events(fixture.runId);
+    assert.equal(events.at(-1)?.type, 'integrity_quarantine');
+    assert.match(String(events.at(-1)?.details?.reason), /missing/u);
   });
 });
 
