@@ -7,6 +7,12 @@ on:
     paths:
       - .github/scripts/apply-issue-116.mjs
       - .github/workflows/apply-issue-116.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/scripts/apply-issue-116.mjs
+      - .github/workflows/apply-issue-116.yml
 
 permissions:
   contents: write
@@ -17,13 +23,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out working branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: fix/issue-116-safe-rollback-revalidation
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
 
