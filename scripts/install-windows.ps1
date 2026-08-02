@@ -28,6 +28,65 @@ function Assert-LastCommand([string]$Description) {
     }
 }
 
+function Resolve-Python {
+    $PythonCandidates = @('python', 'python3', 'py.exe')
+    $MinMajor = 3
+    $MinMinor = 12
+
+    foreach ($candidate in $PythonCandidates) {
+        $pythonPath = $null
+        try {
+            if ($candidate -eq 'py.exe') {
+                # Windows py launcher: try py -3 to get Python 3
+                $pythonPath = Get-Command 'py' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+                if ($pythonPath) {
+                    $versionOutput = (& py -3 --version 2>&1) | Out-String
+                }
+            } else {
+                $pythonPath = Get-Command $candidate -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+                if ($pythonPath) {
+                    $versionOutput = (& $candidate --version 2>&1) | Out-String
+                }
+            }
+
+            if (-not $pythonPath -or -not $versionOutput) {
+                continue
+            }
+
+            # Parse version output: "Python 3.12.1" or "Python 3.11.0"
+            $versionMatch = [regex]::Match($versionOutput, 'Python\s+(\d+)\.(\d+)')
+            if (-not $versionMatch.Success) {
+                continue
+            }
+
+            $major = [int]$versionMatch.Groups[1].Value
+            $minor = [int]$versionMatch.Groups[2].Value
+
+            if ($major -gt $MinMajor -or ($major -eq $MinMajor -and $minor -ge $MinMinor)) {
+                Write-Host "Found Python $major.$minor at $pythonPath"
+                return $pythonPath
+            }
+        } catch {
+            # Silently continue to next candidate
+        }
+    }
+
+    # No suitable Python found
+    throw @"
+Python 3.12 or later was not found in PATH.
+
+Please install Python 3.12 or later from https://python.org/downloads/ and ensure:
+1. You select "Add Python to PATH" during installation
+2. You install Python 3.12 or a newer version
+3. After installation, restart this script
+
+You can verify your Python installation by running:
+  python --version
+  python3 --version
+  py -3 --version
+"@
+}
+
 Write-Step 'Checking Node.js'
 Require-Command 'node'
 $nodeVersion = (& node --version).Trim().TrimStart('v')
@@ -38,11 +97,9 @@ if ($nodeMajor -lt 22) {
 }
 Write-Host "Node.js v$nodeVersion"
 
-Write-Step 'Checking Python for the browser-extension companion'
-Require-Command 'python' 'Install Python 3.12 or later, enable Add Python to PATH, and run this installer again.'
-$pythonVersion = (& python --version 2>&1).ToString().Trim()
-Assert-LastCommand 'Reading the Python version'
-Write-Host $pythonVersion
+Write-Step 'Resolving and validating Python 3.12+ for the browser-extension companion'
+$pythonExecutable = Resolve-Python
+Write-Host "Using Python: $pythonExecutable"
 
 Write-Step 'Activating pnpm 11.2.2 through Corepack'
 Require-Command 'corepack'
