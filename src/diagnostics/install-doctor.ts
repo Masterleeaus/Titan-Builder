@@ -142,9 +142,17 @@ async function resolveConfiguration(input: {
 
   for (const candidate of candidates) {
     try {
-      const values = parseEnvironmentText(await input.readText(candidate));
+      const fileValues = parseEnvironmentText(await input.readText(candidate));
+      const mergedValues: Record<string, string> = { ...fileValues };
+
+      for (const [key, value] of Object.entries(input.env)) {
+        if (value !== undefined && value !== null) {
+          mergedValues[key] = value;
+        }
+      }
+
       return {
-        values,
+        values: mergedValues,
         fileCheck: {
           id: 'config.file',
           status: 'pass',
@@ -155,7 +163,9 @@ async function resolveConfiguration(input: {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
       return {
-        values: {},
+        values: Object.fromEntries(
+          Object.entries(input.env).filter(([, value]) => value !== undefined && value !== null),
+        ),
         fileCheck: {
           id: 'config.file',
           status: 'fail',
