@@ -18,6 +18,7 @@ export interface FileOperation {
   command?: string;
   tool?: string;
   args?: string[];
+  env?: string[];
 }
 
 export interface AIResponse {

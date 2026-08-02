@@ -1,15 +1,21 @@
 import { exec, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
-import { lstat as lstatPath, open, rename as renamePath, unlink } from 'node:fs/promises';
+import { open, rename as renamePath, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { createPatch } from 'diff';
 import fs from 'fs-extra';
 import type { FileOperation } from '../core/index.js';
 import { normalizeMultilineText } from '../parser/markdown-agent.js';
-import type { HistoryEntry } from '../memory/index.js';
+import { appendHistory } from '../memory/index.js';
 import { canonicalizeProjectRoot, resolveProjectPath } from '../security/project-path.js';
+import {
+  buildRepositoryChildEnvironment,
+  formatEnvironmentGrantPreview,
+  redactChildOutput,
+  validateEnvironmentGrants,
+} from './child-environment.js';
 import { expandMkdirOperations, looksLikePowerShellCommand } from './mkdir-normalize.js';
 import { preserveOperationOrder } from './operation-order.js';
 import {
@@ -59,16 +65,10 @@ interface RollbackSnapshot extends PathSnapshot {
   role: 'target' | 'parent';
 }
 
-interface FilesystemIdentity {
-  device: string;
-  inode: string;
-}
-
 interface TransactionJournal {
   id: string;
   status: 'prepared' | 'applying' | 'committed' | 'rolling_back' | 'rolled_back' | 'rollback_failed';
   projectRoot: string;
-  projectRootIdentity: FilesystemIdentity;
   conversationId?: string;
   operationCount: number;
   activeOperation?: number;
@@ -93,18 +93,6 @@ interface PreparedTransaction {
   snapshots: RollbackSnapshot[];
 }
 
-interface ValidatedRollbackSnapshot {
-  snapshot: RollbackSnapshot;
-  absolutePath: string;
-  backupPath?: string;
-}
-
-interface ValidatedRollbackTransaction {
-  projectRoot: string;
-  backupRoot: string;
-  snapshots: ValidatedRollbackSnapshot[];
-}
-
 export async function planOperations(
   operations: FileOperation[],
   projectRoot: string,
@@ -121,12 +109,13 @@ export async function planOperations(
       const cwd = operation.path
         ? await resolveProjectPath(root, operation.path, { requireExisting: true, expectedType: 'directory' })
         : root;
+      const environmentGrants = validateEnvironmentGrants(operation.env ?? []);
       const invocation = resolveToolInvocation(operation.tool ?? '', operation.args ?? [], cwd);
       const toolInputs = await planToolInputs(invocation, root, virtualState);
       plans.push({
-        operation,
+        operation: { ...operation, env: environmentGrants },
         absolutePath: cwd,
-        diff: `RUN_TOOL [${invocation.risk}] ${invocation.displayCommand}`,
+        diff: `${`RUN_TOOL [${invocation.risk}] ${invocation.displayCommand}`}\nENVIRONMENT: ${formatEnvironmentGrantPreview(environmentGrants)}`,
         risk: invocation.risk,
         preconditions: toolInputs.preconditions,
         affectedPaths: toolInputs.affectedPaths,
@@ -143,15 +132,20 @@ export async function planOperations(
       const cwd = operation.path
         ? await resolveProjectPath(root, operation.path, { requireExisting: true, expectedType: 'directory' })
         : root;
+      const environmentGrants = validateEnvironmentGrants(operation.env ?? []);
       plans.push({
-        operation,
+        operation: { ...operation, env: environmentGrants },
         absolutePath: cwd,
-        diff: `RUN_COMMAND [UNSAFE] ${operation.command ?? ''}`,
+        diff: `${`RUN_COMMAND [UNSAFE] ${operation.command ?? ''}`}\nENVIRONMENT: ${formatEnvironmentGrantPreview(environmentGrants)}`,
         risk: 'DESTRUCTIVE',
         preconditions: [],
         affectedPaths: [],
       });
       continue;
+    }
+
+    if (operation.env?.length) {
+      throw new Error(`${operation.action} cannot request environment variable grants`);
     }
 
     if (!operation.path) {
@@ -210,12 +204,26 @@ export async function executePlannedOperations(
     transaction.journal.activeOperation = undefined;
     transaction.journal.updatedAt = new Date().toISOString();
     await writeTransactionJournal(transaction);
+    await fs.remove(transaction.backupRoot);
+
+    await appendHistory(root, {
+      timestamp: new Date().toISOString(),
+      conversationId: options.conversationId,
+      mode: 'agent',
+      summary: `Applied ${plans.length} operation(s)`,
+      status: 'committed',
+      transactionId: transaction.journal.id,
+      operationCount: plans.length,
+      rollbackStatus: 'not_required',
+    });
+
+    return plans;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const rollbackStatus = await rollbackTransaction(transaction, message);
 
     try {
-      await appendTransactionHistory(transaction, {
+      await appendHistory(root, {
         timestamp: new Date().toISOString(),
         conversationId: options.conversationId,
         mode: 'agent',
@@ -238,32 +246,6 @@ export async function executePlannedOperations(
       { cause: error },
     );
   }
-
-  try {
-    await appendTransactionHistory(transaction, {
-      timestamp: new Date().toISOString(),
-      conversationId: options.conversationId,
-      mode: 'agent',
-      summary: `Applied ${plans.length} operation(s)`,
-      status: 'committed',
-      transactionId: transaction.journal.id,
-      operationCount: plans.length,
-      rollbackStatus: 'not_required',
-    });
-    await fs.remove(transaction.backupRoot);
-  } catch (error) {
-    const message = formatUnknownError(error);
-    transaction.journal.error = `Transaction committed but finalization failed: ${message}`;
-    transaction.journal.updatedAt = new Date().toISOString();
-    await writeTransactionJournal(transaction).catch(() => undefined);
-    throw new Error(
-      `Operation transaction committed, but post-commit finalization failed: ${message}. Applied changes were not rolled back.`,
-      { cause: error },
-    );
-  }
-
-  return plans;
-
 }
 
 async function resolveFileOperationPath(
@@ -506,7 +488,6 @@ async function prepareTransaction(
   const transactionsRoot = path.join(projectRoot, '.openbrowser', 'transactions');
   const journalPath = path.join(transactionsRoot, `${id}.json`);
   const backupRoot = path.join(transactionsRoot, `${id}.backup`);
-  const projectRootIdentity = await readFilesystemIdentity(projectRoot);
   const firstPreconditions = new Map<string, PathPrecondition>();
 
   for (const plan of plans) {
@@ -560,7 +541,6 @@ async function prepareTransaction(
     id,
     status: 'prepared',
     projectRoot,
-    projectRootIdentity,
     conversationId,
     operationCount: plans.length,
     createdAt: now,
@@ -601,85 +581,64 @@ async function rollbackTransaction(
   transaction: PreparedTransaction,
   errorMessage: string,
 ): Promise<'rolled_back' | 'rollback_failed'> {
+  transaction.journal.status = 'rolling_back';
+  transaction.journal.error = errorMessage;
+  transaction.journal.updatedAt = new Date().toISOString();
+  await writeTransactionJournal(transaction).catch(() => undefined);
+
   try {
-    const validated = await validateRollbackTransaction(transaction);
+    const targets = transaction.snapshots
+      .filter((snapshot) => snapshot.role === 'target')
+      .sort((left, right) => pathDepth(right.absolutePath) - pathDepth(left.absolutePath));
 
-    transaction.journal.status = 'rolling_back';
-    transaction.journal.error = errorMessage;
-    transaction.journal.updatedAt = new Date().toISOString();
-    await writeTransactionJournal(transaction);
-
-    const targets = validated.snapshots
-      .filter(({ snapshot }) => snapshot.role === 'target')
-      .sort((left, right) => pathDepth(right.snapshot.relativePath) - pathDepth(left.snapshot.relativePath));
-
-    for (const entry of targets) {
-      const projectRoot = await assertRollbackProjectIdentity(transaction);
-      const absolutePath = await resolveRollbackTarget(projectRoot, entry.snapshot);
-
-      if (entry.snapshot.kind === 'missing') {
-        await fs.remove(absolutePath);
+    for (const snapshot of targets) {
+      if (snapshot.kind === 'missing') {
+        await fs.remove(snapshot.absolutePath);
         continue;
       }
-
-      if (entry.snapshot.kind === 'directory') {
-        if (await fs.pathExists(absolutePath)) {
-          const current = await fs.lstat(absolutePath);
-          if (current.isSymbolicLink()) {
-            throw new Error(`Rollback path contains a symbolic link or junction: ${entry.snapshot.relativePath}`);
-          }
+      if (snapshot.kind === 'directory') {
+        if (await fs.pathExists(snapshot.absolutePath)) {
+          const current = await fs.lstat(snapshot.absolutePath);
           if (!current.isDirectory()) {
-            await fs.remove(absolutePath);
+            await fs.remove(snapshot.absolutePath);
           }
         }
-        await resolveRollbackParent(projectRoot, entry.snapshot.relativePath);
-        await fs.ensureDir(absolutePath);
+        await fs.ensureDir(snapshot.absolutePath);
         continue;
       }
-
-      if (!entry.backupPath) {
-        throw new Error(`Missing rollback backup for ${entry.snapshot.relativePath}`);
+      if (!snapshot.backupPath) {
+        throw new Error(`Missing rollback backup for ${snapshot.relativePath}`);
       }
-
-      const backupPath = await resolveRollbackBackupPath(
-        projectRoot,
-        validated.backupRoot,
-        entry.snapshot,
-      );
-      await fs.remove(absolutePath);
-      await resolveRollbackParent(projectRoot, entry.snapshot.relativePath);
-      await fs.copyFile(backupPath, absolutePath);
-      if (entry.snapshot.mode !== undefined) {
-        await fs.chmod(absolutePath, entry.snapshot.mode);
+      await fs.remove(snapshot.absolutePath);
+      await fs.ensureDir(path.dirname(snapshot.absolutePath));
+      await fs.copyFile(snapshot.backupPath, snapshot.absolutePath);
+      if (snapshot.mode !== undefined) {
+        await fs.chmod(snapshot.absolutePath, snapshot.mode);
       }
     }
 
-    const parents = validated.snapshots
-      .filter(({ snapshot }) => snapshot.role === 'parent')
-      .sort((left, right) => pathDepth(right.snapshot.relativePath) - pathDepth(left.snapshot.relativePath));
-    for (const entry of parents) {
-      const projectRoot = await assertRollbackProjectIdentity(transaction);
-      const absolutePath = await resolveRollbackTarget(projectRoot, entry.snapshot);
-
-      if (entry.snapshot.kind === 'missing') {
+    const parents = transaction.snapshots
+      .filter((snapshot) => snapshot.role === 'parent')
+      .sort((left, right) => pathDepth(right.absolutePath) - pathDepth(left.absolutePath));
+    for (const snapshot of parents) {
+      if (snapshot.kind === 'missing') {
         try {
-          await fs.rmdir(absolutePath);
+          await fs.rmdir(snapshot.absolutePath);
         } catch (error) {
           const code = (error as NodeJS.ErrnoException).code;
           if (code !== 'ENOENT' && code !== 'ENOTEMPTY' && code !== 'EEXIST') {
             throw error;
           }
         }
-      } else if (entry.snapshot.kind === 'directory') {
-        await resolveRollbackParent(projectRoot, entry.snapshot.relativePath);
-        await fs.ensureDir(absolutePath);
+      } else if (snapshot.kind === 'directory') {
+        await fs.ensureDir(snapshot.absolutePath);
       }
     }
 
     transaction.journal.status = 'rolled_back';
     transaction.journal.rollbackStatus = 'rolled_back';
     transaction.journal.updatedAt = new Date().toISOString();
-    await fs.remove(validated.backupRoot);
+    await fs.remove(transaction.backupRoot);
     await writeTransactionJournal(transaction);
     return 'rolled_back';
   } catch (rollbackError) {
@@ -692,209 +651,11 @@ async function rollbackTransaction(
   }
 }
 
-async function validateRollbackTransaction(
-  transaction: PreparedTransaction,
-): Promise<ValidatedRollbackTransaction> {
-  const projectRoot = await assertRollbackProjectIdentity(transaction);
-  const backupRoot = await resolveRollbackBackupRoot(projectRoot, transaction.backupRoot);
-  const snapshots: ValidatedRollbackSnapshot[] = [];
-
-  for (const snapshot of transaction.snapshots) {
-    const absolutePath = await resolveRollbackTarget(projectRoot, snapshot);
-    const backupPath = snapshot.kind === 'file'
-      ? await resolveRollbackBackupPath(projectRoot, backupRoot, snapshot)
-      : undefined;
-    snapshots.push({ snapshot, absolutePath, backupPath });
-  }
-
-  return { projectRoot, backupRoot, snapshots };
-}
-
-async function assertRollbackProjectIdentity(
-  transaction: PreparedTransaction,
-): Promise<string> {
-  const projectRoot = await canonicalizeProjectRoot(transaction.journal.projectRoot);
-  if (projectRoot !== transaction.journal.projectRoot) {
-    throw new Error(
-      `Rollback project root changed from ${transaction.journal.projectRoot} to ${projectRoot}`,
-    );
-  }
-
-  const currentIdentity = await readFilesystemIdentity(projectRoot);
-  if (!sameFilesystemIdentity(currentIdentity, transaction.journal.projectRootIdentity)) {
-    throw new Error(`Rollback project root identity changed: ${projectRoot}`);
-  }
-
-  return projectRoot;
-}
-
-async function resolveRollbackBackupRoot(
-  projectRoot: string,
-  backupRoot: string,
-): Promise<string> {
-  const relativePath = path.relative(projectRoot, backupRoot);
-  assertSafeRollbackRelativePath(relativePath, 'rollback backup directory');
-  const resolved = await resolveProjectPath(projectRoot, relativePath, {
-    requireExisting: true,
-    expectedType: 'directory',
-  });
-  if (resolved !== backupRoot) {
-    throw new Error(`Rollback backup directory identity changed: ${relativePath}`);
-  }
-  return resolved;
-}
-
-async function resolveRollbackTarget(
-  projectRoot: string,
-  snapshot: RollbackSnapshot,
-): Promise<string> {
-  assertSafeRollbackRelativePath(snapshot.relativePath, 'rollback target');
-  await resolveRollbackParent(projectRoot, snapshot.relativePath);
-  const absolutePath = await resolveProjectPath(projectRoot, snapshot.relativePath);
-  const expectedPath = path.resolve(projectRoot, snapshot.relativePath);
-  if (absolutePath !== expectedPath) {
-    throw new Error(`Rollback target identity changed: ${snapshot.relativePath}`);
-  }
-  return absolutePath;
-}
-
-async function resolveRollbackParent(
-  projectRoot: string,
-  relativePath: string,
-): Promise<string> {
-  const parentRelativePath = path.dirname(relativePath);
-  const resolvedParent = await resolveProjectPath(projectRoot, parentRelativePath, {
-    requireExisting: true,
-    expectedType: 'directory',
-  });
-  const expectedParent = path.resolve(projectRoot, parentRelativePath);
-  if (resolvedParent !== expectedParent) {
-    throw new Error(`Rollback parent identity changed: ${parentRelativePath}`);
-  }
-  return resolvedParent;
-}
-
-async function resolveRollbackBackupPath(
-  projectRoot: string,
-  backupRoot: string,
-  snapshot: RollbackSnapshot,
-): Promise<string> {
-  if (!snapshot.backupPath) {
-    throw new Error(`Missing rollback backup for ${snapshot.relativePath}`);
-  }
-
-  const backupRelativePath = path.relative(backupRoot, snapshot.backupPath);
-  assertSafeRollbackRelativePath(backupRelativePath, 'rollback backup');
-  const expectedBackupPath = path.resolve(backupRoot, backupRelativePath);
-  const projectRelativePath = path.relative(projectRoot, expectedBackupPath);
-  assertSafeRollbackRelativePath(projectRelativePath, 'rollback backup');
-  const resolvedBackupPath = await resolveProjectPath(projectRoot, projectRelativePath, {
-    requireExisting: true,
-    expectedType: 'file',
-  });
-
-  if (!isPathInside(backupRoot, resolvedBackupPath) || resolvedBackupPath !== expectedBackupPath) {
-    throw new Error(`Rollback backup escaped its transaction directory: ${backupRelativePath}`);
-  }
-
-  return resolvedBackupPath;
-}
-
-function assertSafeRollbackRelativePath(relativePath: string, label: string): void {
-  const portablePath = relativePath.replace(/\\/gu, '/');
-  const segments = portablePath.split('/').filter(Boolean);
-  if (
-    !relativePath ||
-    relativePath === '.' ||
-    path.isAbsolute(relativePath) ||
-    path.posix.isAbsolute(relativePath) ||
-    path.win32.isAbsolute(relativePath) ||
-    segments.includes('..')
-  ) {
-    throw new Error(`Unsafe ${label} path: ${relativePath}`);
-  }
-}
-
-function isPathInside(parentPath: string, targetPath: string): boolean {
-  const relativePath = path.relative(parentPath, targetPath);
-  return relativePath === '' || (
-    !path.isAbsolute(relativePath) &&
-    relativePath !== '..' &&
-    !relativePath.startsWith(`..${path.sep}`)
-  );
-}
-
-async function readFilesystemIdentity(targetPath: string): Promise<FilesystemIdentity> {
-  const metadata = await lstatPath(targetPath, { bigint: true });
-  return {
-    device: metadata.dev.toString(),
-    inode: metadata.ino.toString(),
-  };
-}
-
-function sameFilesystemIdentity(
-  left: FilesystemIdentity,
-  right: FilesystemIdentity,
-): boolean {
-  return left.device === right.device && left.inode === right.inode;
-}
-
-async function resolveTransactionMetadataPath(
-  transaction: PreparedTransaction,
-  relativePath: string,
-): Promise<string> {
-  const projectRoot = await assertRollbackProjectIdentity(transaction);
-  assertSafeRollbackRelativePath(relativePath, 'transaction metadata');
-
-  const parentRelativePath = path.dirname(relativePath);
-  const resolvedParent = await resolveProjectPath(projectRoot, parentRelativePath, {
-    requireExisting: true,
-    expectedType: 'directory',
-  });
-  const expectedParent = path.resolve(projectRoot, parentRelativePath);
-  if (resolvedParent !== expectedParent) {
-    throw new Error(`Transaction metadata parent identity changed: ${parentRelativePath}`);
-  }
-
-  const resolvedPath = await resolveProjectPath(projectRoot, relativePath, {
-    expectedType: 'file',
-  });
-  const expectedPath = path.resolve(projectRoot, relativePath);
-  if (resolvedPath !== expectedPath) {
-    throw new Error(`Transaction metadata path identity changed: ${relativePath}`);
-  }
-  return resolvedPath;
-}
-
-async function appendTransactionHistory(
-  transaction: PreparedTransaction,
-  entry: HistoryEntry,
-): Promise<void> {
-  const relativePath = path.join('.openbrowser', 'history.json');
-  let historyPath = await resolveTransactionMetadataPath(transaction, relativePath);
-  const snapshot = await readPathSnapshot(historyPath);
-  let history: HistoryEntry[] = [];
-
-  if (snapshot.kind === 'file') {
-    const parsed = JSON.parse(snapshot.content ?? '[]') as unknown;
-    if (!Array.isArray(parsed)) {
-      throw new Error('Transaction history file must contain an array');
-    }
-    history = parsed as HistoryEntry[];
-  }
-
-  history.push(entry);
-  historyPath = await resolveTransactionMetadataPath(transaction, relativePath);
-  await safeWriteFile(historyPath, JSON.stringify(history, null, 2));
-}
-
 async function writeTransactionJournal(transaction: PreparedTransaction): Promise<void> {
-  const relativePath = path.relative(
-    transaction.journal.projectRoot,
-    transaction.journalPath,
-  );
-  const journalPath = await resolveTransactionMetadataPath(transaction, relativePath);
-  await safeWriteFile(journalPath, JSON.stringify(transaction.journal, null, 2));
+  await fs.ensureDir(path.dirname(transaction.journalPath));
+  const temporaryPath = `${transaction.journalPath}.${crypto.randomUUID()}.tmp`;
+  await fs.writeJson(temporaryPath, transaction.journal, { spaces: 2 });
+  await renamePath(temporaryPath, transaction.journalPath);
 }
 
 function pathDepth(value: string): number {
@@ -919,7 +680,7 @@ async function applyOperation(
         : projectRoot;
       const invocation = resolveToolInvocation(operation.tool ?? '', operation.args ?? [], cwd);
       onStep?.('running command', `${invocation.toolId} [${invocation.risk}]`);
-      await runTool(invocation);
+      await runTool(invocation, operation.env ?? []);
       break;
     }
     case 'RUN_COMMAND': {
@@ -932,7 +693,7 @@ async function applyOperation(
         ? await resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'directory' })
         : projectRoot;
       onStep?.('running command', `UNSAFE legacy command: ${operation.command ?? ''}`);
-      await runShellCommand(operation.command ?? '', cwd);
+      await runShellCommand(operation.command ?? '', cwd, operation.env ?? []);
       break;
     }
     case 'CREATE_FOLDER': {
@@ -1050,16 +811,20 @@ async function safeWriteFile(filePath: string, content: string): Promise<void> {
   }
 }
 
-async function runTool(invocation: ToolInvocation): Promise<void> {
+async function runTool(
+  invocation: ToolInvocation,
+  environmentGrants: readonly string[],
+): Promise<void> {
   const maxOutputBytes = 2 * 1024 * 1024;
   const timeoutMs = 120_000;
+  const childEnvironment = buildRepositoryChildEnvironment(process.env, environmentGrants);
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(invocation.executable, invocation.args, {
       cwd: invocation.cwd,
       shell: false,
       windowsHide: true,
-      env: process.env,
+      env: childEnvironment.env,
     });
 
     let stdout = '';
@@ -1089,10 +854,14 @@ async function runTool(invocation: ToolInvocation): Promise<void> {
 
     child.stdout?.on('data', (chunk: Buffer) => append('stdout', chunk));
     child.stderr?.on('data', (chunk: Buffer) => append('stderr', chunk));
-    child.on('error', (error) => finish(new Error(`Failed to start ${invocation.toolId}: ${error.message}`)));
+    child.on('error', (error) => finish(new Error(
+      redactChildOutput(`Failed to start ${invocation.toolId}: ${error.message}`, childEnvironment.redactions),
+    )));
     child.on('close', (code, signal) => {
-      if (stdout.trim()) process.stdout.write(`${stdout.trim()}\n`);
-      if (stderr.trim()) process.stderr.write(`${stderr.trim()}\n`);
+      const safeStdout = redactChildOutput(stdout.trim(), childEnvironment.redactions);
+      const safeStderr = redactChildOutput(stderr.trim(), childEnvironment.redactions);
+      if (safeStdout) process.stdout.write(`${safeStdout}\n`);
+      if (safeStderr) process.stderr.write(`${safeStderr}\n`);
       if (code === 0) {
         finish();
         return;
@@ -1111,31 +880,39 @@ async function runTool(invocation: ToolInvocation): Promise<void> {
   });
 }
 
-async function runShellCommand(command: string, cwd: string): Promise<void> {
+async function runShellCommand(
+  command: string,
+  cwd: string,
+  environmentGrants: readonly string[],
+): Promise<void> {
   const trimmed = command.trim();
   if (!trimmed) {
     throw new Error('RUN_COMMAND is empty');
   }
 
   const shell = resolveShell(trimmed);
+  const childEnvironment = buildRepositoryChildEnvironment(process.env, environmentGrants);
 
   try {
     const { stdout, stderr } = await execAsync(trimmed, {
       cwd,
       shell,
+      env: childEnvironment.env,
       timeout: 120_000,
       maxBuffer: 2 * 1024 * 1024,
     });
 
-    if (stdout.trim()) {
-      process.stdout.write(`${stdout.trim()}\n`);
+    const safeStdout = redactChildOutput(stdout.trim(), childEnvironment.redactions);
+    const safeStderr = redactChildOutput(stderr.trim(), childEnvironment.redactions);
+    if (safeStdout) {
+      process.stdout.write(`${safeStdout}\n`);
     }
-    if (stderr.trim()) {
-      process.stderr.write(`${stderr.trim()}\n`);
+    if (safeStderr) {
+      process.stderr.write(`${safeStderr}\n`);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Command failed: ${message}`);
+    throw new Error(`Command failed: ${redactChildOutput(message, childEnvironment.redactions)}`);
   }
 }
 

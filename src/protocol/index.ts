@@ -32,6 +32,7 @@ export const operationSchema = z.object({
   command: z.string().optional(),
   tool: z.string().min(1).max(100).optional(),
   args: z.array(z.string().max(300)).max(20).optional(),
+  env: z.array(z.string().min(1).max(100)).max(32).optional(),
 }).superRefine((operation, ctx) => {
   if (operation.action === 'RUN_TOOL') {
     if (!operation.tool?.trim()) {
