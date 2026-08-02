@@ -33,6 +33,7 @@ test('route scopes separate browser lifecycle from privileged control endpoints'
   assert.equal(resolveBridgeRouteScope('POST', '/operations/preview'), 'control');
   assert.equal(resolveBridgeRouteScope('POST', '/operations/apply'), 'control');
   assert.equal(resolveBridgeRouteScope('POST', '/session/prompt'), 'control');
+  assert.equal(resolveBridgeRouteScope('GET', '/tools'), 'shared');
   assert.equal(resolveBridgeRouteScope('GET', '/project/status'), 'shared');
   assert.equal(resolveBridgeRouteScope('POST', '/project/memory'), 'shared');
 });
