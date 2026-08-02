@@ -1147,15 +1147,27 @@ function nextContent(operation: FileOperation, before: string): string {
   if (operation.search !== undefined && operation.replace !== undefined) {
     const search = normalizeMultilineText(operation.search);
     const replace = normalizeMultilineText(operation.replace);
-    const searchIndex = before.indexOf(search);
-    if (searchIndex === -1) {
+
+    // Count occurrences of search text
+    let count = 0;
+    let index = 0;
+    while ((index = before.indexOf(search, index)) !== -1) {
+      count += 1;
+      index += search.length;
+    }
+
+    if (count === 0) {
       throw new Error(`Search text not found in ${operation.path}`);
     }
-    const nextIndex = before.indexOf(search, searchIndex + 1);
-    if (nextIndex !== -1) {
-      throw new Error(`Search text appears ${countOccurrences(before, search)} times in ${operation.path}; ambiguous match without explicit occurrence selector`);
+
+    if (count > 1) {
+      throw new Error(
+        `Search text in ${operation.path} is ambiguous: found ${count} matches. ` +
+        `Provide additional context or an occurrence specifier to disambiguate.`,
+      );
     }
-    return before.substring(0, searchIndex) + replace + before.substring(searchIndex + search.length);
+
+    return before.replace(search, replace);
   }
 
   if (operation.content !== undefined) {
@@ -1176,8 +1188,28 @@ function applyLineEdit(
   }
 
   const lines = before.split('\n');
-  if (startLine > lines.length + 1) {
-    throw new Error(`startLine ${startLine} is beyond end of file (${lines.length} lines)`);
+  const lineCount = lines.length;
+
+  if (startLine > lineCount + 1) {
+    throw new Error(
+      `startLine ${startLine} is beyond end of file (${lineCount} lines total)`,
+    );
+  }
+
+  // Reject endLine beyond file length unless it's for an append operation
+  // An append operation has startLine at or beyond EOF and endLine equal to lineCount+1
+  if (endLine > lineCount + 1) {
+    throw new Error(
+      `endLine ${endLine} is beyond end of file (${lineCount} lines total). ` +
+      `To append at EOF, use startLine=${lineCount + 1} and endLine=${lineCount + 1}.`,
+    );
+  }
+
+  if (endLine === lineCount + 1 && startLine <= lineCount) {
+    throw new Error(
+      `endLine cannot extend beyond file length. ` +
+      `File has ${lineCount} lines. To append, use startLine=${lineCount + 1} and endLine=${lineCount + 1}.`,
+    );
   }
 
   if (endLine > lines.length) {
@@ -1185,7 +1217,7 @@ function applyLineEdit(
   }
 
   const startIndex = startLine - 1;
-  const endIndex = endLine;
+  const endIndex = endLine > lineCount ? lineCount : endLine;
   const replacementLines = replacement.split('\n');
 
   return [
