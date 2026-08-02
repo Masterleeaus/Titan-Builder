@@ -166,6 +166,7 @@ test('stop escalates to force only when graceful termination does not exit', asy
     entryPath: '/service.js',
     startedAt: '2026-01-01T00:00:00.000Z',
     logPath: paths.logPath,
+    nonce: 'test-nonce',
   }), 'utf8');
   let running = true;
   const signals: string[] = [];
