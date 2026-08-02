@@ -99,14 +99,24 @@ $generatedControlToken = $false
 $generatedBrowserToken = $false
 if ($configText -notmatch '(?m)^BRIDGE_TOKEN=.{32,}$') {
     $tokenBytes = New-Object byte[] 48
-    [Security.Cryptography.RandomNumberGenerator]::Fill($tokenBytes)
+    $controlRng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $controlRng.GetBytes($tokenBytes)
+    } finally {
+        $controlRng.Dispose()
+    }
     $controlToken = [Convert]::ToBase64String($tokenBytes)
     Add-Content -Encoding UTF8 $configPath "BRIDGE_TOKEN=$controlToken"
     $generatedControlToken = $true
 }
 if ($configText -notmatch '(?m)^BRIDGE_BROWSER_TOKEN=.{32,}$') {
     $browserTokenBytes = New-Object byte[] 48
-    [Security.Cryptography.RandomNumberGenerator]::Fill($browserTokenBytes)
+    $browserRng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $browserRng.GetBytes($browserTokenBytes)
+    } finally {
+        $browserRng.Dispose()
+    }
     $browserToken = [Convert]::ToBase64String($browserTokenBytes)
     Add-Content -Encoding UTF8 $configPath "BRIDGE_BROWSER_TOKEN=$browserToken"
     $generatedBrowserToken = $true
