@@ -56,14 +56,22 @@ test('repository children receive only the baseline runtime allowlist by default
   assert.equal(result.env.HTTP_PROXY, undefined);
 });
 
-test('explicit non-sensitive grants are preserved by name and rendered deterministically', () => {
-  const grants = validateEnvironmentGrants(['HTTP_PROXY', 'CUSTOM_BUILD_FLAG', 'HTTP_PROXY']);
+test('explicit non-sensitive grants are canonical, deterministic, and value-redacted', () => {
+  const grants = validateEnvironmentGrants(['http_proxy', 'CUSTOM_BUILD_FLAG', 'HTTP_PROXY']);
   const result = buildRepositoryChildEnvironment(sourceEnvironment, grants);
 
   assert.deepEqual(grants, ['CUSTOM_BUILD_FLAG', 'HTTP_PROXY']);
   assert.equal(result.env.CUSTOM_BUILD_FLAG, 'enabled');
   assert.equal(result.env.HTTP_PROXY, 'http://proxy.example:8080');
   assert.equal(formatEnvironmentGrantPreview(grants), 'CUSTOM_BUILD_FLAG, HTTP_PROXY');
+
+  const redacted = redactChildOutput(
+    'flag=enabled proxy=http://proxy.example:8080',
+    result.redactions,
+  );
+  assert.equal(redacted.includes('enabled'), false);
+  assert.equal(redacted.includes('http://proxy.example:8080'), false);
+  assert.equal(redacted, 'flag=[REDACTED] proxy=[REDACTED]');
 });
 
 test('secret-bearing and process-injection variables cannot be granted', () => {
@@ -123,7 +131,7 @@ test('planned operations bind normalized grant names into the approval preview',
     {
       action: 'RUN_TOOL',
       tool: 'node.version',
-      env: ['HTTP_PROXY', 'CUSTOM_BUILD_FLAG', 'HTTP_PROXY'],
+      env: ['http_proxy', 'CUSTOM_BUILD_FLAG', 'HTTP_PROXY'],
     },
   ], projectRoot);
 
@@ -153,7 +161,7 @@ test('npm, pnpm, direct tools, and legacy commands receive sanitized environment
     "console.log(JSON.stringify({",
     "  bridge: process.env.BRIDGE_TOKEN ?? null,",
     "  provider: process.env.OPENAI_API_KEY ?? null,",
-    "  custom: process.env.CUSTOM_BUILD_FLAG ?? null,",
+    "  customPresent: process.env.CUSTOM_BUILD_FLAG === 'approved-value',",
     `  literal: ${JSON.stringify(bridgeSecret)},`,
     '}));',
   ].join('\n');
@@ -210,11 +218,12 @@ test('npm, pnpm, direct tools, and legacy commands receive sanitized environment
 
   assert.equal(output.includes(bridgeSecret), false);
   assert.equal(output.includes(providerSecret), false);
+  assert.equal(output.includes('approved-value'), false);
   assert.match(output, /\[REDACTED\]/u);
   assert.match(output, /"bridge":null/u);
   assert.match(output, /"provider":null/u);
-  assert.match(output, /"custom":"approved-value"/u);
-  assert.match(output, /"custom":null/u);
+  assert.match(output, /"customPresent":true/u);
+  assert.match(output, /"customPresent":false/u);
 });
 
 async function temporaryDirectory(prefix: string): Promise<string> {
