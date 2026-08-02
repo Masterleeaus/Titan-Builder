@@ -1,0 +1,125 @@
+name: Relocate Workspace Tools Into Extension
+
+on:
+  push:
+    branches:
+      - feature/openbrowser-workspace-tools
+    paths:
+      - '.github/workflows/relocate-workspace-tools.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  relocate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/openbrowser-workspace-tools
+          fetch-depth: 0
+
+      - name: Relocate workspace feature files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          source_root='tools/openbrowser-workspace'
+          target_root='browser-extension'
+
+          test -d "$source_root"
+          test -f "$target_root/manifest.json"
+
+          for target in \
+            .env.example \
+            README.md \
+            analysis_tools.py \
+            bridge-server.test.ts \
+            bridge-server.ts \
+            dashboard.ps1 \
+            gh-openbrowser \
+            openbrowser.ps1 \
+            package.json \
+            pnpm-lock.yaml \
+            pnpm-workspace.yaml \
+            schema.sql \
+            seed-db.ts \
+            tsconfig.json \
+            .vscode/code-snippets.code-snippets \
+            .vscode/tasks.json \
+            hooks/pre-commit \
+            tests/test_analysis_tools.py; do
+            if [[ -e "$target_root/$target" ]]; then
+              echo "Refusing to overwrite existing extension path: $target_root/$target" >&2
+              exit 1
+            fi
+          done
+
+          mkdir -p "$target_root/.vscode" "$target_root/hooks" "$target_root/tests"
+
+          git mv "$source_root/.env.example" "$target_root/.env.example"
+          git mv "$source_root/.vscode/code-snippets.code-snippets" "$target_root/.vscode/code-snippets.code-snippets"
+          git mv "$source_root/.vscode/tasks.json" "$target_root/.vscode/tasks.json"
+          git mv "$source_root/README.md" "$target_root/README.md"
+          git mv "$source_root/analysis_tools.py" "$target_root/analysis_tools.py"
+          git mv "$source_root/bridge-server.test.ts" "$target_root/bridge-server.test.ts"
+          git mv "$source_root/bridge-server.ts" "$target_root/bridge-server.ts"
+          git mv "$source_root/dashboard.ps1" "$target_root/dashboard.ps1"
+          git mv "$source_root/gh-openbrowser" "$target_root/gh-openbrowser"
+          git mv "$source_root/hooks/pre-commit" "$target_root/hooks/pre-commit"
+          git mv "$source_root/openbrowser.ps1" "$target_root/openbrowser.ps1"
+          git mv "$source_root/package.json" "$target_root/package.json"
+          git mv "$source_root/pnpm-lock.yaml" "$target_root/pnpm-lock.yaml"
+          git mv "$source_root/pnpm-workspace.yaml" "$target_root/pnpm-workspace.yaml"
+          git mv "$source_root/schema.sql" "$target_root/schema.sql"
+          git mv "$source_root/seed-db.ts" "$target_root/seed-db.ts"
+          git mv "$source_root/tests/test_analysis_tools.py" "$target_root/tests/test_analysis_tools.py"
+          git mv "$source_root/tsconfig.json" "$target_root/tsconfig.json"
+
+          rmdir "$source_root/.vscode" "$source_root/hooks" "$source_root/tests" "$source_root"
+          rmdir tools 2>/dev/null || true
+
+          python - <<'PY'
+          from pathlib import Path
+
+          paths = [
+              Path('.github/workflows/workspace-tools.yml'),
+              Path('docs/superpowers/plans/2026-08-02-openbrowser-workspace-tools.md'),
+              Path('docs/superpowers/specs/2026-08-02-openbrowser-workspace-tools-design.md'),
+              Path('browser-extension/README.md'),
+              Path('browser-extension/openbrowser.ps1'),
+              Path('browser-extension/dashboard.ps1'),
+              Path('browser-extension/gh-openbrowser'),
+              Path('browser-extension/hooks/pre-commit'),
+              Path('browser-extension/.vscode/tasks.json'),
+          ]
+
+          for file_path in paths:
+              source = file_path.read_text(encoding='utf-8')
+              source = source.replace('tools/openbrowser-workspace', 'browser-extension')
+              source = source.replace('under `browser-extension/` as an independent pnpm workspace package', 'directly inside `browser-extension/` as the extension\'s local tooling package')
+              file_path.write_text(source, encoding='utf-8')
+          PY
+
+          if git grep -n 'tools/openbrowser-workspace' -- . ':!pnpm-lock.yaml'; then
+            echo 'Stale tools/openbrowser-workspace references remain.' >&2
+            exit 1
+          fi
+
+          test ! -e tools/openbrowser-workspace
+          test -f browser-extension/manifest.json
+          test -f browser-extension/package.json
+          test -f browser-extension/bridge-server.ts
+
+      - name: Commit corrected extension placement
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: place workspace tools inside browser extension'
+          git pull --rebase origin feature/openbrowser-workspace-tools
+          git push origin HEAD:feature/openbrowser-workspace-tools
