@@ -257,7 +257,7 @@ export function buildAgentSystemPrompt(conversationId: string): string {
     '    - "apps/*"',
     '    - "packages/*"',
     '- Never write workspace entries without leading "-" (invalid: packages: then "apps/*" on next line).',
-    '- packageManager must be full semver: "pnpm@10.12.4" (not "pnpm@10").',
+    '- packageManager must be full semver: "pnpm@11.2.2" (not "pnpm@11").',
     '- Create all package.json files via CREATE_FILE before any pnpm install command.',
     '- Do NOT create README.md unless explicitly requested.',
     '',
