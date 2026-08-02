@@ -53,6 +53,7 @@ export async function resolveProjectPath(
   }
 
   assertNotReservedVcsPath(targetPath);
+  assertNotWindowsSpecialPath(targetPath);
 
   const root = await canonicalizeProjectRoot(projectRoot);
   const candidate = path.resolve(root, targetPath);
@@ -157,5 +158,43 @@ function assertNotReservedVcsPath(targetPath: string): void {
 
   if (normalized.includes('/.git/') || normalized.startsWith('.git/')) {
     throw new Error(`Path cannot access Git metadata: ${targetPath}`);
+  }
+}
+
+function assertNotWindowsSpecialPath(targetPath: string): void {
+  const normalized = targetPath.replace(/\\/g, '/');
+  const segments = normalized.split('/');
+
+  const deviceNames = new Set([
+    'con', 'prn', 'aux', 'nul',
+    'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
+    'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9',
+  ]);
+
+  for (let segment of segments) {
+    if (!segment) continue;
+
+    segment = segment.toLowerCase();
+
+    if (segment.includes(':')) {
+      throw new Error(`Path cannot contain alternate data streams (colons): ${targetPath}`);
+    }
+
+    if (segment.endsWith('.') || segment.endsWith(' ')) {
+      throw new Error(`Path cannot end with dots or spaces: ${targetPath}`);
+    }
+
+    const baseNameWithoutExtension = segment.split('.')[0]?.toLowerCase();
+    if (baseNameWithoutExtension && deviceNames.has(baseNameWithoutExtension)) {
+      throw new Error(`Path cannot use reserved Windows device name: ${targetPath}`);
+    }
+  }
+
+  if (/^[a-z]:/i.test(normalized)) {
+    throw new Error(`Path cannot be absolute with drive letter: ${targetPath}`);
+  }
+
+  if (normalized.startsWith('\\\\')) {
+    throw new Error(`Path cannot be UNC path: ${targetPath}`);
   }
 }
