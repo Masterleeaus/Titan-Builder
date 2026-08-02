@@ -9,7 +9,7 @@ import fs from 'fs-extra';
 import type { FileOperation } from '../core/index.js';
 import { normalizeMultilineText } from '../parser/markdown-agent.js';
 import { appendHistory } from '../memory/index.js';
-import { canonicalizeProjectRoot, isPathInsideProject, resolveProjectPath } from '../security/project-path.js';
+import { canonicalizeProjectRoot, isPathInsideProject, isReservedPath, resolveProjectPath } from '../security/project-path.js';
 import { expandMkdirOperations, looksLikePowerShellCommand } from './mkdir-normalize.js';
 import { preserveOperationOrder } from './operation-order.js';
 import { terminateProcessTree } from './process-tree.js';
@@ -358,6 +358,11 @@ async function planFileOperation(
   affectedPaths: string[];
 }> {
   const relativePath = path.relative(projectRoot, absolutePath);
+
+  if (await isReservedPath(projectRoot, absolutePath)) {
+    throw new Error(`${operation.action} is not allowed on reserved metadata: ${relativePath}`);
+  }
+
   const before = await getVirtualSnapshot(virtualState, absolutePath);
   const preconditions = [toPrecondition(absolutePath, before)];
   const affectedPaths = [absolutePath];
@@ -427,6 +432,11 @@ async function planFileOperation(
         throw new Error('RENAME_FILE requires replace as destination path');
       }
       const destination = await resolveProjectPath(projectRoot, operation.replace, { expectedType: 'file' });
+
+      if (await isReservedPath(projectRoot, destination)) {
+        throw new Error(`RENAME_FILE destination is reserved metadata: ${path.relative(projectRoot, destination)}`);
+      }
+
       const destinationBefore = await getVirtualSnapshot(virtualState, destination);
       if (destinationBefore.kind !== 'missing') {
         throw new Error(`RENAME_FILE destination already exists: ${path.relative(projectRoot, destination)}`);
