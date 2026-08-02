@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -8,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { loadWorkspaceEnvironment } from './environment.js';
 
 const execFileAsync = promisify(execFile);
+const moduleRequire = createRequire(import.meta.url);
 const temporaryDirectories: string[] = [];
 const originalCwd = process.cwd();
 
@@ -76,7 +78,7 @@ describe('workspace companion environment authority', () => {
     delete childEnvironment.TARGET_PROJECT_ONLY;
 
     const entrypointUrl = pathToFileURL(path.join(originalCwd, 'bridge-server.ts')).href;
-    const tsxLoaderUrl = import.meta.resolve('tsx');
+    const tsxLoaderUrl = pathToFileURL(moduleRequire.resolve('tsx')).href;
     const probe = [
       `await import(${JSON.stringify(entrypointUrl)});`,
       'process.stdout.write(JSON.stringify({',
