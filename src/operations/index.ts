@@ -10,6 +10,12 @@ import type { FileOperation } from '../core/index.js';
 import { normalizeMultilineText } from '../parser/markdown-agent.js';
 import { appendHistory } from '../memory/index.js';
 import { canonicalizeProjectRoot, resolveProjectPath } from '../security/project-path.js';
+import {
+  buildRepositoryChildEnvironment,
+  formatEnvironmentGrantPreview,
+  redactChildOutput,
+  validateEnvironmentGrants,
+} from './child-environment.js';
 import { expandMkdirOperations, looksLikePowerShellCommand } from './mkdir-normalize.js';
 import { preserveOperationOrder } from './operation-order.js';
 import {
@@ -103,12 +109,13 @@ export async function planOperations(
       const cwd = operation.path
         ? await resolveProjectPath(root, operation.path, { requireExisting: true, expectedType: 'directory' })
         : root;
+      const environmentGrants = validateEnvironmentGrants(operation.env ?? []);
       const invocation = resolveToolInvocation(operation.tool ?? '', operation.args ?? [], cwd);
       const toolInputs = await planToolInputs(invocation, root, virtualState);
       plans.push({
-        operation,
+        operation: { ...operation, env: environmentGrants },
         absolutePath: cwd,
-        diff: `RUN_TOOL [${invocation.risk}] ${invocation.displayCommand}`,
+        diff: `${`RUN_TOOL [${invocation.risk}] ${invocation.displayCommand}`}\nENVIRONMENT: ${formatEnvironmentGrantPreview(environmentGrants)}`,
         risk: invocation.risk,
         preconditions: toolInputs.preconditions,
         affectedPaths: toolInputs.affectedPaths,
@@ -125,15 +132,20 @@ export async function planOperations(
       const cwd = operation.path
         ? await resolveProjectPath(root, operation.path, { requireExisting: true, expectedType: 'directory' })
         : root;
+      const environmentGrants = validateEnvironmentGrants(operation.env ?? []);
       plans.push({
-        operation,
+        operation: { ...operation, env: environmentGrants },
         absolutePath: cwd,
-        diff: `RUN_COMMAND [UNSAFE] ${operation.command ?? ''}`,
+        diff: `${`RUN_COMMAND [UNSAFE] ${operation.command ?? ''}`}\nENVIRONMENT: ${formatEnvironmentGrantPreview(environmentGrants)}`,
         risk: 'DESTRUCTIVE',
         preconditions: [],
         affectedPaths: [],
       });
       continue;
+    }
+
+    if (operation.env?.length) {
+      throw new Error(`${operation.action} cannot request environment variable grants`);
     }
 
     if (!operation.path) {
@@ -668,7 +680,7 @@ async function applyOperation(
         : projectRoot;
       const invocation = resolveToolInvocation(operation.tool ?? '', operation.args ?? [], cwd);
       onStep?.('running command', `${invocation.toolId} [${invocation.risk}]`);
-      await runTool(invocation);
+      await runTool(invocation, operation.env ?? []);
       break;
     }
     case 'RUN_COMMAND': {
@@ -681,7 +693,7 @@ async function applyOperation(
         ? await resolveProjectPath(projectRoot, operation.path, { requireExisting: true, expectedType: 'directory' })
         : projectRoot;
       onStep?.('running command', `UNSAFE legacy command: ${operation.command ?? ''}`);
-      await runShellCommand(operation.command ?? '', cwd);
+      await runShellCommand(operation.command ?? '', cwd, operation.env ?? []);
       break;
     }
     case 'CREATE_FOLDER': {
@@ -799,16 +811,20 @@ async function safeWriteFile(filePath: string, content: string): Promise<void> {
   }
 }
 
-async function runTool(invocation: ToolInvocation): Promise<void> {
+async function runTool(
+  invocation: ToolInvocation,
+  environmentGrants: readonly string[],
+): Promise<void> {
   const maxOutputBytes = 2 * 1024 * 1024;
   const timeoutMs = 120_000;
+  const childEnvironment = buildRepositoryChildEnvironment(process.env, environmentGrants);
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(invocation.executable, invocation.args, {
       cwd: invocation.cwd,
       shell: false,
       windowsHide: true,
-      env: process.env,
+      env: childEnvironment.env,
     });
 
     let stdout = '';
@@ -838,10 +854,14 @@ async function runTool(invocation: ToolInvocation): Promise<void> {
 
     child.stdout?.on('data', (chunk: Buffer) => append('stdout', chunk));
     child.stderr?.on('data', (chunk: Buffer) => append('stderr', chunk));
-    child.on('error', (error) => finish(new Error(`Failed to start ${invocation.toolId}: ${error.message}`)));
+    child.on('error', (error) => finish(new Error(
+      redactChildOutput(`Failed to start ${invocation.toolId}: ${error.message}`, childEnvironment.redactions),
+    )));
     child.on('close', (code, signal) => {
-      if (stdout.trim()) process.stdout.write(`${stdout.trim()}\n`);
-      if (stderr.trim()) process.stderr.write(`${stderr.trim()}\n`);
+      const safeStdout = redactChildOutput(stdout.trim(), childEnvironment.redactions);
+      const safeStderr = redactChildOutput(stderr.trim(), childEnvironment.redactions);
+      if (safeStdout) process.stdout.write(`${safeStdout}\n`);
+      if (safeStderr) process.stderr.write(`${safeStderr}\n`);
       if (code === 0) {
         finish();
         return;
@@ -860,31 +880,39 @@ async function runTool(invocation: ToolInvocation): Promise<void> {
   });
 }
 
-async function runShellCommand(command: string, cwd: string): Promise<void> {
+async function runShellCommand(
+  command: string,
+  cwd: string,
+  environmentGrants: readonly string[],
+): Promise<void> {
   const trimmed = command.trim();
   if (!trimmed) {
     throw new Error('RUN_COMMAND is empty');
   }
 
   const shell = resolveShell(trimmed);
+  const childEnvironment = buildRepositoryChildEnvironment(process.env, environmentGrants);
 
   try {
     const { stdout, stderr } = await execAsync(trimmed, {
       cwd,
       shell,
+      env: childEnvironment.env,
       timeout: 120_000,
       maxBuffer: 2 * 1024 * 1024,
     });
 
-    if (stdout.trim()) {
-      process.stdout.write(`${stdout.trim()}\n`);
+    const safeStdout = redactChildOutput(stdout.trim(), childEnvironment.redactions);
+    const safeStderr = redactChildOutput(stderr.trim(), childEnvironment.redactions);
+    if (safeStdout) {
+      process.stdout.write(`${safeStdout}\n`);
     }
-    if (stderr.trim()) {
-      process.stderr.write(`${stderr.trim()}\n`);
+    if (safeStderr) {
+      process.stderr.write(`${safeStderr}\n`);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Command failed: ${message}`);
+    throw new Error(`Command failed: ${redactChildOutput(message, childEnvironment.redactions)}`);
   }
 }
 
