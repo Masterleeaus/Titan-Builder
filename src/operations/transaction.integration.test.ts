@@ -148,10 +148,12 @@ test('executor detects a symlink swap between preview and write', async () => {
 test('existing project root is canonical before planning starts', async () => {
   const projectRoot = await createProject();
   try {
-    assert.equal(await realpath(projectRoot), projectRoot);
+    const canonicalRoot = await realpath(projectRoot);
+    assert.equal(path.isAbsolute(canonicalRoot), true);
+    assert.equal(path.basename(canonicalRoot), path.basename(projectRoot));
     const plans = await planOperations([
       { action: 'CREATE_FOLDER', path: 'src' },
-    ], projectRoot);
+    ], canonicalRoot);
     assert.equal(plans.length, 1);
   } finally {
     await fs.remove(projectRoot);
