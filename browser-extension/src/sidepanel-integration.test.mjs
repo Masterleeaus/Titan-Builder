@@ -20,6 +20,9 @@ test('manifest exposes the coding side panel without broad or debugger permissio
     'src/agent-workspace.css',
     'src/browser-run-events.js',
     'src/coding-prompts.js',
+    'src/prompt-catalog.js',
+    'src/prompt-router.js',
+    'src/generated/prompt-catalog.js',
   ]) {
     const fileUrl = new URL(`../${path}`, import.meta.url);
     const contents = await readFile(fileUrl, 'utf8');
@@ -27,12 +30,17 @@ test('manifest exposes the coding side panel without broad or debugger permissio
   }
 });
 
-test('coding prompt library has unique ids and useful coding categories', () => {
+test('coding prompt library has unique ids, routing metadata, and useful coding categories', () => {
   assert.ok(BUILTIN_CODING_PROMPTS.length >= 10);
   assert.equal(new Set(BUILTIN_CODING_PROMPTS.map((prompt) => prompt.id)).size, BUILTIN_CODING_PROMPTS.length);
   const categories = new Set(BUILTIN_CODING_PROMPTS.map((prompt) => prompt.category));
   for (const category of ['Audit', 'Debugging', 'Implementation', 'Testing', 'Security']) {
     assert.ok(categories.has(category), `missing ${category}`);
+  }
+  for (const prompt of BUILTIN_CODING_PROMPTS) {
+    assert.ok(prompt.routingIntents.length > 0, `${prompt.id} should define routing intents`);
+    assert.ok(Array.isArray(prompt.negativeRoutingIntents), `${prompt.id} should define negative routing intents`);
+    assert.ok(prompt.workModes.includes('ask') || prompt.workModes.includes('agent'), `${prompt.id} should support a Work mode`);
   }
 });
 
@@ -74,13 +82,20 @@ test('side panel exposes Work, workspace, ChatGPT inventory, exporter, and setti
   assert.match(html, /href="\.\/agent-workspace\.css"/);
 });
 
-test('Work view stays a thin UI and renders operation content as text', async () => {
+test('Work view stays thin, injects explicit prompt routing controls, and renders content as text', async () => {
   const source = await readFile(new URL('./agent-workspace.js', import.meta.url), 'utf8');
   assert.match(source, /textContent\s*=/);
   assert.match(source, /createTextNode/);
   assert.doesNotMatch(source, /innerHTML\s*=/);
   assert.doesNotMatch(source, /planOperations|executePlannedOperations|parseAIResponse/);
   assert.match(source, /\/workspace\/runs/);
+  assert.match(source, /work-prompt-routing-mode/);
+  assert.match(source, /work-manual-prompt/);
+  assert.match(source, /work-prompt-recommendation/);
+  assert.match(source, /\['auto', 'Auto'\]/);
+  assert.match(source, /\['manual', 'Manual'\]/);
+  assert.match(source, /\['off', 'Off'\]/);
+  assert.match(source, /original request will be sent unchanged/i);
 });
 
 test('manifest loads ChatGPT page tools before the content script', async () => {
