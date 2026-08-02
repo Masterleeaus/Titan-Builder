@@ -143,8 +143,9 @@ export async function prepareSelectedApproval(
     captureIdentity,
   );
   const root = identityBeforePlan.projectRoot;
+  const previewRoot = preparedRun.projectRoot ?? requestedRoot;
   const reviewedPlans = [...preparedRun.previews];
-  const reviewedRevision = createPlannedOperationRevision(root, reviewedPlans);
+  const reviewedRevision = createPlannedOperationRevision(previewRoot, reviewedPlans);
   const expectedPlannedRevision =
     preparedRun.plannedPreviewRevision ?? preparedRun.previewRevision;
   if (reviewedRevision !== expectedPlannedRevision) {
@@ -177,19 +178,18 @@ export async function prepareSelectedApproval(
     );
   }
 
-
-try {
-  assertRepositoryApprovalPolicy(
-    identityAfterPlan,
-    dependencies.protectedBranches,
-  );
-} catch (error) {
-  throw new AgentApplicationError(
-    'APPROVAL_INVALID',
-    formatUnknownError(error),
-    { cause: error },
-  );
-}
+  try {
+    assertRepositoryApprovalPolicy(
+      identityAfterPlan,
+      dependencies.protectedBranches,
+    );
+  } catch (error) {
+    throw new AgentApplicationError(
+      'APPROVAL_INVALID',
+      formatUnknownError(error),
+      { cause: error },
+    );
+  }
 
   const reviewedSelectedRevision = createPlannedOperationRevision(
     root,
