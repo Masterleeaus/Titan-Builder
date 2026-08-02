@@ -1,5 +1,9 @@
 import path from 'node:path';
-import fs from 'fs-extra';
+import {
+  ensureOpenBrowserStateDirectory,
+  readOpenBrowserStateFile,
+  writeOpenBrowserStateFile,
+} from '../security/internal-state.js';
 
 export const OPENBROWSER_DIR = '.openbrowser';
 
@@ -31,7 +35,7 @@ function memoryPath(projectRoot: string, fileName?: string): string {
 }
 
 export async function ensureMemory(projectRoot: string): Promise<void> {
-  await fs.ensureDir(memoryPath(projectRoot));
+  await ensureOpenBrowserStateDirectory(projectRoot);
   await Promise.all([
     ensureJson(projectRoot, MEMORY_FILES.project, {}),
     ensureJson(projectRoot, MEMORY_FILES.history, []),
@@ -46,17 +50,22 @@ export async function appendHistory(
   entry: HistoryEntry,
 ): Promise<void> {
   await ensureMemory(projectRoot);
-  const historyFile = memoryPath(projectRoot, MEMORY_FILES.history);
-  const history = (await fs.readJson(historyFile)) as HistoryEntry[];
+  const history = JSON.parse(
+    await readOpenBrowserStateFile(projectRoot, MEMORY_FILES.history),
+  ) as HistoryEntry[];
   history.push(entry);
-  await fs.writeJson(historyFile, history, { spaces: 2 });
+  await writeOpenBrowserStateFile(
+    projectRoot,
+    MEMORY_FILES.history,
+    `${JSON.stringify(history, null, 2)}\n`,
+  );
 }
 
 export async function listHistory(projectRoot: string): Promise<HistoryEntry[]> {
   await ensureMemory(projectRoot);
-  const history = (await fs.readJson(
-    memoryPath(projectRoot, MEMORY_FILES.history),
-  )) as HistoryEntry[];
+  const history = JSON.parse(
+    await readOpenBrowserStateFile(projectRoot, MEMORY_FILES.history),
+  ) as HistoryEntry[];
   return structuredClone(history);
 }
 
@@ -65,7 +74,7 @@ export async function saveContextSummary(
   summary: string,
 ): Promise<void> {
   await ensureMemory(projectRoot);
-  await fs.writeFile(memoryPath(projectRoot, MEMORY_FILES.contextSummary), summary);
+  await writeOpenBrowserStateFile(projectRoot, MEMORY_FILES.contextSummary, summary);
 }
 
 async function ensureJson(
@@ -73,13 +82,20 @@ async function ensureJson(
   fileName: string,
   value: unknown,
 ): Promise<void> {
-  const filePath = memoryPath(projectRoot, fileName);
-  if (!(await fs.pathExists(filePath))) {
-    await fs.writeJson(filePath, value, { spaces: 2 });
+  try {
+    await readOpenBrowserStateFile(projectRoot, fileName);
+  } catch (error) {
+    if (!isNotFound(error)) throw error;
+    await writeOpenBrowserStateFile(
+      projectRoot,
+      fileName,
+      `${JSON.stringify(value, null, 2)}\n`,
+    );
   }
 }
 
 export function promptFilePath(projectRoot: string, sessionId: string): string {
+  assertSafeSessionId(sessionId);
   return path.join(
     memoryPath(projectRoot, MEMORY_FILES.promptsDir),
     `${sessionId}.txt`,
@@ -91,17 +107,33 @@ export async function writePromptFile(
   sessionId: string,
   content: string,
 ): Promise<string> {
-  const filePath = promptFilePath(projectRoot, sessionId);
-  await fs.ensureDir(path.dirname(filePath));
-  await fs.writeFile(filePath, content, 'utf8');
-  return filePath;
+  assertSafeSessionId(sessionId);
+  return writeOpenBrowserStateFile(
+    projectRoot,
+    path.join(MEMORY_FILES.promptsDir, `${sessionId}.txt`),
+    content,
+  );
 }
 
 export async function readPromptFile(
   projectRoot: string,
   sessionId: string,
 ): Promise<string> {
-  return fs.readFile(promptFilePath(projectRoot, sessionId), 'utf8');
+  assertSafeSessionId(sessionId);
+  return readOpenBrowserStateFile(
+    projectRoot,
+    path.join(MEMORY_FILES.promptsDir, `${sessionId}.txt`),
+  );
+}
+
+function assertSafeSessionId(sessionId: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/u.test(sessionId)) {
+    throw new Error('Prompt session id contains unsafe path characters');
+  }
+}
+
+function isNotFound(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
 }
 
 export {
