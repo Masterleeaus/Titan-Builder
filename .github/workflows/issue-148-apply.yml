@@ -1,0 +1,82 @@
+name: Apply issue 148 fix
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out working branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: fix/148-loopback-bridge-identity
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+
+      - name: Activate pnpm 11.2.2
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+          pnpm --version
+
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install companion dependencies
+        working-directory: browser-extension
+        run: pnpm install --frozen-lockfile
+
+      - name: Add issue 148 regression tests
+        run: python .github/issue148/red.py
+
+      - name: Verify regression tests fail before implementation
+        working-directory: browser-extension
+        run: |
+          set +e
+          pnpm run test 2>&1 | tee /tmp/issue-148-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo 'Regression tests unexpectedly passed before the fix.' >&2
+            exit 1
+          fi
+          grep -q 'bridge target security' /tmp/issue-148-red.log
+          echo 'RED confirmed: issue 148 regression tests fail against the vulnerable implementation.'
+
+      - name: Implement authenticated loopback bridge forwarding
+        run: python .github/issue148/implement.py
+
+      - name: Verify companion fix
+        working-directory: browser-extension
+        run: pnpm run verify
+
+      - name: Verify root security and build
+        run: |
+          pnpm run typecheck
+          pnpm run test:node
+          pnpm run build
+
+      - name: Publish implementation commit and remove runner
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf .github/issue148 .github/workflows/issue-148-apply.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add browser-extension/bridge-server.ts browser-extension/bridge-server.test.ts browser-extension/bridge-target-security.ts src/server/index.ts src/server/security.ts src/server/security.test.ts .github/issue148 .github/workflows/issue-148-apply.yml
+          git commit -m 'fix: authenticate loopback bridge forwarding (#148)'
+          auth=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" push origin HEAD:fix/148-loopback-bridge-identity
