@@ -118,10 +118,9 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     return reply.send(error);
   });
   const projectRoot = await canonicalizeProjectRoot(options.projectRoot ?? process.cwd());
-
-const protectedBranches = normalizeProtectedBranches(
-  options.protectedBranches ?? process.env.OPENBROWSER_PROTECTED_BRANCHES,
-);
+  const protectedBranches = normalizeProtectedBranches(
+    options.protectedBranches ?? process.env.OPENBROWSER_PROTECTED_BRANCHES,
+  );
   const insecureDevelopment = options.allowInsecureDev ?? process.env.OPENBROWSER_INSECURE_DEV === '1';
   const controlToken = String(options.controlToken ?? process.env.BRIDGE_TOKEN ?? '').trim();
   const bridgeInstanceId = crypto.randomUUID();
@@ -313,13 +312,13 @@ const protectedBranches = normalizeProtectedBranches(
       });
     }
 
-  try {
-    assertRepositoryApprovalPolicy(identityAfterPlan, protectedBranches);
-  } catch (error) {
-    return reply.code(403).send({
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+    try {
+      assertRepositoryApprovalPolicy(identityAfterPlan, protectedBranches);
+    } catch (error) {
+      return reply.code(403).send({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     return {
       operations: plans,
