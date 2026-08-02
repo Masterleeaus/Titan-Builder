@@ -87,12 +87,12 @@ export function projectMemoryFilePath(projectRoot: string): string {
 
 async function writeMemory(projectRoot: string, entries: ProjectMemoryEntry[]): Promise<void> {
   const filePath = memoryFilePath(projectRoot);
-  await mkdir(path.dirname(filePath), { recursive: true });
+  await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   const ordered = [...entries].sort(
     (left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
   );
   const tempPath = `${filePath}.${process.pid}.tmp`;
-  await writeFile(tempPath, `${JSON.stringify(ordered, null, 2)}\n`, 'utf8');
+  await writeFile(tempPath, `${JSON.stringify(ordered, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   await rename(tempPath, filePath);
 }
 

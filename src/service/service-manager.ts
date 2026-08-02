@@ -105,7 +105,7 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
   const now = options.now ?? (() => new Date());
 
   const ensureDirectories = async (): Promise<void> => {
-    await mkdir(paths.logsDir, { recursive: true });
+    await mkdir(paths.logsDir, { recursive: true, mode: 0o700 });
   };
 
   const readMetadata = async (): Promise<ServiceMetadata | null> => {
@@ -140,7 +140,7 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
   const writeMetadata = async (metadata: ServiceMetadata): Promise<void> => {
     await ensureDirectories();
     const tempPath = `${paths.metadataPath}.${process.pid}.tmp`;
-    await writeFile(tempPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
+    await writeFile(tempPath, `${JSON.stringify(metadata, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     await rename(tempPath, paths.metadataPath);
   };
 
@@ -219,7 +219,7 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
       }
       await ensureDirectories();
       await rotateLogIfNeeded();
-      mkdirSync(paths.logsDir, { recursive: true });
+      mkdirSync(paths.logsDir, { recursive: true, mode: 0o700 });
       const logFd = openSync(paths.logPath, 'a');
       let child: { pid?: number; unref(): void };
       try {
