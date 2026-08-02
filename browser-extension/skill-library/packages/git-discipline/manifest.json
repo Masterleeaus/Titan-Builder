@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "1",
+  "id": "titan.guidance.git-discipline",
+  "name": "Git Discipline",
+  "version": "1.0.0",
+  "status": "stable",
+  "kind": "guidance",
+  "category": "source-control",
+  "description": "Keep repository changes branch-safe, focused, reviewable, and evidence-backed.",
+  "owner": "Titan Builder",
+  "runtimeTargets": [
+    "cli",
+    "extension-sidepanel"
+  ],
+  "instructions": "instructions.md",
+  "inputs": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "outputs": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "dependencies": [],
+  "capabilities": [],
+  "risk": "READ",
+  "approval": "none",
+  "tags": [
+    "git",
+    "review"
+  ],
+  "aliases": [
+    "git"
+  ],
+  "compatibility": {
+    "minTitanVersion": "0.5.0",
+    "platforms": [
+      "linux",
+      "windows",
+      "macos",
+      "browser"
+    ]
+  }
+}
