@@ -98,6 +98,13 @@ describe('workspace error normalization', () => {
       error: 'Project not found',
     });
 
+    const unavailable = Object.assign(new Error('Bridge unavailable'), { statusCode: 503 });
+    expect(normalizeWorkspaceError(unavailable)).toEqual({
+      statusCode: 503,
+      error: 'Workspace operation failed',
+      detail: 'Bridge unavailable',
+    });
+
     const invalidStatus = Object.assign(new Error('invalid status'), { statusCode: 200 });
     expect(normalizeWorkspaceError(invalidStatus)).toEqual({
       statusCode: 500,
