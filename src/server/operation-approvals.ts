@@ -16,6 +16,9 @@ export interface OperationApprovalInput {
   conversationId?: string;
   previewRevision?: string;
   selectedOperationIds?: string[];
+  gitHead?: string;
+  gitBranch?: string;
+  gitWorktreeId?: string;
 }
 
 export interface OperationApprovalExpectation {
@@ -25,6 +28,9 @@ export interface OperationApprovalExpectation {
   conversationId?: string;
   previewRevision?: string;
   selectedOperationIds?: string[];
+  gitHead?: string;
+  gitBranch?: string;
+  gitWorktreeId?: string;
 }
 
 export interface IssuedOperationApproval {
@@ -45,6 +51,9 @@ export interface OperationApprovalInspection {
   selectedPreviewRevision: string;
   plans: PlannedOperation[];
   expiresAt: number;
+  gitHead?: string;
+  gitBranch?: string;
+  gitWorktreeId?: string;
 }
 
 interface ApprovalRecord extends OperationApprovalInspection {
@@ -150,6 +159,9 @@ export function createOperationApprovalStore(
       const previewRevision =
         normalizeOptionalText(input.previewRevision) ?? selectedPreviewRevision;
       const expiresAt = issuedAt + ttlMs;
+      const gitHead = normalizeOptionalText(input.gitHead);
+      const gitBranch = normalizeOptionalText(input.gitBranch);
+      const gitWorktreeId = normalizeOptionalText(input.gitWorktreeId);
       const recordBase: OperationApprovalInspection = {
         runId,
         projectRoot,
@@ -160,6 +172,9 @@ export function createOperationApprovalStore(
         selectedPreviewRevision,
         plans,
         expiresAt,
+        gitHead,
+        gitBranch,
+        gitWorktreeId,
       };
       const previewHash = hashApprovalBinding(recordBase);
       const token = `oba_${crypto.randomBytes(32).toString('base64url')}`;
