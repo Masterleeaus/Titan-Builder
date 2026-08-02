@@ -1,0 +1,1 @@
+Define the expected behaviour with one focused failing test, run it and confirm it fails for the intended missing behaviour, implement the smallest coherent change, then run the focused test and relevant broader verification before claiming completion.
