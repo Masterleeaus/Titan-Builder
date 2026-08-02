@@ -3,9 +3,9 @@ import { isIP } from 'node:net';
 
 export const BRIDGE_IDENTITY_PROTOCOL = 'openbrowser-bridge' as const;
 export const BRIDGE_IDENTITY_VERSION = '1' as const;
+export const MAX_IDENTITY_RESPONSE_BYTES = 8 * 1024;
 
 const DEFAULT_APPROVED_PORTS = [5000] as const;
-const MAX_IDENTITY_RESPONSE_BYTES = 8 * 1024;
 const noncePattern = /^[a-f0-9]{64}$/u;
 const macPattern = /^[a-f0-9]{64}$/u;
 const instanceIdPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
@@ -96,6 +96,10 @@ export function parseTrustedBridgeEndpoint(
   };
 }
 
+export function createBridgeIdentityNonce(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
 export async function verifyBridgeIdentity(
   endpoint: TrustedBridgeEndpoint,
   controlToken: string,
@@ -105,7 +109,7 @@ export async function verifyBridgeIdentity(
     throw new Error('BRIDGE_TOKEN is required to authenticate the local bridge.');
   }
 
-  const nonce = crypto.randomBytes(32).toString('hex');
+  const nonce = createBridgeIdentityNonce();
   const challengeUrl = new URL('/bridge/identity', endpoint.origin);
   challengeUrl.searchParams.set('nonce', nonce);
   const response = await fetchImplementation(challengeUrl, {
@@ -124,6 +128,22 @@ export async function verifyBridgeIdentity(
     payload = JSON.parse(responseText) as unknown;
   } catch (error) {
     throw new Error('Bridge identity challenge returned invalid JSON.', { cause: error });
+  }
+
+  return verifyBridgeIdentityPayload(endpoint, controlToken, nonce, payload);
+}
+
+export function verifyBridgeIdentityPayload(
+  endpoint: TrustedBridgeEndpoint,
+  controlToken: string,
+  nonce: string,
+  payload: unknown,
+): VerifiedBridgeIdentity {
+  if (!controlToken) {
+    throw new Error('BRIDGE_TOKEN is required to authenticate the local bridge.');
+  }
+  if (!noncePattern.test(nonce)) {
+    throw new Error('Bridge identity challenge nonce is invalid.');
   }
   if (!isIdentityPayload(payload)) {
     throw new Error('Bridge identity challenge returned an invalid payload.');
