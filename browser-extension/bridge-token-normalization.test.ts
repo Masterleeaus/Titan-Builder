@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,7 +8,6 @@ const WORKSPACE_TOKEN = 'workspace-test-token-1234567890';
 const NORMALIZED_BRIDGE_TOKEN = 'bridge-test-token-12345678901234567890';
 const CONFIGURED_BRIDGE_TOKEN = `  ${NORMALIZED_BRIDGE_TOKEN}\n`;
 const BRIDGE_PORT = 51235;
-const INSTANCE_ID = '12345678-1234-4234-8234-123456789abc';
 const temporaryDirectories: string[] = [];
 
 async function temporaryDirectory(prefix: string): Promise<string> {
@@ -24,39 +22,12 @@ afterEach(async () => {
 });
 
 describe('bridge credential normalization', () => {
-  it('uses the same trimmed token for the identity proof and Authorization header', async () => {
+  it('uses the same trimmed token at the authenticated request boundary', async () => {
     const databaseDirectory = await temporaryDirectory('workspace-token-db-');
-    const bridgeFetch = vi.fn<typeof fetch>(async (input, init) => {
-      const url = new URL(String(input));
-      if (url.pathname === '/bridge/identity') {
-        expect(init?.headers).toBeUndefined();
-        const nonce = url.searchParams.get('nonce') ?? '';
-        const unsigned = {
-          protocol: 'openbrowser-bridge',
-          version: '1',
-          instanceId: INSTANCE_ID,
-          nonce,
-          address: '127.0.0.1',
-          port: BRIDGE_PORT,
-        };
-        return new Response(JSON.stringify({
-          ...unsigned,
-          mac: crypto
-            .createHmac('sha256', NORMALIZED_BRIDGE_TOKEN)
-            .update(JSON.stringify([
-              unsigned.protocol,
-              unsigned.version,
-              unsigned.instanceId,
-              unsigned.nonce,
-              unsigned.address,
-              unsigned.port,
-            ]))
-            .digest('hex'),
-        }), { status: 200 });
-      }
-
-      expect((init?.headers as Record<string, string>).Authorization)
-        .toBe(`Bearer ${NORMALIZED_BRIDGE_TOKEN}`);
+    const bridgeRequest = vi.fn(async (input) => {
+      expect(input.controlToken).toBe(NORMALIZED_BRIDGE_TOKEN);
+      expect(input.method).toBe('GET');
+      expect(input.route).toBe('/project/memory');
       return new Response(JSON.stringify({ entries: [] }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -69,7 +40,7 @@ describe('bridge credential normalization', () => {
       bridgeToken: CONFIGURED_BRIDGE_TOKEN,
       bridgeUrl: `http://127.0.0.1:${BRIDGE_PORT}`,
       bridgeAllowedPorts: [BRIDGE_PORT],
-      bridgeFetch,
+      bridgeRequest,
     });
 
     try {
@@ -79,7 +50,7 @@ describe('bridge credential normalization', () => {
         headers: { authorization: `Bearer ${WORKSPACE_TOKEN}` },
       });
       expect(response.statusCode).toBe(200);
-      expect(bridgeFetch).toHaveBeenCalledTimes(2);
+      expect(bridgeRequest).toHaveBeenCalledTimes(1);
     } finally {
       await app.close();
     }
