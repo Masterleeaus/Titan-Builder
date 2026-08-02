@@ -2,7 +2,7 @@
 
 ## Status
 
-`COMPLETE_ON_BATCH_BRANCH_PENDING_CI`
+`COMPLETE_ON_BATCH_BRANCH_CI_RUNNING`
 
 ## Objective
 
@@ -44,10 +44,10 @@ python -m json.tool package.json
 
 - Pass 04: complete.
 - Pass 05: attached to the batch branch.
-- Pass 06: attached to the batch branch pending full CI.
+- Pass 06: attached to the batch branch; full GitHub Actions verification is running.
 - Draft PR: `#30`.
 - Merge policy: one merge after Pass 06 only.
 
 ## Remaining gate
 
-Run full repository CI on the final batch head, reconcile current `main` without prohibited merge commits, then mark the PR ready and merge the three-pass batch once.
+Require both repository workflows to pass on the final batch head. Then update this record with exact CI evidence, mark the PR ready, and merge the three-pass batch once using a non-merge-commit method.
