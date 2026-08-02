@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { bridgeBodyLimit } from './body-limits.js';
 import { AgentApplicationError } from '../workflows/agent-application.js';
 import type { BrowserRunCoordinator } from '../workflows/browser-run-coordinator.js';
 import type {
@@ -19,7 +20,7 @@ export async function registerBrowserWorkflowRoutes(
 ): Promise<void> {
   const { coordinator } = dependencies;
 
-  app.post('/workspace/runs', async (request, reply) => {
+  app.post('/workspace/runs', bridgeBodyLimit('/workspace/runs'), async (request, reply) => {
     const body = request.body as {
       mode?: BrowserRunMode;
       projectId?: string;
@@ -105,7 +106,7 @@ export async function registerBrowserWorkflowRoutes(
     });
   });
 
-  app.post('/workspace/runs/:runId/approve', async (request, reply) => {
+  app.post('/workspace/runs/:runId/approve', bridgeBodyLimit('/workspace/runs/:runId/approve'), async (request, reply) => {
     const { runId } = request.params as { runId: string };
     const body = request.body as {
       previewRevision?: string;
@@ -124,7 +125,7 @@ export async function registerBrowserWorkflowRoutes(
     }
   });
 
-  app.post('/workspace/runs/:runId/apply', async (request, reply) => {
+  app.post('/workspace/runs/:runId/apply', bridgeBodyLimit('/workspace/runs/:runId/apply'), async (request, reply) => {
     const { runId } = request.params as { runId: string };
     const body = request.body as { approvalToken?: string };
     if (!body.approvalToken) return reply.code(400).send({ error: 'approvalToken is required' });
@@ -135,7 +136,7 @@ export async function registerBrowserWorkflowRoutes(
     }
   });
 
-  app.post('/workspace/runs/:runId/reject', async (request, reply) => {
+  app.post('/workspace/runs/:runId/reject', bridgeBodyLimit('/workspace/runs/:runId/reject'), async (request, reply) => {
     const { runId } = request.params as { runId: string };
     try {
       return await coordinator.reject(runId);
@@ -144,7 +145,7 @@ export async function registerBrowserWorkflowRoutes(
     }
   });
 
-  app.post('/workspace/runs/:runId/cancel', async (request, reply) => {
+  app.post('/workspace/runs/:runId/cancel', bridgeBodyLimit('/workspace/runs/:runId/cancel'), async (request, reply) => {
     const { runId } = request.params as { runId: string };
     try {
       return await coordinator.cancel(runId);
