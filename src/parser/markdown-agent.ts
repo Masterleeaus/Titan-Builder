@@ -612,45 +612,57 @@ function findOperationsJsonBlock(
   return { start, end: start + json.length };
 }
 
-function extractBalancedJson(text: string, start: number): string | null {
-  if (start >= text.length || text[start] !== '{') {
+export function extractBalancedJson(text: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let i = start;
+
+  while (i < text.length) {
+    const char = text[i];
+
+    // Handle escape sequences inside strings
+    if (inString && char === '\\' && i + 1 < text.length) {
+      // Skip the next character as it's escaped
+      i += 2;
+      continue;
+    }
+
+    // Track string boundaries
+    if (char === '"' && !inString) {
+      inString = true;
+      i += 1;
+      continue;
+    }
+
+    if (char === '"' && inString) {
+      inString = false;
+      i += 1;
+      continue;
+    }
+
+    // Count braces only outside strings
+    if (!inString) {
+      if (char === '{') {
+        depth += 1;
+      } else if (char === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          return text.slice(start, i + 1);
+        }
+      }
+    }
+
+    i += 1;
+  }
+
+  // If we reach here, the JSON is unterminated
+  if (inString) {
     return null;
   }
 
-  let depth = 0;
-  let inString = false;
-  let escapeNext = false;
-
-  for (let index = start; index < text.length; index += 1) {
-    const char = text[index];
-
-    if (escapeNext) {
-      escapeNext = false;
-      continue;
-    }
-
-    if (char === '\\') {
-      escapeNext = true;
-      continue;
-    }
-
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-
-    if (inString) {
-      continue;
-    }
-
-    if (char === '{' || char === '[') {
-      depth += 1;
-    } else if (char === '}' || char === ']') {
-      depth -= 1;
-      if (depth === 0 && char === '}') {
-        return text.slice(start, index + 1);
-      }
-    }
+  // Incomplete JSON (unclosed braces)
+  if (depth > 0) {
+    return null;
   }
 
   return null;

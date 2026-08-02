@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert';
-import { mergeMarkdownFencesIntoOperations, mergeYamlFencesIntoOperations } from './markdown-agent.js';
+import {
+  extractBalancedJson,
+  mergeMarkdownFencesIntoOperations,
+  mergeYamlFencesIntoOperations,
+} from './markdown-agent.js';
 
 test('mergeMarkdownFencesIntoOperations', async (t) => {
   await t.test('one unlabeled fence with one pending markdown operation succeeds', () => {
@@ -184,5 +188,115 @@ test('mergeYamlFencesIntoOperations', async (t) => {
     const markdown = 'No code fences here';
     const result = mergeYamlFencesIntoOperations(operations, markdown);
     assert.equal(result[0].content, 'existing');
+  });
+});
+
+test('extractBalancedJson', async (t) => {
+  await t.test('extracts simple object', () => {
+    const text = '{"key": "value"}';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, '{"key": "value"}');
+  });
+
+  await t.test('extracts nested objects', () => {
+    const text = '{"outer": {"inner": "value"}}';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, '{"outer": {"inner": "value"}}');
+  });
+
+  await t.test('extracts object with braces in string value', () => {
+    const text = '{"pattern": "^{a,b}$", "other": "value"}';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, '{"pattern": "^{a,b}$", "other": "value"}');
+  });
+
+  await t.test('extracts object with escaped quote in string', () => {
+    const text = '{"path": "file\\"with\\"quotes"}';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, '{"path": "file\\"with\\"quotes"}');
+  });
+
+  await t.test('extracts object with escaped backslash in string', () => {
+    const text = '{"path": "C:\\\\Users\\\\test"}';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, '{"path": "C:\\\\Users\\\\test"}');
+  });
+
+  await t.test('extracts nested arrays', () => {
+    const text = '{"items": [1, 2, {"nested": true}]}';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, '{"items": [1, 2, {"nested": true}]}');
+  });
+
+  await t.test('handles regex patterns in strings', () => {
+    const text = '{"regex": "^{1,5}[a-z]{2,4}$"}';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, '{"regex": "^{1,5}[a-z]{2,4}$"}');
+  });
+
+  await t.test('handles template literals as strings', () => {
+    const text = '{"template": "prefix{${key}}suffix"}';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, '{"template": "prefix{${key}}suffix"}');
+  });
+
+  await t.test('returns null for unterminated string', () => {
+    const text = '{"unclosed": "value';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, null);
+  });
+
+  await t.test('returns null for unclosed braces', () => {
+    const text = '{"key": "value"';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, null);
+  });
+
+  await t.test('starts from arbitrary offset', () => {
+    const text = 'prefix{"key": "value"}suffix';
+    const result = extractBalancedJson(text, 6);
+    assert.equal(result, '{"key": "value"}');
+  });
+
+  await t.test('handles multiple escaped characters', () => {
+    const text = '{"json": "\\"path\\": \\"C:\\\\Users\\""}';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, '{"json": "\\"path\\": \\"C:\\\\Users\\""}');
+  });
+
+  await t.test('handles empty object', () => {
+    const text = '{}';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, '{}');
+  });
+
+  await t.test('handles object with empty string value', () => {
+    const text = '{"key": ""}';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, '{"key": ""}');
+  });
+
+  await t.test('stops at first complete object', () => {
+    const text = '{"first": "value"}{"second": "another"} remaining text';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, '{"first": "value"}');
+  });
+
+  await t.test('handles objects with array of objects', () => {
+    const text = '{"ops": [{"name": "op1{x}"}, {"name": "op2"}]}';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, '{"ops": [{"name": "op1{x}"}, {"name": "op2"}]}');
+  });
+
+  await t.test('handles escaped backslash before quote', () => {
+    const text = '{"path": "C:\\\\\\"path"}';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, '{"path": "C:\\\\\\"path"}');
+  });
+
+  await t.test('preserves all content including spaces in strings', () => {
+    const text = '{"code": "  {spaces inside}  "}';
+    const result = extractBalancedJson(text, 0);
+    assert.equal(result, '{"code": "  {spaces inside}  "}');
   });
 });
