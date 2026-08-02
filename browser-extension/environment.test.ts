@@ -1,9 +1,13 @@
+import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadWorkspaceEnvironment } from './environment.js';
 
+const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
 const originalCwd = process.cwd();
 
@@ -46,6 +50,59 @@ describe('workspace companion environment authority', () => {
     expect(env.BRIDGE_TOKEN).toBe('user-scoped-token');
     expect(env.WORKSPACE_PORT).toBe('5010');
     expect(env.TARGET_PROJECT_ONLY).toBeUndefined();
+  });
+
+  it('boots the production entrypoint without importing a poisoned cwd .env', async () => {
+    const projectRoot = await temporaryDirectory('workspace-entrypoint-project-');
+    const explicitDirectory = await temporaryDirectory('workspace-entrypoint-config-');
+    const explicitPath = path.join(explicitDirectory, 'companion.env');
+
+    await fs.writeFile(path.join(projectRoot, '.env'), [
+      'BRIDGE_TOKEN=project-secret',
+      'WORKSPACE_PORT=65535',
+      'TARGET_PROJECT_ONLY=poisoned',
+    ].join('\n'));
+    await fs.writeFile(explicitPath, [
+      'BRIDGE_TOKEN=explicit-token',
+      'WORKSPACE_PORT=5010',
+    ].join('\n'));
+
+    const childEnvironment: NodeJS.ProcessEnv = {
+      ...process.env,
+      OPENBROWSER_CONFIG: explicitPath,
+    };
+    delete childEnvironment.BRIDGE_TOKEN;
+    delete childEnvironment.WORKSPACE_PORT;
+    delete childEnvironment.TARGET_PROJECT_ONLY;
+
+    const entrypointUrl = pathToFileURL(path.join(originalCwd, 'bridge-server.ts')).href;
+    const tsxLoaderUrl = import.meta.resolve('tsx');
+    const probe = [
+      `await import(${JSON.stringify(entrypointUrl)});`,
+      'process.stdout.write(JSON.stringify({',
+      '  bridgeToken: process.env.BRIDGE_TOKEN,',
+      '  workspacePort: process.env.WORKSPACE_PORT,',
+      '  targetProjectOnly: process.env.TARGET_PROJECT_ONLY ?? null,',
+      '}));',
+    ].join('\n');
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      '--import',
+      tsxLoaderUrl,
+      '--input-type=module',
+      '--eval',
+      probe,
+    ], {
+      cwd: projectRoot,
+      env: childEnvironment,
+      timeout: 20_000,
+    });
+
+    expect(JSON.parse(stdout)).toEqual({
+      bridgeToken: 'explicit-token',
+      workspacePort: '5010',
+      targetProjectOnly: null,
+    });
   });
 
   it('prefers OPENBROWSER_CONFIG and preserves existing process values', async () => {
