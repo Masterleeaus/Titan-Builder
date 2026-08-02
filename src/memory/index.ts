@@ -1,5 +1,5 @@
 import path from 'node:path';
-import fs from 'fs-extra';
+import { openProjectInternalState } from '../security/internal-state.js';
 
 export const OPENBROWSER_DIR = '.openbrowser';
 
@@ -26,19 +26,13 @@ export interface HistoryEntry {
   error?: string;
 }
 
-function memoryPath(projectRoot: string, fileName?: string): string {
-  return path.join(projectRoot, OPENBROWSER_DIR, fileName ?? '');
-}
-
 export async function ensureMemory(projectRoot: string): Promise<void> {
-  await fs.ensureDir(memoryPath(projectRoot));
-  await Promise.all([
-    ensureJson(projectRoot, MEMORY_FILES.project, {}),
-    ensureJson(projectRoot, MEMORY_FILES.history, []),
-    ensureJson(projectRoot, MEMORY_FILES.settings, { port: 5000 }),
-    ensureJson(projectRoot, MEMORY_FILES.chat, []),
-    ensureJson(projectRoot, MEMORY_FILES.tasks, []),
-  ]);
+  const state = await openProjectInternalState(projectRoot);
+  await state.ensureJson(MEMORY_FILES.project, {});
+  await state.ensureJson(MEMORY_FILES.history, []);
+  await state.ensureJson(MEMORY_FILES.settings, { port: 5000 });
+  await state.ensureJson(MEMORY_FILES.chat, []);
+  await state.ensureJson(MEMORY_FILES.tasks, []);
 }
 
 export async function appendHistory(
@@ -46,18 +40,16 @@ export async function appendHistory(
   entry: HistoryEntry,
 ): Promise<void> {
   await ensureMemory(projectRoot);
-  const historyFile = memoryPath(projectRoot, MEMORY_FILES.history);
-  const history = (await fs.readJson(historyFile)) as HistoryEntry[];
+  const state = await openProjectInternalState(projectRoot);
+  const history = await state.readJson<HistoryEntry[]>(MEMORY_FILES.history);
   history.push(entry);
-  await fs.writeJson(historyFile, history, { spaces: 2 });
+  await state.writeJson(MEMORY_FILES.history, history);
 }
 
 export async function listHistory(projectRoot: string): Promise<HistoryEntry[]> {
   await ensureMemory(projectRoot);
-  const history = (await fs.readJson(
-    memoryPath(projectRoot, MEMORY_FILES.history),
-  )) as HistoryEntry[];
-  return structuredClone(history);
+  const state = await openProjectInternalState(projectRoot);
+  return structuredClone(await state.readJson<HistoryEntry[]>(MEMORY_FILES.history));
 }
 
 export async function saveContextSummary(
@@ -65,24 +57,15 @@ export async function saveContextSummary(
   summary: string,
 ): Promise<void> {
   await ensureMemory(projectRoot);
-  await fs.writeFile(memoryPath(projectRoot, MEMORY_FILES.contextSummary), summary);
-}
-
-async function ensureJson(
-  projectRoot: string,
-  fileName: string,
-  value: unknown,
-): Promise<void> {
-  const filePath = memoryPath(projectRoot, fileName);
-  if (!(await fs.pathExists(filePath))) {
-    await fs.writeJson(filePath, value, { spaces: 2 });
-  }
+  const state = await openProjectInternalState(projectRoot);
+  await state.writeText(MEMORY_FILES.contextSummary, summary);
 }
 
 export function promptFilePath(projectRoot: string, sessionId: string): string {
   return path.join(
-    memoryPath(projectRoot, MEMORY_FILES.promptsDir),
-    `${sessionId}.txt`,
+    path.resolve(projectRoot),
+    OPENBROWSER_DIR,
+    promptRelativePath(sessionId),
   );
 }
 
@@ -91,17 +74,25 @@ export async function writePromptFile(
   sessionId: string,
   content: string,
 ): Promise<string> {
-  const filePath = promptFilePath(projectRoot, sessionId);
-  await fs.ensureDir(path.dirname(filePath));
-  await fs.writeFile(filePath, content, 'utf8');
-  return filePath;
+  const state = await openProjectInternalState(projectRoot);
+  const relativePath = promptRelativePath(sessionId);
+  await state.writeText(relativePath, content);
+  return path.join(state.stateRoot, relativePath);
 }
 
 export async function readPromptFile(
   projectRoot: string,
   sessionId: string,
 ): Promise<string> {
-  return fs.readFile(promptFilePath(projectRoot, sessionId), 'utf8');
+  const state = await openProjectInternalState(projectRoot);
+  return state.readText(promptRelativePath(sessionId));
+}
+
+function promptRelativePath(sessionId: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(sessionId)) {
+    throw new Error('Prompt session ID must be a portable identifier');
+  }
+  return path.join(MEMORY_FILES.promptsDir, `${sessionId}.txt`);
 }
 
 export {
