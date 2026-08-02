@@ -283,8 +283,6 @@ async function detectPackageManager(root: string): Promise<string> {
 }
 
 function initializeDatabase(databasePath: string): SqliteDatabase {
-  const directory = path.dirname(databasePath);
-  const schemaPath = path.join(moduleDirectory, 'schema.sql');
   return new Database(databasePath, { fileMustExist: false });
 }
 
@@ -874,8 +872,8 @@ export async function createWorkspaceServer(
       );
       return { results: parseRipgrepOutput(stdout) };
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException & { code?: string | number }).code;
-      if (code === 1 || code === '1') return { results: [] };
+      const code = (error as { code?: string | number }).code;
+      if (String(code) === '1') return { results: [] };
       if (code === 'ENOENT') {
         throw new WorkspaceHttpError('ripgrep is not installed or RG_BIN is invalid', 503);
       }
