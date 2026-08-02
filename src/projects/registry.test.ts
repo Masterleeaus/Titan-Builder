@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -18,11 +18,11 @@ function fixture() {
   mkdirSync(homeDir, { recursive: true });
   mkdirSync(projectRoot, { recursive: true });
   writeFileSync(path.join(projectRoot, 'package.json'), '{"name":"Sample App"}\n');
-  return { homeDir, projectRoot };
+  return { homeDir, projectRoot, canonicalProjectRoot: realpathSync(projectRoot) };
 }
 
 test('registers and deduplicates projects by canonical root', async () => {
-  const { homeDir, projectRoot } = fixture();
+  const { homeDir, projectRoot, canonicalProjectRoot } = fixture();
   const first = await registerProject(projectRoot, { homeDir });
   const second = await registerProject(path.join(projectRoot, '.'), { homeDir, name: 'Renamed' });
   const projects = await listProjects({ homeDir });
@@ -30,18 +30,18 @@ test('registers and deduplicates projects by canonical root', async () => {
   assert.equal(projects.length, 1);
   assert.equal(first.id, second.id);
   assert.equal(projects[0]?.name, 'Renamed');
-  assert.equal(projects[0]?.root, projectRoot);
+  assert.equal(projects[0]?.root, canonicalProjectRoot);
 });
 
 test('persists and resolves an active project', async () => {
-  const { homeDir, projectRoot } = fixture();
+  const { homeDir, projectRoot, canonicalProjectRoot } = fixture();
   const project = await registerProject(projectRoot, { homeDir });
 
   await setActiveProject(project.id, { homeDir });
   const active = await getActiveProject({ homeDir });
 
   assert.equal(active?.id, project.id);
-  assert.equal(active?.root, projectRoot);
+  assert.equal(active?.root, canonicalProjectRoot);
 });
 
 test('removing the active project clears active state', async () => {
