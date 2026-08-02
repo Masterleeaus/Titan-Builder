@@ -37,6 +37,7 @@ import {
 } from '../workflows/browser-run-coordinator.js';
 import { createBrowserRunStore } from '../workflows/browser-run-store.js';
 import type { AgentSubmissionRequest } from '../workflows/agent-preparation.js';
+import { createBridgeIdentityProof } from './bridge-identity.js';
 import { registerBrowserWorkflowRoutes } from './browser-workflow-routes.js';
 import { createOperationApprovalStore } from './operation-approvals.js';
 import {
@@ -95,8 +96,10 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
   const app = Fastify({ logger: false });
   const projectRoot = await canonicalizeProjectRoot(options.projectRoot ?? process.cwd());
   const insecureDevelopment = options.allowInsecureDev ?? process.env.OPENBROWSER_INSECURE_DEV === '1';
+  const controlToken = String(options.controlToken ?? process.env.BRIDGE_TOKEN ?? '').trim();
+  const bridgeInstanceId = crypto.randomUUID();
   const securityPolicy = createBridgeSecurityPolicy({
-    controlToken: options.controlToken ?? process.env.BRIDGE_TOKEN,
+    controlToken,
     browserToken: options.browserToken ?? process.env.BRIDGE_BROWSER_TOKEN,
     allowedExtensionOrigins:
       options.allowedExtensionOrigins ?? parseAllowedExtensionOrigins(process.env.BRIDGE_EXTENSION_ORIGINS),
@@ -161,6 +164,30 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
       origin,
     })) {
       return reply.code(401).send({ error: 'Unauthorized bridge request' });
+    }
+  });
+
+  app.get('/bridge/identity', async (request, reply) => {
+    if (!controlToken) {
+      return reply.code(503).send({ error: 'Bridge identity is unavailable without a control token' });
+    }
+
+    const { nonce } = request.query as { nonce?: string };
+    const address = request.raw.socket.localAddress;
+    const port = request.raw.socket.localPort;
+    if (!address || !port) {
+      return reply.code(503).send({ error: 'Bridge socket identity is unavailable' });
+    }
+
+    try {
+      return createBridgeIdentityProof(controlToken, String(nonce ?? ''), bridgeInstanceId, {
+        address,
+        port,
+      });
+    } catch (error) {
+      return reply.code(400).send({
+        error: error instanceof Error ? error.message : 'Invalid bridge identity challenge',
+      });
     }
   });
 

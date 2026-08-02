@@ -129,7 +129,7 @@ export function createBridgeSecurityPolicy(
 
 export function resolveBridgeRouteScope(method: string, rawUrl: string): BridgeRouteScope {
   const url = rawUrl.split('?')[0] ?? rawUrl;
-  if (method.toUpperCase() === 'OPTIONS' || url === '/health') {
+  if (method.toUpperCase() === 'OPTIONS' || url === '/health' || url === '/bridge/identity') {
     return 'public';
   }
   if (url === '/workspace/runs' || url.startsWith('/workspace/runs/')) {

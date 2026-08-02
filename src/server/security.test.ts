@@ -27,6 +27,7 @@ test('security policy requires distinct strong control and browser tokens by def
 
 test('route scopes separate browser lifecycle from privileged control endpoints', () => {
   assert.equal(resolveBridgeRouteScope('GET', '/health'), 'public');
+  assert.equal(resolveBridgeRouteScope('GET', '/bridge/identity?nonce=abc'), 'public');
   assert.equal(resolveBridgeRouteScope('POST', '/browser/claim'), 'browser');
   assert.equal(resolveBridgeRouteScope('GET', '/browser/events?cursor=1'), 'browser');
   assert.equal(resolveBridgeRouteScope('POST', '/operations/preview'), 'control');
