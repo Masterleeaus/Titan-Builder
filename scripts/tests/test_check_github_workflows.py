@@ -25,7 +25,7 @@ class WorkflowPolicyTests(unittest.TestCase):
         path.write_text(textwrap.dedent(content).lstrip(), encoding="utf-8")
 
     def valid_workflow(self) -> str:
-        return f"""
+        return textwrap.dedent(f"""
         name: Verify Titan Builder
         on:
           pull_request:
@@ -49,7 +49,7 @@ class WorkflowPolicyTests(unittest.TestCase):
             timeout-minutes: 5
             steps:
               - run: echo ok
-        """
+        """).lstrip()
 
     def rules(self) -> set[str]:
         return {violation.rule for violation in check_repository(self.root)}
