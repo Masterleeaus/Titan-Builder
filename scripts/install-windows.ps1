@@ -1,3 +1,8 @@
+[CmdletBinding()]
+param(
+    [switch]$EnableBackgroundService
+)
+
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
@@ -81,6 +86,20 @@ Write-Step 'Registering the global CLI command'
 & pnpm setup
 & pnpm link --global
 
+if ($EnableBackgroundService) {
+    Write-Step 'Enabling the opt-in background bridge service'
+    & openbrowser service start
+    $startupDirectory = [Environment]::GetFolderPath('Startup')
+    $startupCommand = Join-Path $startupDirectory 'OpenBrowser-Service.cmd'
+    @(
+        '@echo off'
+        'openbrowser service start >nul 2>&1'
+    ) | Set-Content -Encoding ASCII $startupCommand
+    Write-Host "Created user-login startup command: $startupCommand"
+} else {
+    Write-Host "Background startup was not enabled. Run this installer with -EnableBackgroundService to opt in."
+}
+
 $extensionPath = Join-Path (Get-Location) 'browser-extension'
 Write-Host "`nInstallation completed." -ForegroundColor Green
 Write-Host "1. Open chrome://extensions"
@@ -88,3 +107,4 @@ Write-Host "2. Enable Developer mode"
 Write-Host "3. Load unpacked: $extensionPath"
 Write-Host "4. Open a new PowerShell window and run: openbrowser --help"
 Write-Host "5. Copy BRIDGE_BROWSER_TOKEN from $configPath into the extension settings"
+Write-Host "6. Manage the background bridge with: openbrowser service status|start|stop|logs"
