@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-export type BridgeRouteScope = 'public' | 'browser' | 'control' | 'shared';
+export type BridgeRouteScope = 'public' | 'browser' | 'browser-workflow' | 'control' | 'shared';
 
 export interface BridgeSecurityPolicyOptions {
   controlToken?: string;
@@ -98,6 +98,7 @@ export function createBridgeSecurityPolicy(
 
       switch (input.scope) {
         case 'browser':
+        case 'browser-workflow':
           return principal === 'browser';
         case 'control':
           return principal === 'control';
@@ -130,6 +131,9 @@ export function resolveBridgeRouteScope(method: string, rawUrl: string): BridgeR
   const url = rawUrl.split('?')[0] ?? rawUrl;
   if (method.toUpperCase() === 'OPTIONS' || url === '/health') {
     return 'public';
+  }
+  if (url === '/workspace/runs' || url.startsWith('/workspace/runs/')) {
+    return 'browser-workflow';
   }
   if (url === '/browser/events' || url.startsWith('/browser/')) {
     return 'browser';
