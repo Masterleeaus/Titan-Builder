@@ -307,7 +307,7 @@ export function createBrowserRunStore(
       existing.push(normalized);
       eventRecords.set(runId, existing);
       if (persistence !== 'memory') {
-        await mkdir(runsDir, { recursive: true });
+        await mkdir(runsDir, { recursive: true, mode: 0o700 });
         await appendFile(eventsPath(runsDir, runId), `${JSON.stringify(normalized)}\n`, 'utf8');
       }
       return freezeClone(normalized);
@@ -444,9 +444,9 @@ async function loadEvents(filePath: string): Promise<BrowserRunEvent[]> {
 }
 
 async function writeAtomicJson(filePath: string, value: unknown): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
+  await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   const tempPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   await rename(tempPath, filePath);
 }
 
