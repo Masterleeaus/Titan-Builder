@@ -38,6 +38,12 @@ import {
 import { createBrowserRunStore } from '../workflows/browser-run-store.js';
 import type { AgentSubmissionRequest } from '../workflows/agent-preparation.js';
 import { createBridgeIdentityProof } from './bridge-identity.js';
+import {
+  bridgeBodyLimit,
+  createPayloadTooLargeResponse,
+  isPayloadTooLargeError,
+  SMALL_BODY_LIMIT_BYTES,
+} from './body-limits.js';
 import { registerBrowserWorkflowRoutes } from './browser-workflow-routes.js';
 import { createOperationApprovalStore } from './operation-approvals.js';
 import {
@@ -93,7 +99,13 @@ export interface ServerOptions {
 }
 
 export async function createBridgeServer(options: ServerOptions = {}): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, bodyLimit: SMALL_BODY_LIMIT_BYTES });
+  app.setErrorHandler((error, request, reply) => {
+    if (isPayloadTooLargeError(error)) {
+      return reply.code(413).send(createPayloadTooLargeResponse(request));
+    }
+    return reply.send(error);
+  });
   const projectRoot = await canonicalizeProjectRoot(options.projectRoot ?? process.cwd());
   const insecureDevelopment = options.allowInsecureDev ?? process.env.OPENBROWSER_INSECURE_DEV === '1';
   const controlToken = String(options.controlToken ?? process.env.BRIDGE_TOKEN ?? '').trim();
@@ -213,7 +225,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     activeProject: await getActiveProject(options.projectRegistryOptions),
   }));
 
-  app.post('/projects/register-current', async (request) => {
+  app.post('/projects/register-current', bridgeBodyLimit('/projects/register-current'), async (request) => {
     const body = request.body as { name?: string } | undefined;
     const project = await registerProject(projectRoot, {
       ...options.projectRegistryOptions,
@@ -223,7 +235,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     return { project };
   });
 
-  app.post('/projects/active', async (request) => {
+  app.post('/projects/active', bridgeBodyLimit('/projects/active'), async (request) => {
     const body = request.body as { projectId?: string };
     if (!body.projectId) throw new Error('projectId is required');
     return { project: await setActiveProject(body.projectId, options.projectRegistryOptions) };
@@ -233,7 +245,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     entries: await listProjectMemory(projectRoot),
   }));
 
-  app.post('/project/memory', async (request) => {
+  app.post('/project/memory', bridgeBodyLimit('/project/memory'), async (request) => {
     const body = request.body as { text?: string; tags?: string[] };
     if (!body.text?.trim()) throw new Error('text is required');
     return { entry: await addProjectMemory(projectRoot, body.text, body.tags ?? []) };
@@ -244,12 +256,12 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     return { removed: await removeProjectMemory(projectRoot, memoryId) };
   });
 
-  app.post('/project/memory/clear', async () => {
+  app.post('/project/memory/clear', bridgeBodyLimit('/project/memory/clear'), async () => {
     await clearProjectMemory(projectRoot);
     return { cleared: true };
   });
 
-  app.post('/project/context/preview', async (request) => {
+  app.post('/project/context/preview', bridgeBodyLimit('/project/context/preview'), async (request) => {
     const body = request.body as {
       refs?: string[];
       totalCharacters?: number;
@@ -275,7 +287,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
 
   app.get('/summary', async () => ({ context: await generateContext(projectRoot) }));
 
-  app.post('/operations/preview', async (request) => {
+  app.post('/operations/preview', bridgeBodyLimit('/operations/preview'), async (request) => {
     const operations = validateOperations((request.body as { operations?: unknown }).operations);
     const plans = await planOperations(operations, projectRoot);
     return {
@@ -284,7 +296,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     };
   });
 
-  app.post('/operations/apply', async (request, reply) => {
+  app.post('/operations/apply', bridgeBodyLimit('/operations/apply'), async (request, reply) => {
     const body = request.body as { approvalToken?: string; conversationId?: string };
     if (!body.approvalToken) {
       return reply.code(400).send({ error: 'approvalToken is required' });
@@ -305,12 +317,12 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     };
   });
 
-  app.post('/session', async () => ({
+  app.post('/session', bridgeBodyLimit('/session'), async () => ({
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
   }));
 
-  app.post('/session/prompt', async (request) => {
+  app.post('/session/prompt', bridgeBodyLimit('/session/prompt'), async (request) => {
     const body = request.body as {
       mode?: 'ask' | 'agent';
       prompt?: string;
@@ -398,7 +410,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     jobs: listDispatchableSessions().map(toBrowserJob),
   }));
 
-  app.post('/browser/claim', async (request) => {
+  app.post('/browser/claim', bridgeBodyLimit('/browser/claim'), async (request) => {
     const body = request.body as { sessionId?: string; claimantId?: string };
     if (!body.sessionId) throw new Error('sessionId is required');
     const claim = tryClaimSession(body.sessionId, { claimantId: body.claimantId });
@@ -411,7 +423,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     };
   });
 
-  app.post('/browser/heartbeat', async (request) => {
+  app.post('/browser/heartbeat', bridgeBodyLimit('/browser/heartbeat'), async (request) => {
     const body = request.body as { sessionId?: string; claimToken?: string };
     if (!body.sessionId || !body.claimToken) {
       throw new Error('sessionId and claimToken are required');
@@ -420,7 +432,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     return { accepted: true, claimExpiresAt: session?.claimExpiresAt };
   });
 
-  app.post('/browser/release', async (request) => {
+  app.post('/browser/release', bridgeBodyLimit('/browser/release'), async (request) => {
     const body = request.body as { sessionId?: string; claimToken?: string };
     if (!body.sessionId || !body.claimToken) {
       throw new Error('sessionId and claimToken are required');
@@ -439,7 +451,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     };
   });
 
-  app.post('/browser/chunk', async (request) => {
+  app.post('/browser/chunk', bridgeBodyLimit('/browser/chunk'), async (request) => {
     const body = request.body as { sessionId?: string; claimToken?: string; text?: string };
     if (!body.sessionId || !body.claimToken || body.text === undefined) {
       throw new Error('sessionId, claimToken, and text are required');
@@ -449,7 +461,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     return { accepted: true };
   });
 
-  app.post('/browser/response', async (request) => {
+  app.post('/browser/response', bridgeBodyLimit('/browser/response'), async (request) => {
     const body = request.body as {
       sessionId?: string;
       claimToken?: string;
@@ -472,7 +484,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     return { accepted: true, status: 'complete' };
   });
 
-  app.post('/browser/message', async (request) => ({
+  app.post('/browser/message', bridgeBodyLimit('/browser/message'), async (request) => ({
     accepted: true,
     receivedAt: new Date().toISOString(),
     body: request.body,
