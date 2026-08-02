@@ -1,0 +1,36 @@
+{
+  "OpenBrowser Prompt with Context": {
+    "scope": "typescript,javascript,typescriptreact,javascriptreact,python,go,rust",
+    "prefix": "obprompt",
+    "body": [
+      "// ===== OpenBrowser Prompt =====",
+      "// Task: ${1:Describe the requested change}",
+      "// Context: ${2:List constraints, references, and relevant behavior}",
+      "// --- Selected code ---",
+      "$TM_SELECTED_TEXT",
+      "// --- End selected code ---",
+      "// Success criteria: ${3:Describe observable completion evidence}"
+    ],
+    "description": "Insert a structured OpenBrowser prompt around selected code"
+  },
+  "OpenBrowser Agent Skill": {
+    "scope": "yaml",
+    "prefix": "obskill",
+    "body": [
+      "id: ${1:skill-name}",
+      "title: ${2:Skill Title}",
+      "description: ${3:One narrow reusable capability}",
+      "when_to_use:",
+      "  - ${4:Trigger condition}",
+      "when_not_to_use:",
+      "  - ${5:Exclusion condition}",
+      "instructions: |",
+      "  ${6:Deterministic step-by-step instructions}",
+      "validation:",
+      "  - ${7:Evidence required before success}",
+      "tags: [${8:tag1, tag2}]",
+      "version: ${9:1.0.0}"
+    ],
+    "description": "Define a narrow OpenBrowser skill with explicit validation"
+  }
+}

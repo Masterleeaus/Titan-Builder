@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -u
+
+BASE_URL="${OPENBROWSER_WORKSPACE_URL:-http://127.0.0.1:5010}"
+BLOCK_MODE="${OPENBROWSER_HOOK_BLOCK:-0}"
+
+warn_or_block() {
+  echo "OpenBrowser pre-commit: $1" >&2
+  if [[ "$BLOCK_MODE" == '1' ]]; then
+    exit 1
+  fi
+  exit 0
+}
+
+if [[ -z "${WORKSPACE_TOKEN:-}" ]]; then
+  warn_or_block 'WORKSPACE_TOKEN is not set; analysis skipped.'
+fi
+
+if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+  warn_or_block 'curl and jq are required; analysis skipped.'
+fi
+
+if ! curl --fail --silent --max-time 2 "${BASE_URL}/health" >/dev/null; then
+  warn_or_block 'workspace companion is offline; analysis skipped.'
+fi
+
+relevant_files=()
+while IFS= read -r -d '' file_path; do
+  case "$file_path" in
+    *.py|*.js|*.jsx|*.mjs|*.cjs|*.ts|*.tsx|*.mts|*.cts|*.json)
+      relevant_files+=("$file_path")
+      ;;
+  esac
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+if [[ ${#relevant_files[@]} -eq 0 ]]; then
+  echo 'OpenBrowser pre-commit: no supported staged files.'
+  exit 0
+fi
+
+payload="$(printf '%s\n' "${relevant_files[@]}" | jq -R . | jq -s '{files: .}')"
+response_file="$(mktemp)"
+trap 'rm -f "$response_file"' EXIT
+
+if ! curl --fail-with-body --silent --show-error \
+  --request POST \
+  --header "Authorization: Bearer ${WORKSPACE_TOKEN}" \
+  --header 'Content-Type: application/json' \
+  --data-binary "$payload" \
+  "${BASE_URL}/project/analyze-staged" >"$response_file"; then
+  warn_or_block 'analysis request failed.'
+fi
+
+jq . "$response_file"
+blocking_issues="$(jq -r '.blockingIssues // 0' "$response_file")"
+
+if [[ "$BLOCK_MODE" == '1' && "$blocking_issues" =~ ^[1-9][0-9]*$ ]]; then
+  echo "OpenBrowser pre-commit blocked the commit because ${blocking_issues} high-severity issue(s) were found." >&2
+  exit 1
+fi
+
+exit 0
