@@ -1,0 +1,122 @@
+name: Apply issue 82 on current main
+
+on:
+  pull_request:
+    types: [opened, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: issue-82-current-main-apply
+  cancel-in-progress: false
+
+jobs:
+  patch-and-verify:
+    if: github.event.pull_request.head.ref == 'fix/issue-82-route-body-limits-current'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out issue branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: fix/issue-82-route-body-limits-current
+          persist-credentials: true
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+
+      - name: Wire route-aware limits after bridge identity
+        shell: python
+        run: |
+          from pathlib import Path
+
+          index_path = Path('src/server/index.ts')
+          source = index_path.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  "import { createBridgeIdentityProof } from './bridge-identity.js';\nimport { registerBrowserWorkflowRoutes } from './browser-workflow-routes.js';",
+                  "import { createBridgeIdentityProof } from './bridge-identity.js';\nimport {\n  bridgeBodyLimit,\n  createPayloadTooLargeResponse,\n  isPayloadTooLargeError,\n  SMALL_BODY_LIMIT_BYTES,\n} from './body-limits.js';\nimport { registerBrowserWorkflowRoutes } from './browser-workflow-routes.js';",
+              ),
+              (
+                  "  const app = Fastify({ logger: false });",
+                  "  const app = Fastify({ logger: false, bodyLimit: SMALL_BODY_LIMIT_BYTES });\n  app.setErrorHandler((error, request, reply) => {\n    if (isPayloadTooLargeError(error)) {\n      return reply.code(413).send(createPayloadTooLargeResponse(request));\n    }\n    return reply.send(error);\n  });",
+              ),
+          ]
+
+          for route in [
+              '/projects/register-current',
+              '/projects/active',
+              '/project/memory',
+              '/project/memory/clear',
+              '/project/context/preview',
+              '/operations/preview',
+              '/operations/apply',
+              '/session',
+              '/session/prompt',
+              '/browser/claim',
+              '/browser/heartbeat',
+              '/browser/release',
+              '/browser/chunk',
+              '/browser/response',
+              '/browser/message',
+          ]:
+              replacements.append((
+                  f"  app.post('{route}', async",
+                  f"  app.post('{route}', bridgeBodyLimit('{route}'), async",
+              ))
+
+          for old, new in replacements:
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'Expected exactly one index.ts match ({count}) for: {old!r}')
+              source = source.replace(old, new)
+          index_path.write_text(source, encoding='utf-8')
+
+          routes_path = Path('src/server/browser-workflow-routes.ts')
+          source = routes_path.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  "import type { FastifyInstance, FastifyReply } from 'fastify';",
+                  "import type { FastifyInstance, FastifyReply } from 'fastify';\nimport { bridgeBodyLimit } from './body-limits.js';",
+              ),
+          ]
+          for route in [
+              '/workspace/runs',
+              '/workspace/runs/:runId/approve',
+              '/workspace/runs/:runId/apply',
+              '/workspace/runs/:runId/reject',
+              '/workspace/runs/:runId/cancel',
+          ]:
+              replacements.append((
+                  f"  app.post('{route}', async",
+                  f"  app.post('{route}', bridgeBodyLimit('{route}'), async",
+              ))
+
+          for old, new in replacements:
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'Expected exactly one browser-workflow-routes.ts match ({count}) for: {old!r}')
+              source = source.replace(old, new)
+          routes_path.write_text(source, encoding='utf-8')
+
+      - name: Activate pnpm 11.2.2
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify current-main candidate
+        run: pnpm run verify
+
+      - name: Commit verified implementation and remove one-shot workflow
+        run: |
+          rm .github/workflows/issue-82-current-apply.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/server/body-limits.ts src/server/body-limits.test.ts src/server/index.ts src/server/browser-workflow-routes.ts docs/security/request-body-limits.md package.json .github/workflows/issue-82-current-apply.yml
+          git commit -m "fix(server): enforce route-aware request body limits (#82)"
+          git push origin HEAD:fix/issue-82-route-body-limits-current
