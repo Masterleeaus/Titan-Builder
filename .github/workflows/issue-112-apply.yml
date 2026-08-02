@@ -1,0 +1,237 @@
+name: Apply issue 112 hardened Git boundary
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'fix/issue-112-harden-read-git' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out issue branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fix/issue-112-harden-read-git
+          persist-credentials: true
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Wire hardened Git tools into the refactored catalog
+        shell: python
+        run: |
+          from pathlib import Path
+
+          catalog_path = Path('src/tools/catalog.ts')
+          source = catalog_path.read_text(encoding='utf-8')
+
+          replacements = (
+              (
+                  "import path from 'node:path';\n",
+                  "import path from 'node:path';\nimport { buildHardenedGitInvocation } from '../git/hardened-read.js';\n",
+              ),
+              ("  'git.status': gitReadTool({", "  'git.status': gitWorktreeTool({"),
+              ("  'git.diff': gitReadTool({", "  'git.diff': gitWorktreeTool({"),
+              (
+                  "      return invocation('git.status', 'git', ['status', '--short', '--branch'], cwd, 'READ');",
+                  "      return invocation('git.status', 'git', ['status', '--short', '--branch'], cwd, 'ARBITRARY_EXECUTION');",
+              ),
+              (
+                  "      return invocation('git.diff', 'git', ['diff', ...args], cwd, 'READ');",
+                  "      return invocation(\n        'git.diff',\n        'git',\n        ['diff', '--no-ext-diff', '--no-textconv', ...args],\n        cwd,\n        'ARBITRARY_EXECUTION',\n      );",
+              ),
+              (
+                  "commands: ['git show --no-ext-diff --stat --oneline --decorate --no-renames <revision> --'],",
+                  "commands: ['git show --no-ext-diff --no-textconv --stat --oneline --decorate --no-renames <revision> --'],",
+              ),
+              (
+                  "['show', '--no-ext-diff', '--stat', '--oneline', '--decorate', '--no-renames', revision, '--'],",
+                  "['show', '--no-ext-diff', '--no-textconv', '--stat', '--oneline', '--decorate', '--no-renames', revision, '--'],",
+              ),
+          )
+          for old, new in replacements:
+              if source.count(old) != 1:
+                  raise SystemExit(f'Expected exactly one catalog match: {old!r}')
+              source = source.replace(old, new)
+
+          worktree_helper = """
+function gitWorktreeTool(
+  options: Omit<DefinitionOptions, 'category' | 'risk' | 'approval' | 'permissions' | 'servicesUsed'>,
+): BuiltinToolDefinition {
+  return defineTool({
+    ...options,
+    category: 'git',
+    risk: 'ARBITRARY_EXECUTION',
+    approval: 'explicit',
+    permissions: ['process.execute', 'git.read'],
+    servicesUsed: ['git-runtime', 'workspace-manager'],
+    securityConsiderations: options.securityConsiderations ?? [
+      'Working-tree inspection can invoke repository-configured content filters.',
+      'Explicit approval is required before executing worktree-sensitive Git reads.',
+      'User, system, command-scope, pager, editor, credential, fsmonitor, hook, external-diff, and textconv helper paths are closed or disabled.',
+    ],
+    relatedAgents: ['Titan Builder coding agent', 'Titan Builder review agent'],
+    relatedSkills: ['repository inspection', 'git analysis'],
+    relatedWorkflows: ['project discovery', 'operation preview and apply'],
+  });
+}
+"""
+          marker = "\nconst BUILTIN_TOOL_DEFINITION_MAP = {"
+          if source.count(marker) != 1:
+              raise SystemExit('Expected one built-in tool map marker')
+          source = source.replace(marker, f"\n{worktree_helper}{marker}")
+
+          old_invocation = """function invocation(
+  toolId: string,
+  executable: string,
+  args: string[],
+  cwd: string,
+  risk: ToolRisk,
+): ToolInvocation {
+  const execution = wrapWindowsCommandShim(executable, args);
+  return {
+    toolId,
+    executable: execution.executable,
+    args: execution.args,
+    cwd,
+    risk,
+    displayCommand: [quoteDisplay(executable), ...args.map(quoteDisplay)].join(' '),
+    shell: false,
+  };
+}
+"""
+          new_invocation = """function invocation(
+  toolId: string,
+  executable: string,
+  args: string[],
+  cwd: string,
+  risk: ToolRisk,
+): ToolInvocation {
+  if (executable === 'git') {
+    const execution = buildHardenedGitInvocation(args);
+    return {
+      toolId,
+      executable: execution.executable,
+      args: execution.args,
+      env: execution.env,
+      cwd,
+      risk,
+      displayCommand: [quoteDisplay(execution.executable), ...execution.args.map(quoteDisplay)].join(' '),
+      shell: false,
+    };
+  }
+
+  const execution = wrapWindowsCommandShim(executable, args);
+  return {
+    toolId,
+    executable: execution.executable,
+    args: execution.args,
+    env: { ...process.env },
+    cwd,
+    risk,
+    displayCommand: [quoteDisplay(executable), ...args.map(quoteDisplay)].join(' '),
+    shell: false,
+  };
+}
+"""
+          if source.count(old_invocation) != 1:
+              raise SystemExit('Expected one catalog invocation helper')
+          source = source.replace(old_invocation, new_invocation)
+          catalog_path.write_text(source, encoding='utf-8')
+
+      - name: Wire subprocess and CLI consumers
+        shell: python
+        run: |
+          from pathlib import Path
+
+          operations_path = Path('src/operations/index.ts')
+          operations = operations_path.read_text(encoding='utf-8')
+          old_env = "      env: process.env,"
+          new_env = "      env: invocation.env,"
+          if operations.count(old_env) != 1:
+              raise SystemExit('Expected one tool subprocess environment')
+          operations_path.write_text(operations.replace(old_env, new_env), encoding='utf-8')
+
+          index_path = Path('src/index.ts')
+          source = index_path.read_text(encoding='utf-8')
+          old_final = "      `working tree after pass: ${finalStatus.dirty ? `${finalStatus.changedFiles} changed file(s)` : 'clean'}` ,".replace('` ,', '`,')
+          new_final = "      `working tree after pass: ${formatWorkingTreeStatus(finalStatus)}` ,".replace('` ,', '`,')
+          old_status = "    `${colors.dim}Working tree:${colors.reset} ${status.dirty ? `${status.changedFiles} changed file(s)` : 'clean'}\\n`,"
+          new_status = "    `${colors.dim}Working tree:${colors.reset} ${formatWorkingTreeStatus(status)}\\n`,"
+          for old, new in ((old_final, new_final), (old_status, new_status)):
+              if source.count(old) != 1:
+                  raise SystemExit(f'Expected exactly one CLI status match: {old!r}')
+              source = source.replace(old, new)
+
+          marker = "\nfunction printProjectStatus(status: ProjectStatus): void {"
+          helper = """
+function formatWorkingTreeStatus(
+  status: Pick<ProjectStatus, 'dirty' | 'changedFiles' | 'workingTreeReason'>,
+): string {
+  if (status.dirty === null) {
+    return status.workingTreeReason ?? 'not inspected safely';
+  }
+  return status.dirty ? `${status.changedFiles ?? 0} changed file(s)` : 'clean';
+}
+"""
+          if source.count(marker) != 1:
+              raise SystemExit('Expected one printProjectStatus marker')
+          index_path.write_text(source.replace(marker, f"\n{helper}{marker}"), encoding='utf-8')
+
+      - name: Update refactored registry tests and test registration
+        shell: python
+        run: |
+          from pathlib import Path
+
+          registry_path = Path('src/tools/registry.test.ts')
+          source = registry_path.read_text(encoding='utf-8')
+          replacements = (
+              ("test('resolves git.status without a shell', () => {", "test('resolves git.status as an approved hardened worktree read', () => {"),
+              ("  assert.equal(invocation.risk, 'READ');\n  assert.equal(invocation.shell, false);\n});", "  assert.equal(invocation.risk, 'ARBITRARY_EXECUTION');\n  assert.equal(requiresExplicitApproval(invocation.risk), true);\n  assert.equal(invocation.env.GIT_CONFIG_NOSYSTEM, '1');\n  assert.equal(invocation.shell, false);\n});"),
+              ("    ['git.diff', [], 'git', ['diff'], 'READ'],", "    ['git.diff', [], 'git', ['diff', '--no-ext-diff', '--no-textconv'], 'ARBITRARY_EXECUTION'],"),
+              ("    ['git.diff', ['--staged'], 'git', ['diff', '--staged'], 'READ'],", "    ['git.diff', ['--staged'], 'git', ['diff', '--no-ext-diff', '--no-textconv', '--staged'], 'ARBITRARY_EXECUTION'],"),
+              ("    '--no-ext-diff',\n    '--stat',", "    '--no-ext-diff',\n    '--no-textconv',\n    '--stat',"),
+          )
+          for old, new in replacements:
+              if source.count(old) != 1:
+                  raise SystemExit(f'Expected exactly one registry test match: {old!r}')
+              source = source.replace(old, new)
+          registry_path.write_text(source, encoding='utf-8')
+
+          package_path = Path('package.json')
+          package_source = package_path.read_text(encoding='utf-8')
+          old_tests = '"test:tools": "tsx --test src/tools/manifest.test.ts'
+          new_tests = '"test:tools": "tsx --test src/git/hardened-read.test.ts src/tools/git-hardening.test.ts src/tools/manifest.test.ts'
+          if package_source.count(old_tests) != 1:
+              raise SystemExit('Expected one test:tools script')
+          package_path.write_text(package_source.replace(old_tests, new_tests), encoding='utf-8')
+
+      - name: Activate pnpm 11.2.2
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify root project
+        run: pnpm run verify
+
+      - name: Commit verified implementation and remove temporary workflow
+        run: |
+          rm .github/workflows/issue-112-apply.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/git/hardened-read.ts src/git/hardened-read.test.ts src/project/status.ts src/project/status.test.ts src/tools/catalog.ts src/tools/types.ts src/tools/validation.ts src/tools/invocation.test.ts src/tools/registry.test.ts src/tools/git-hardening.test.ts src/operations/index.ts src/index.ts package.json .github/workflows/issue-112-apply.yml
+          git commit -m "fix(security): harden Git read execution (#112)"
+          git push origin HEAD:fix/issue-112-harden-read-git
