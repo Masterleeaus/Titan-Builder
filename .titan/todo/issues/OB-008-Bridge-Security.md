@@ -2,11 +2,14 @@
 
 - Severity: High
 - Branch: `agent/fix-titan-builder-v2.6-deep-scan`
-- Status: FIXED — dependency-backed verification pending
+- Status: VERIFIED
 - Source commit: `bb896fe49928ac05b01aaff24c853104fa1f3ca7`
+- Documentation verification commit: `ffbd215de46d7580512cb58dc84de7f52ea63f15`
 - Artifact SHA-256: `f2c41d5dca6dc748759f198a8fe1c445c5e86f717015c3241c8b60f952b63c0d`
 - Offline applicator run: `30724766381`
 - Offline applicator job: `91434285981`
+- Full verification run: `30724796467`
+- Full verification job: `91434359979`
 
 ## Confirmed defects
 
@@ -65,11 +68,11 @@ Failure-first tests required behavior absent from the original implementation:
 
 - CLI bridge requests refuse to run with a missing or weak control token.
 - Extension requests send only a strong browser token.
-- Popup labels and validation now require `BRIDGE_BROWSER_TOKEN` with a minimum 32-character value.
+- Popup labels and validation require `BRIDGE_BROWSER_TOKEN` with a minimum 32-character value.
 - Windows setup generates missing control and browser credentials separately and instructs the user to copy only the browser token into the extension.
 - `.env.example` and README document the secure defaults and explicit development-only escape hatch.
 
-## Current verification
+## Green evidence
 
 The guarded applicator passed:
 
@@ -79,4 +82,13 @@ The guarded applicator passed:
 - Manifest V3 extension integrity.
 - Commit and push to the repair branch.
 
-Do not mark this issue VERIFIED until the full GitHub pipeline passes typecheck, all Node tests, bridge/operation integrations, production build, CLI smoke, and extension integrity on this source commit or a direct descendant.
+GitHub Actions run `30724796467`, job `91434359979` passed:
+
+- TypeScript typecheck.
+- 127/127 Node tests.
+- 6/6 dependency-backed integration tests.
+- Production build.
+- CLI smoke test.
+- Manifest V3 extension integrity.
+
+The acceptance criteria are satisfied. The bridge now fails closed by default, separates browser and control authority, scopes extension origins, and requires a one-time server-issued capability for the exact approved operation preview.
