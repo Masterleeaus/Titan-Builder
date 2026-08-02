@@ -2,7 +2,7 @@
 
 This package adds local developer-workspace capabilities around the existing OpenBrowser bridge without replacing its browser sessions, operation approvals, project memory, or safety model.
 
-The companion runs separately on `127.0.0.1:5010` by default. The main OpenBrowser bridge remains authoritative on `127.0.0.1:5000`.
+The package is installed directly inside the browser extension root beside `manifest.json`. The companion runs separately on `127.0.0.1:5010` by default. The main OpenBrowser bridge remains authoritative on `127.0.0.1:5000`.
 
 ## Capabilities
 
@@ -32,7 +32,7 @@ The companion runs separately on `127.0.0.1:5010` by default. The main OpenBrows
 ## Setup
 
 ```bash
-cd tools/openbrowser-workspace
+cd browser-extension
 cp .env.example .env
 ```
 
@@ -152,7 +152,7 @@ export OPENBROWSER_HOOK_BLOCK=1
 
 ## VS Code
 
-Open `tools/openbrowser-workspace` as the workspace folder, then run tasks from **Tasks: Run Task**.
+Open `browser-extension` as the workspace folder, then run tasks from **Tasks: Run Task**.
 
 Available tasks include installation, start/stop, project registration, indexing, project analysis, current-file analysis, and clipboard prompt submission.
 
@@ -199,4 +199,4 @@ The companion project registry is auxiliary. The main bridge is still started in
 
 The AST analyzer currently provides deep analysis for Python. JavaScript and TypeScript staged analysis applies a small evidence-based risk ruleset; it is not a full language parser.
 
-The companion intentionally has its own pnpm workspace boundary. It does not alter the root OpenBrowser lockfile or dependency graph.
+The extension intentionally has its own pnpm workspace boundary inside `browser-extension/`. It does not alter the root OpenBrowser lockfile or dependency graph.
