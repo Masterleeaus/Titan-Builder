@@ -1,4 +1,4 @@
-name: Rebase PR 191 onto current main
+name: Rebase PR 191 onto current main (trigger)
 
 on:
   push:
