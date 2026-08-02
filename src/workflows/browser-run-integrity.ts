@@ -1,7 +1,6 @@
 import crypto from 'node:crypto';
 import type { FileOperation } from '../core/types/index.js';
 import type { PlannedOperation } from '../operations/index.js';
-import { requiresExplicitApproval } from '../tools/registry.ts';
 import type {
   BrowserPreparedArtifact,
   BrowserRunEvent,
@@ -14,6 +13,12 @@ import type {
 export const PREPARED_ARTIFACT_SCHEMA_VERSION = 1 as const;
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const EXPLICIT_APPROVAL_RISKS = new Set<PlannedOperation['risk']>([
+  'NETWORK_WRITE',
+  'ARBITRARY_EXECUTION',
+  'DESTRUCTIVE',
+  'PUBLISH',
+]);
 const ENVELOPE_KEYS = [
   'auditRevision',
   'auditSequence',
@@ -62,7 +67,7 @@ export function reducePlansToBrowserPreviews(
     risk: plan.risk,
     summary: plan.diff.split(/\r?\n/u, 1)[0] || plan.operation.action,
     diff: plan.diff,
-    requiresExplicitApproval: requiresExplicitApproval(plan.risk),
+    requiresExplicitApproval: EXPLICIT_APPROVAL_RISKS.has(plan.risk),
   }));
 }
 
