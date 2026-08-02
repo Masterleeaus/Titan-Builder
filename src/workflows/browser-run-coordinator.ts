@@ -1,12 +1,13 @@
 import crypto from 'node:crypto';
 import type { ProjectRecord } from '../projects/registry.js';
+import { createOperationApprovalStore } from '../server/operation-approvals.js';
 import { requiresExplicitApproval } from '../tools/registry.js';
 import {
+  AgentApplicationError,
   applyApprovedAgentRun,
   createPlannedOperationRevision,
   operationIdForIndex,
   prepareSelectedApproval,
-  AgentApplicationError,
   type PreparedSelectedApproval,
 } from './agent-application.js';
 import {
@@ -24,12 +25,11 @@ import type {
   BrowserRunRecord,
   CreateBrowserRunInput,
 } from './browser-run-types.js';
-import { createOperationApprovalStore } from '../server/operation-approvals.js';
 
 export interface BrowserRunCoordinatorDependencies {
   store?: BrowserRunStore;
   resolveProject(projectId: string): Promise<ProjectRecord>;
-  submitAndWait(request: AgentSubmissionRequest): Promise<string>;
+  submitAndWait(request: AgentSubmissionRequest, projectRoot: string): Promise<string>;
 }
 
 export interface BrowserRunApprovalRequest {
@@ -76,7 +76,7 @@ export function createBrowserRunCoordinator(
       });
       queueMicrotask(() => {
         void prepareRun(run.id, project, run).catch(async (error) => {
-          await failRun(run.id, error);
+          await failRun(store, run.id, error);
         });
       });
       return run;
@@ -189,6 +189,8 @@ export function createBrowserRunCoordinator(
     if ((await requireRun(store, runId)).status === 'cancelled') return;
     await store.transition(runId, 'waiting_for_model');
     const conversationId = crypto.randomUUID();
+    const submitAndWait = (request: AgentSubmissionRequest) =>
+      dependencies.submitAndWait(request, project.root);
 
     if (run.mode === 'ask') {
       const result = await runAskWorkflow(
@@ -200,7 +202,7 @@ export function createBrowserRunCoordinator(
           conversationId,
           includeSystemInstructions: true,
         },
-        { submitAndWait: dependencies.submitAndWait },
+        { submitAndWait },
       );
       const current = await requireRun(store, runId);
       if (current.status === 'cancelled') return;
@@ -218,7 +220,7 @@ export function createBrowserRunCoordinator(
         conversationId,
         includeSystemInstructions: true,
       },
-      { submitAndWait: dependencies.submitAndWait },
+      { submitAndWait },
     );
     const current = await requireRun(store, runId);
     if (current.status === 'cancelled') return;
@@ -256,7 +258,11 @@ async function requireRun(store: BrowserRunStore, runId: string): Promise<Browse
   return run;
 }
 
-async function failRun(runId: string, error: unknown): Promise<void> {
+async function failRun(
+  store: BrowserRunStore,
+  runId: string,
+  error: unknown,
+): Promise<void> {
   const run = await store.get(runId);
   if (!run || ['completed', 'rejected', 'cancelled', 'failed'].includes(run.status)) return;
   await store.transition(runId, 'failed', {
