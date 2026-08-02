@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { createBridgeServer } from './index.js';
 import { clearSessions } from './session-store.js';
 
+const execFileAsync = promisify(execFile);
 const CONTROL_TOKEN = 'control-'.padEnd(56, 'a');
 const BROWSER_TOKEN = 'browser-'.padEnd(56, 'b');
 const EXTENSION_A = 'chrome-extension://abcdefghijklmnop';
@@ -23,6 +26,21 @@ function createTestServer(projectRoot = process.cwd()) {
     controlToken: CONTROL_TOKEN,
     browserToken: BROWSER_TOKEN,
   });
+}
+
+async function runGit(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, {
+    cwd,
+    windowsHide: true,
+    timeout: 20_000,
+    maxBuffer: 1024 * 1024,
+    env: {
+      ...process.env,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_TERMINAL_PROMPT: '0',
+    },
+  });
+  return stdout.trim();
 }
 
 test.beforeEach(() => {
@@ -220,6 +238,47 @@ test('bridge scopes, origin pinning, and one-time operation approvals fail close
       payload: { approvalToken: previewPayload.approval.token },
     });
     assert.equal(replay.statusCode, 403);
+  } finally {
+    await app.close();
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('operation approval endpoint rejects branch changes with identical reviewed file state', async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'openbrowser-approval-branch-'));
+  await runGit(projectRoot, ['init', '-b', 'feature/review']);
+  await runGit(projectRoot, ['config', 'user.name', 'Titan Test']);
+  await runGit(projectRoot, ['config', 'user.email', 'titan@example.invalid']);
+  await writeFile(path.join(projectRoot, 'tracked.txt'), 'same bytes\n', 'utf8');
+  await runGit(projectRoot, ['add', 'tracked.txt']);
+  await runGit(projectRoot, ['commit', '-m', 'initial']);
+  await runGit(projectRoot, ['branch', 'main']);
+
+  const app = await createTestServer(projectRoot);
+  await app.ready();
+  try {
+    const preview = await app.inject({
+      method: 'POST',
+      url: '/operations/preview',
+      headers: controlHeaders,
+      payload: {
+        operations: [{ action: 'CREATE_FILE', path: 'approved.txt', content: 'approved\n' }],
+      },
+    });
+    assert.equal(preview.statusCode, 200);
+    const token = (preview.json() as { approval: { token: string } }).approval.token;
+
+    await runGit(projectRoot, ['switch', 'main']);
+    const applied = await app.inject({
+      method: 'POST',
+      url: '/operations/apply',
+      headers: controlHeaders,
+      payload: { approvalToken: token },
+    });
+
+    assert.equal(applied.statusCode, 409);
+    assert.match(String(applied.json().error), /repository identity|stale|branch/i);
+    await assert.rejects(readFile(path.join(projectRoot, 'approved.txt'), 'utf8'), /ENOENT/u);
   } finally {
     await app.close();
     await rm(projectRoot, { recursive: true, force: true });

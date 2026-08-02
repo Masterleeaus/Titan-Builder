@@ -7,6 +7,12 @@ import {
   type PlannedOperation,
 } from '../operations/index.js';
 import {
+  assertRepositoryApprovalPolicy,
+  captureRepositoryIdentity,
+  sameRepositoryIdentity,
+  type RepositoryIdentity,
+} from '../security/repository-identity.js';
+import {
   createOperationApprovalStore,
   createOperationPlanRevision,
   type OperationApprovalStore,
@@ -33,6 +39,7 @@ export interface PreparedSelectedApproval {
   previewHash: string;
   previewRevision: string;
   selectedPreviewRevision: string;
+  repositoryIdentity: RepositoryIdentity;
   selectedOperationIds: readonly string[];
   selectedOperations: readonly FileOperation[];
   selectedPlans: readonly PlannedOperation[];
@@ -61,6 +68,8 @@ export interface AgentApplicationDependencies {
   plan?: typeof planOperations;
   execute?: typeof executePlannedOperations;
   verify?: typeof runProjectVerification;
+  captureIdentity?: typeof captureRepositoryIdentity;
+  protectedBranches?: readonly string[];
   onStep?: ExecuteOptions['onStep'];
 }
 
@@ -111,7 +120,7 @@ export async function prepareSelectedApproval(
   projectRoot: string,
   dependencies: AgentApplicationDependencies = {},
 ): Promise<PreparedSelectedApproval> {
-  const root = requireText(projectRoot, 'projectRoot');
+  const requestedRoot = requireText(projectRoot, 'projectRoot');
   const runId = requireText(preparedRun.runId, 'runId');
   const conversationId = requireText(
     preparedRun.conversationId,
@@ -119,7 +128,7 @@ export async function prepareSelectedApproval(
   );
   if (
     preparedRun.projectRoot &&
-    path.resolve(preparedRun.projectRoot) !== path.resolve(root)
+    path.resolve(preparedRun.projectRoot) !== path.resolve(requestedRoot)
   ) {
     throw new AgentApplicationError(
       'APPROVAL_INVALID',
@@ -127,8 +136,16 @@ export async function prepareSelectedApproval(
     );
   }
 
+  const captureIdentity = dependencies.captureIdentity ?? captureRepositoryIdentity;
+  const identityBeforePlan = await captureIdentityForApproval(
+    requestedRoot,
+    'reviewed repository identity could not be captured',
+    captureIdentity,
+  );
+  const root = identityBeforePlan.projectRoot;
+  const previewRoot = preparedRun.projectRoot ?? requestedRoot;
   const reviewedPlans = [...preparedRun.previews];
-  const reviewedRevision = createPlannedOperationRevision(root, reviewedPlans);
+  const reviewedRevision = createPlannedOperationRevision(previewRoot, reviewedPlans);
   const expectedPlannedRevision =
     preparedRun.plannedPreviewRevision ?? preparedRun.previewRevision;
   if (reviewedRevision !== expectedPlannedRevision) {
@@ -148,6 +165,32 @@ export async function prepareSelectedApproval(
   const reviewedSelectedPlans = selectedEntries.map((entry) => entry.plan);
   const plan = dependencies.plan ?? planOperations;
   const currentPlans = await plan(selectedOperations, root);
+  const identityAfterPlan = await captureIdentityForApproval(
+    root,
+    'repository identity changed while approval was prepared',
+    captureIdentity,
+  );
+  if (!sameRepositoryIdentity(identityBeforePlan, identityAfterPlan)) {
+    throw new AgentApplicationError(
+      'STALE_PREVIEW',
+      'Preview is stale because repository identity changed during approval preparation',
+      { replacementPlans: currentPlans },
+    );
+  }
+
+  try {
+    assertRepositoryApprovalPolicy(
+      identityAfterPlan,
+      dependencies.protectedBranches,
+    );
+  } catch (error) {
+    throw new AgentApplicationError(
+      'APPROVAL_INVALID',
+      formatUnknownError(error),
+      { cause: error },
+    );
+  }
+
   const reviewedSelectedRevision = createPlannedOperationRevision(
     root,
     reviewedSelectedPlans,
@@ -172,6 +215,7 @@ export async function prepareSelectedApproval(
   const issued = approvals.issue({
     runId,
     projectRoot: root,
+    repositoryIdentity: identityAfterPlan,
     conversationId,
     previewRevision: preparedRun.previewRevision,
     selectedOperationIds: selectedIds,
@@ -184,6 +228,7 @@ export async function prepareSelectedApproval(
     previewHash: issued.previewHash,
     previewRevision: preparedRun.previewRevision,
     selectedPreviewRevision: issued.selectedPreviewRevision,
+    repositoryIdentity: freezeClone(identityAfterPlan),
     selectedOperationIds: freezeClone(selectedIds),
     selectedOperations: freezeClone(selectedOperations),
     selectedPlans: freezeClone(currentPlans),
@@ -196,15 +241,24 @@ export async function applyApprovedAgentRun(
   dependencies: AgentApplicationDependencies = {},
 ): Promise<AppliedAgentRunResult> {
   const runId = requireText(input.runId, 'runId');
-  const projectRoot = requireText(input.projectRoot, 'projectRoot');
+  const requestedRoot = requireText(input.projectRoot, 'projectRoot');
   const conversationId = requireText(input.conversationId, 'conversationId');
   const approvalToken = requireText(input.approvalToken, 'approvalToken');
   const previewRevision = requireText(input.previewRevision, 'previewRevision');
   const selectedOperationIds = normalizeSelectedIds(input.selectedOperationIds);
   const approvals = dependencies.approvals ?? defaultApprovals;
+  const captureIdentity = dependencies.captureIdentity ?? captureRepositoryIdentity;
+  const identityBeforePlan = await captureIdentityForApply(
+    requestedRoot,
+    approvalToken,
+    approvals,
+    captureIdentity,
+  );
+  const projectRoot = identityBeforePlan.projectRoot;
   const expectation = {
     runId,
     projectRoot,
+    repositoryIdentity: identityBeforePlan,
     conversationId,
     previewRevision,
     selectedOperationIds,
@@ -214,9 +268,18 @@ export async function applyApprovedAgentRun(
   try {
     inspection = approvals.inspect(approvalToken, expectation);
   } catch (error) {
+    const message = formatUnknownError(error);
+    if (/repository identity/i.test(message)) {
+      approvals.revoke(approvalToken);
+      throw new AgentApplicationError(
+        'STALE_PREVIEW',
+        'Preview is stale because repository identity changed after approval',
+        { cause: error },
+      );
+    }
     throw new AgentApplicationError(
       'APPROVAL_INVALID',
-      formatUnknownError(error),
+      message,
       { cause: error },
     );
   }
@@ -237,12 +300,44 @@ export async function applyApprovedAgentRun(
     );
   }
 
+  const identityBeforeConsume = await captureIdentityForApply(
+    projectRoot,
+    approvalToken,
+    approvals,
+    captureIdentity,
+  );
+  if (
+    !sameRepositoryIdentity(identityBeforePlan, identityBeforeConsume) ||
+    !sameRepositoryIdentity(inspection.repositoryIdentity, identityBeforeConsume)
+  ) {
+    approvals.revoke(approvalToken);
+    throw new AgentApplicationError(
+      'STALE_PREVIEW',
+      'Preview is stale because repository identity changed during approval validation',
+      {
+        replacementPlans: currentPlans,
+        replacementPreviewRevision: currentRevision,
+      },
+    );
+  }
+
   try {
-    approvals.consume(approvalToken, expectation);
+    approvals.consume(approvalToken, {
+      ...expectation,
+      repositoryIdentity: identityBeforeConsume,
+    });
   } catch (error) {
+    const message = formatUnknownError(error);
+    if (/repository identity/i.test(message)) {
+      throw new AgentApplicationError(
+        'STALE_PREVIEW',
+        'Preview is stale because repository identity changed before approval consumption',
+        { cause: error },
+      );
+    }
     throw new AgentApplicationError(
       'APPROVAL_INVALID',
-      formatUnknownError(error),
+      message,
       { cause: error },
     );
   }
@@ -271,6 +366,40 @@ export async function applyApprovedAgentRun(
     changedPaths: freezeClone(changedPaths),
     verification,
   };
+}
+
+async function captureIdentityForApproval(
+  projectRoot: string,
+  message: string,
+  captureIdentity: typeof captureRepositoryIdentity,
+): Promise<RepositoryIdentity> {
+  try {
+    return await captureIdentity(projectRoot);
+  } catch (error) {
+    throw new AgentApplicationError(
+      'STALE_PREVIEW',
+      `${message}: ${formatUnknownError(error)}`,
+      { cause: error },
+    );
+  }
+}
+
+async function captureIdentityForApply(
+  projectRoot: string,
+  approvalToken: string,
+  approvals: OperationApprovalStore,
+  captureIdentity: typeof captureRepositoryIdentity,
+): Promise<RepositoryIdentity> {
+  try {
+    return await captureIdentity(projectRoot);
+  } catch (error) {
+    approvals.revoke(approvalToken);
+    throw new AgentApplicationError(
+      'STALE_PREVIEW',
+      `Preview is stale because repository identity could not be revalidated: ${formatUnknownError(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 function selectReviewedPlans(

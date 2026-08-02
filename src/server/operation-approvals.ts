@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { PlannedOperation } from '../operations/index.js';
+import type { RepositoryIdentity } from '../security/repository-identity.js';
 
 export interface OperationApprovalStoreOptions {
   ttlMs?: number;
@@ -9,6 +10,7 @@ export interface OperationApprovalStoreOptions {
 
 export interface OperationApprovalInput {
   projectRoot: string;
+  repositoryIdentity: RepositoryIdentity;
   plans: PlannedOperation[];
   runId?: string;
   conversationId?: string;
@@ -18,6 +20,7 @@ export interface OperationApprovalInput {
 
 export interface OperationApprovalExpectation {
   projectRoot: string;
+  repositoryIdentity: RepositoryIdentity;
   runId?: string;
   conversationId?: string;
   previewRevision?: string;
@@ -35,6 +38,7 @@ export interface IssuedOperationApproval {
 export interface OperationApprovalInspection {
   runId: string;
   projectRoot: string;
+  repositoryIdentity: RepositoryIdentity;
   conversationId: string;
   previewRevision: string;
   selectedOperationIds: string[];
@@ -52,11 +56,11 @@ export interface OperationApprovalStore {
   issue(input: OperationApprovalInput): IssuedOperationApproval;
   inspect(
     token: string,
-    expectation: string | OperationApprovalExpectation,
+    expectation: OperationApprovalExpectation,
   ): OperationApprovalInspection;
   consume(
     token: string,
-    expectation: string | OperationApprovalExpectation,
+    expectation: OperationApprovalExpectation,
   ): PlannedOperation[];
   revoke(token: string): void;
   size(): number;
@@ -90,7 +94,7 @@ export function createOperationApprovalStore(
 
   const inspectRecord = (
     token: string,
-    expectation: string | OperationApprovalExpectation,
+    expectation: OperationApprovalExpectation,
   ): ApprovalRecord => {
     const tokenHash = hashToken(token);
     const record = records.get(tokenHash);
@@ -129,6 +133,10 @@ export function createOperationApprovalStore(
       prune(issuedAt);
       const plans = clonePlans(input.plans);
       const projectRoot = requireText(input.projectRoot, 'projectRoot');
+      const repositoryIdentity = cloneRepositoryIdentity(input.repositoryIdentity);
+      if (repositoryIdentity.projectRoot !== projectRoot) {
+        throw new Error('Repository identity is bound to a different project root');
+      }
       const runId = normalizeOptionalText(input.runId) ?? LEGACY_RUN_ID;
       const conversationId = normalizeOptionalText(input.conversationId) ?? '';
       const selectedOperationIds = normalizeOperationIds(
@@ -145,6 +153,7 @@ export function createOperationApprovalStore(
       const recordBase: OperationApprovalInspection = {
         runId,
         projectRoot,
+        repositoryIdentity,
         conversationId,
         previewRevision,
         selectedOperationIds,
@@ -209,6 +218,7 @@ function hashApprovalBinding(
     OperationApprovalInspection,
     | 'runId'
     | 'projectRoot'
+    | 'repositoryIdentity'
     | 'conversationId'
     | 'previewRevision'
     | 'selectedOperationIds'
@@ -221,9 +231,10 @@ function hashApprovalBinding(
     .createHash('sha256')
     .update(
       stableSerialize({
-        version: 2,
+        version: 3,
         runId: record.runId,
         projectRoot: record.projectRoot,
+        repositoryIdentity: record.repositoryIdentity,
         conversationId: record.conversationId,
         previewRevision: record.previewRevision,
         selectedOperationIds: record.selectedOperationIds,
@@ -248,13 +259,16 @@ function summarizeRisk(plans: readonly PlannedOperation[]): Record<string, numbe
 }
 
 function normalizeExpectation(
-  expectation: string | OperationApprovalExpectation,
+  expectation: OperationApprovalExpectation,
 ): OperationApprovalExpectation {
-  if (typeof expectation === 'string') {
-    return { projectRoot: expectation };
+  const repositoryIdentity = cloneRepositoryIdentity(expectation.repositoryIdentity);
+  const projectRoot = requireText(expectation.projectRoot, 'projectRoot');
+  if (repositoryIdentity.projectRoot !== projectRoot) {
+    throw new Error('Repository identity is bound to a different project root');
   }
   return {
-    projectRoot: requireText(expectation.projectRoot, 'projectRoot'),
+    projectRoot,
+    repositoryIdentity,
     runId: normalizeOptionalText(expectation.runId),
     conversationId: normalizeOptionalText(expectation.conversationId),
     previewRevision: normalizeOptionalText(expectation.previewRevision),
@@ -270,6 +284,12 @@ function assertBinding(
 ): void {
   if (record.projectRoot !== expectation.projectRoot) {
     throw new Error('Operation approval token is bound to a different project root');
+  }
+  if (
+    stableSerialize(record.repositoryIdentity) !==
+    stableSerialize(expectation.repositoryIdentity)
+  ) {
+    throw new Error('Operation approval token is bound to a different repository identity');
   }
   if (expectation.runId !== undefined && record.runId !== expectation.runId) {
     throw new Error('Operation approval token is bound to a different run');
@@ -315,10 +335,18 @@ function clonePlans(plans: readonly PlannedOperation[]): PlannedOperation[] {
   return structuredClone(plans) as PlannedOperation[];
 }
 
+function cloneRepositoryIdentity(identity: RepositoryIdentity): RepositoryIdentity {
+  if (!identity || typeof identity !== 'object') {
+    throw new Error('repositoryIdentity is required');
+  }
+  return structuredClone(identity) as RepositoryIdentity;
+}
+
 function cloneInspection(record: ApprovalRecord): OperationApprovalInspection {
   return {
     runId: record.runId,
     projectRoot: record.projectRoot,
+    repositoryIdentity: cloneRepositoryIdentity(record.repositoryIdentity),
     conversationId: record.conversationId,
     previewRevision: record.previewRevision,
     selectedOperationIds: [...record.selectedOperationIds],

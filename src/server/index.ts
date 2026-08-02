@@ -25,6 +25,13 @@ import {
 } from '../projects/registry.js';
 import { validateOperations } from '../protocol/index.js';
 import { canonicalizeProjectRoot } from '../security/project-path.js';
+import {
+  assertRepositoryApprovalPolicy,
+  captureRepositoryIdentity,
+  normalizeProtectedBranches,
+  sameRepositoryIdentity,
+  type RepositoryIdentity,
+} from '../security/repository-identity.js';
 import { logger } from '../shared/index.js';
 import {
   PROMPT_FILE_COMPOSER_NOTE,
@@ -45,7 +52,10 @@ import {
   SMALL_BODY_LIMIT_BYTES,
 } from './body-limits.js';
 import { registerBrowserWorkflowRoutes } from './browser-workflow-routes.js';
-import { createOperationApprovalStore } from './operation-approvals.js';
+import {
+  createOperationApprovalStore,
+  type OperationApprovalInspection,
+} from './operation-approvals.js';
 import {
   createBridgeSecurityPolicy,
   parseAllowedExtensionOrigins,
@@ -91,6 +101,7 @@ export interface ServerOptions {
   allowedExtensionOrigins?: string[];
   allowInsecureDev?: boolean;
   approvalTtlMs?: number;
+  protectedBranches?: string[];
   projectRegistryOptions?: ProjectRegistryOptions;
   browserWorkflowSubmitAndWait?: (
     request: AgentSubmissionRequest,
@@ -107,6 +118,9 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     return reply.send(error);
   });
   const projectRoot = await canonicalizeProjectRoot(options.projectRoot ?? process.cwd());
+  const protectedBranches = normalizeProtectedBranches(
+    options.protectedBranches ?? process.env.OPENBROWSER_PROTECTED_BRANCHES,
+  );
   const insecureDevelopment = options.allowInsecureDev ?? process.env.OPENBROWSER_INSECURE_DEV === '1';
   const controlToken = String(options.controlToken ?? process.env.BRIDGE_TOKEN ?? '').trim();
   const bridgeInstanceId = crypto.randomUUID();
@@ -287,12 +301,32 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
 
   app.get('/summary', async () => ({ context: await generateContext(projectRoot) }));
 
-  app.post('/operations/preview', bridgeBodyLimit('/operations/preview'), async (request) => {
+  app.post('/operations/preview', bridgeBodyLimit('/operations/preview'), async (request, reply) => {
     const operations = validateOperations((request.body as { operations?: unknown }).operations);
-    const plans = await planOperations(operations, projectRoot);
+    const identityBeforePlan = await captureRepositoryIdentity(projectRoot);
+    const plans = await planOperations(operations, identityBeforePlan.projectRoot);
+    const identityAfterPlan = await captureRepositoryIdentity(identityBeforePlan.projectRoot);
+    if (!sameRepositoryIdentity(identityBeforePlan, identityAfterPlan)) {
+      return reply.code(409).send({
+        error: 'Operation preview is stale because repository identity changed during planning',
+      });
+    }
+
+    try {
+      assertRepositoryApprovalPolicy(identityAfterPlan, protectedBranches);
+    } catch (error) {
+      return reply.code(403).send({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     return {
       operations: plans,
-      approval: operationApprovals.issue({ projectRoot, plans }),
+      approval: operationApprovals.issue({
+        projectRoot: identityAfterPlan.projectRoot,
+        repositoryIdentity: identityAfterPlan,
+        plans,
+      }),
     };
   });
 
@@ -302,16 +336,62 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
       return reply.code(400).send({ error: 'approvalToken is required' });
     }
 
-    let plans: Awaited<ReturnType<typeof planOperations>>;
+    let identityBeforeInspect: RepositoryIdentity;
     try {
-      plans = operationApprovals.consume(body.approvalToken, projectRoot);
+      identityBeforeInspect = await captureRepositoryIdentity(projectRoot);
+    } catch (error) {
+      return reply.code(409).send({
+        error: `Operation approval is stale because repository identity could not be captured: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+
+    let inspection: OperationApprovalInspection;
+    try {
+      inspection = operationApprovals.inspect(body.approvalToken, {
+        projectRoot: identityBeforeInspect.projectRoot,
+        repositoryIdentity: identityBeforeInspect,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Invalid operation approval';
+      if (/repository identity/i.test(message)) {
+        operationApprovals.revoke(body.approvalToken);
+        return reply.code(409).send({ error: message });
+      }
       return reply.code(403).send({ error: message });
     }
 
+    let identityBeforeConsume: RepositoryIdentity;
+    try {
+      identityBeforeConsume = await captureRepositoryIdentity(identityBeforeInspect.projectRoot);
+    } catch (error) {
+      operationApprovals.revoke(body.approvalToken);
+      return reply.code(409).send({
+        error: `Operation approval is stale because repository identity could not be revalidated: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+    if (
+      !sameRepositoryIdentity(identityBeforeInspect, identityBeforeConsume) ||
+      !sameRepositoryIdentity(inspection.repositoryIdentity, identityBeforeConsume)
+    ) {
+      operationApprovals.revoke(body.approvalToken);
+      return reply.code(409).send({
+        error: 'Operation approval is stale because repository identity changed before consumption',
+      });
+    }
+
+    let plans: Awaited<ReturnType<typeof planOperations>>;
+    try {
+      plans = operationApprovals.consume(body.approvalToken, {
+        projectRoot: identityBeforeConsume.projectRoot,
+        repositoryIdentity: identityBeforeConsume,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid operation approval';
+      return reply.code(/repository identity/i.test(message) ? 409 : 403).send({ error: message });
+    }
+
     return {
-      operations: await executePlannedOperations(plans, projectRoot, {
+      operations: await executePlannedOperations(plans, identityBeforeConsume.projectRoot, {
         conversationId: body.conversationId,
       }),
     };
