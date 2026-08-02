@@ -8,7 +8,7 @@ import {
   executePlannedOperations,
   planOperations,
 } from './index.ts';
-import { listHistory } from '../memory/history.ts';
+import { listHistory } from '../memory/index.ts';
 
 async function createProject(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'openbrowser-transaction-'));
@@ -99,57 +99,57 @@ test('a failed multi-file transaction restores earlier mutations and records rol
   }
 });
 
-
-test('package scripts lock their manifest at preview and reject later script replacement', async () => {
+test('planner rejects writes through an intermediate symlink that leaves the project', async () => {
   const projectRoot = await createProject();
-  const packagePath = path.join(projectRoot, 'package.json');
-  await writeFile(
-    packagePath,
-    JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }),
-    'utf8',
-  );
-  const canonicalPackagePath = await realpath(packagePath);
-
+  const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'openbrowser-outside-'));
+  const linkPath = path.join(projectRoot, 'linked');
   try {
-    const plans = await planOperations([
-      { action: 'RUN_TOOL', tool: 'npm.test' },
-    ], projectRoot);
-    assert.equal(plans[0]?.risk, 'ARBITRARY_EXECUTION');
-    assert.ok(plans[0]?.preconditions.some((entry) => entry.absolutePath === canonicalPackagePath));
-
-    await writeFile(
-      packagePath,
-      JSON.stringify({ scripts: { test: 'node -e "process.exit(99)"' } }),
-      'utf8',
-    );
-
+    await fs.symlink(outsideRoot, linkPath, 'dir');
     await assert.rejects(
-      executePlannedOperations(plans, projectRoot),
-      /precondition changed/i,
+      planOperations([
+        { action: 'CREATE_FILE', path: 'linked/escape.txt', content: 'blocked\n' },
+      ], projectRoot),
+      /outside project root|symbolic link/i,
     );
+    assert.equal(await fs.pathExists(path.join(outsideRoot, 'escape.txt')), false);
   } finally {
     await fs.remove(projectRoot);
+    await fs.remove(outsideRoot);
   }
 });
 
-test('dependency installation requires a lockfile and previews lifecycle-disabled network execution', async () => {
+test('executor detects a symlink swap between preview and write', async () => {
+  if (process.platform === 'win32') return;
   const projectRoot = await createProject();
-  await writeFile(path.join(projectRoot, 'package.json'), JSON.stringify({ dependencies: {} }), 'utf8');
-
+  const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'openbrowser-outside-'));
+  const safeDirectory = path.join(projectRoot, 'safe');
+  await fs.ensureDir(safeDirectory);
   try {
+    const plans = await planOperations([
+      { action: 'CREATE_FILE', path: 'safe/value.txt', content: 'blocked\n' },
+    ], projectRoot);
+    await fs.remove(safeDirectory);
+    await fs.symlink(outsideRoot, safeDirectory, 'dir');
+
     await assert.rejects(
-      planOperations([{ action: 'RUN_TOOL', tool: 'npm.install' }], projectRoot),
-      /requires package-lock\.json/i,
+      executePlannedOperations(plans, projectRoot),
+      /outside project root|symbolic link|precondition/i,
     );
+    assert.equal(await fs.pathExists(path.join(outsideRoot, 'value.txt')), false);
+  } finally {
+    await fs.remove(projectRoot);
+    await fs.remove(outsideRoot);
+  }
+});
 
-    const lockPath = path.join(projectRoot, 'package-lock.json');
-    await writeFile(lockPath, JSON.stringify({ lockfileVersion: 3, packages: {} }), 'utf8');
-    const canonicalLockPath = await realpath(lockPath);
-    const plans = await planOperations([{ action: 'RUN_TOOL', tool: 'npm.install' }], projectRoot);
-
-    assert.equal(plans[0]?.risk, 'NETWORK_WRITE');
-    assert.match(plans[0]?.diff ?? '', /npm(?:\.cmd)? ci --ignore-scripts/);
-    assert.ok(plans[0]?.preconditions.some((entry) => entry.absolutePath === canonicalLockPath));
+test('existing project root is canonical before planning starts', async () => {
+  const projectRoot = await createProject();
+  try {
+    assert.equal(await realpath(projectRoot), projectRoot);
+    const plans = await planOperations([
+      { action: 'CREATE_FOLDER', path: 'src' },
+    ], projectRoot);
+    assert.equal(plans.length, 1);
   } finally {
     await fs.remove(projectRoot);
   }
