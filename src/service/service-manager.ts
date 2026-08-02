@@ -18,6 +18,7 @@ export interface ServiceMetadata {
   entryPath: string;
   startedAt: string;
   logPath: string;
+  nonce: string;
 }
 
 export interface ServiceStatus {
@@ -119,7 +120,14 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
         typeof parsed.startedAt === 'string' &&
         typeof parsed.logPath === 'string'
       ) {
-        return parsed as ServiceMetadata;
+        return {
+          version: 1,
+          pid: parsed.pid as number,
+          entryPath: parsed.entryPath,
+          startedAt: parsed.startedAt,
+          logPath: parsed.logPath,
+          nonce: parsed.nonce ?? 'legacy',
+        };
       }
       return null;
     } catch (error) {
@@ -200,12 +208,20 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
         await removeMetadata();
         return { status: 'stopped', logPath: paths.logPath, staleMetadata: true };
       }
+      const healthy = await probeBridge();
+      if (healthy && metadata.entryPath !== entryPath) {
+        return {
+          status: 'stopped',
+          logPath: paths.logPath,
+          staleMetadata: true,
+        };
+      }
       return {
         status: 'running',
         pid: metadata.pid,
         startedAt: metadata.startedAt,
         logPath: metadata.logPath,
-        healthy: await probeBridge(),
+        healthy,
       };
     },
 
@@ -241,6 +257,7 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
         entryPath,
         startedAt: now().toISOString(),
         logPath: paths.logPath,
+        nonce: crypto.randomUUID(),
       };
       await writeMetadata(metadata);
       if (!(await waitForProbe(true, startupTimeoutMs))) {
