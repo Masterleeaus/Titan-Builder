@@ -317,9 +317,12 @@ function operationChangedPaths(operation: FileOperation): string[] {
     case 'RUN_COMMAND':
       return [];
     case 'RENAME_FILE':
-      return [operation.path, operation.replace];
+      return [
+        requireText(operation.path, 'operation.path'),
+        requireText(operation.replace, 'operation.replace'),
+      ];
     default:
-      return [operation.path];
+      return [requireText(operation.path, 'operation.path')];
   }
 }
 
@@ -327,7 +330,7 @@ function uniqueText(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => String(value).trim()).filter(Boolean))];
 }
 
-function requireText(value: string, field: string): string {
+function requireText(value: unknown, field: string): string {
   const normalized = String(value ?? '').trim();
   if (!normalized) throw new Error(`${field} is required`);
   return normalized;
