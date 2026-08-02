@@ -31,8 +31,8 @@ export const TOOL_PLATFORMS = ['linux', 'windows', 'macos', 'browser'] as const;
 
 const canonicalId = /^titan\.tool\.[a-z0-9]+(?:[.-][a-z0-9]+)*$/u;
 const runtimeId = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/u;
-const semver = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
-const nodeRange = /^(?:>=|>|=|<=|<|\^|~)?\s*\d+(?:\.\d+){0,2}(?:\s*[-|]{1,2}\s*\d+(?:\.\d+){0,2})?$/u;
+const semver = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+const nodeRange = /^(?:>=|>|=|<=|<|\^|~)?\s*\d+(?:\.\d+){0,2}(?:\s*(?:-|\|\|)\s*\d+(?:\.\d+){0,2})?$/u;
 const slug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const highSideEffectRisks = new Set(['NETWORK_WRITE', 'ARBITRARY_EXECUTION', 'DESTRUCTIVE', 'PUBLISH']);
 
