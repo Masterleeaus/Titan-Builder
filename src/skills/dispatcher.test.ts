@@ -62,3 +62,14 @@ test('approved handler validates input and returns the declared output envelope'
     await rm(projectRoot, { recursive: true, force: true });
   }
 });
+
+test('package-local entrypoint marker rejects direct import', async () => {
+  const markerUrl = new URL(
+    '../../browser-extension/skill-library/packages/project-path-containment/runtime/entrypoint.js',
+    import.meta.url,
+  );
+  await assert.rejects(
+    () => import(`${markerUrl.href}?direct-import-test=${Date.now()}`),
+    /closed runtime dispatcher/i,
+  );
+});
