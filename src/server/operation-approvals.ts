@@ -10,32 +10,62 @@ export interface OperationApprovalStoreOptions {
 export interface OperationApprovalInput {
   projectRoot: string;
   plans: PlannedOperation[];
+  runId?: string;
+  conversationId?: string;
+  previewRevision?: string;
+  selectedOperationIds?: string[];
+}
+
+export interface OperationApprovalExpectation {
+  projectRoot: string;
+  runId?: string;
+  conversationId?: string;
+  previewRevision?: string;
+  selectedOperationIds?: string[];
 }
 
 export interface IssuedOperationApproval {
   token: string;
   expiresAt: number;
   previewHash: string;
+  selectedPreviewRevision: string;
   riskSummary: Record<string, number>;
 }
 
-interface ApprovalRecord {
+export interface OperationApprovalInspection {
+  runId: string;
   projectRoot: string;
+  conversationId: string;
+  previewRevision: string;
+  selectedOperationIds: string[];
+  selectedPreviewRevision: string;
   plans: PlannedOperation[];
   expiresAt: number;
+}
+
+interface ApprovalRecord extends OperationApprovalInspection {
   previewHash: string;
   issuedAt: number;
 }
 
 export interface OperationApprovalStore {
   issue(input: OperationApprovalInput): IssuedOperationApproval;
-  consume(token: string, projectRoot: string): PlannedOperation[];
+  inspect(
+    token: string,
+    expectation: string | OperationApprovalExpectation,
+  ): OperationApprovalInspection;
+  consume(
+    token: string,
+    expectation: string | OperationApprovalExpectation,
+  ): PlannedOperation[];
+  revoke(token: string): void;
   size(): number;
   debugTokenHashes(): string[];
 }
 
 const DEFAULT_TTL_MS = 120_000;
 const DEFAULT_MAX_ENTRIES = 100;
+const LEGACY_RUN_ID = 'legacy-operation-preview';
 
 export function createOperationApprovalStore(
   options: OperationApprovalStoreOptions = {},
@@ -58,20 +88,74 @@ export function createOperationApprovalStore(
     }
   };
 
+  const inspectRecord = (
+    token: string,
+    expectation: string | OperationApprovalExpectation,
+  ): ApprovalRecord => {
+    const tokenHash = hashToken(token);
+    const record = records.get(tokenHash);
+    if (!record) {
+      throw new Error('Operation approval token is invalid or already used');
+    }
+
+    const currentTime = now();
+    if (record.expiresAt < currentTime) {
+      records.delete(tokenHash);
+      throw new Error('Operation approval token expired');
+    }
+
+    const expected = normalizeExpectation(expectation);
+    assertBinding(record, expected);
+
+    const actualHash = hashApprovalBinding(record);
+    if (!constantTimeHexEqual(actualHash, record.previewHash)) {
+      records.delete(tokenHash);
+      throw new Error('Operation approval preview integrity check failed');
+    }
+    const actualRevision = createOperationPlanRevision(
+      record.projectRoot,
+      record.plans,
+    );
+    if (!constantTimeHexEqual(actualRevision, record.selectedPreviewRevision)) {
+      records.delete(tokenHash);
+      throw new Error('Operation approval selected preview integrity check failed');
+    }
+    return record;
+  };
+
   return {
     issue(input): IssuedOperationApproval {
       const issuedAt = now();
       prune(issuedAt);
       const plans = clonePlans(input.plans);
-      const projectRoot = String(input.projectRoot);
-      const previewHash = hashPreview(projectRoot, plans);
-      const token = `oba_${crypto.randomBytes(32).toString('base64url')}`;
-      const tokenHash = hashToken(token);
-      const expiresAt = issuedAt + ttlMs;
-      records.set(tokenHash, {
+      const projectRoot = requireText(input.projectRoot, 'projectRoot');
+      const runId = normalizeOptionalText(input.runId) ?? LEGACY_RUN_ID;
+      const conversationId = normalizeOptionalText(input.conversationId) ?? '';
+      const selectedOperationIds = normalizeOperationIds(
+        input.selectedOperationIds,
+        plans.length,
+      );
+      const selectedPreviewRevision = createOperationPlanRevision(
         projectRoot,
         plans,
+      );
+      const previewRevision =
+        normalizeOptionalText(input.previewRevision) ?? selectedPreviewRevision;
+      const expiresAt = issuedAt + ttlMs;
+      const recordBase: OperationApprovalInspection = {
+        runId,
+        projectRoot,
+        conversationId,
+        previewRevision,
+        selectedOperationIds,
+        selectedPreviewRevision,
+        plans,
         expiresAt,
+      };
+      const previewHash = hashApprovalBinding(recordBase);
+      const token = `oba_${crypto.randomBytes(32).toString('base64url')}`;
+      records.set(hashToken(token), {
+        ...recordBase,
         previewHash,
         issuedAt,
       });
@@ -79,30 +163,24 @@ export function createOperationApprovalStore(
         token,
         expiresAt,
         previewHash,
+        selectedPreviewRevision,
         riskSummary: summarizeRisk(plans),
       };
     },
 
-    consume(token: string, projectRoot: string): PlannedOperation[] {
-      const tokenHash = hashToken(token);
-      const record = records.get(tokenHash);
-      if (!record) {
-        throw new Error('Operation approval token is invalid or already used');
-      }
-      records.delete(tokenHash);
+    inspect(token, expectation): OperationApprovalInspection {
+      return cloneInspection(inspectRecord(token, expectation));
+    },
 
-      const currentTime = now();
-      if (record.expiresAt < currentTime) {
-        throw new Error('Operation approval token expired');
-      }
-      if (record.projectRoot !== projectRoot) {
-        throw new Error('Operation approval token is bound to a different project root');
-      }
-      const actualHash = hashPreview(record.projectRoot, record.plans);
-      if (!constantTimeHexEqual(actualHash, record.previewHash)) {
-        throw new Error('Operation approval preview integrity check failed');
-      }
+    consume(token, expectation): PlannedOperation[] {
+      const tokenHash = hashToken(token);
+      const record = inspectRecord(token, expectation);
+      records.delete(tokenHash);
       return clonePlans(record.plans);
+    },
+
+    revoke(token): void {
+      records.delete(hashToken(token));
     },
 
     size: () => records.size,
@@ -110,10 +188,38 @@ export function createOperationApprovalStore(
   };
 }
 
-function hashPreview(projectRoot: string, plans: PlannedOperation[]): string {
+export function createOperationPlanRevision(
+  projectRoot: string,
+  plans: readonly PlannedOperation[],
+): string {
   return crypto
     .createHash('sha256')
-    .update(stableSerialize({ version: 1, projectRoot, plans }))
+    .update(
+      stableSerialize({
+        version: 1,
+        projectRoot: String(projectRoot),
+        plans,
+      }),
+    )
+    .digest('hex');
+}
+
+function hashApprovalBinding(
+  record: Pick<
+    OperationApprovalInspection,
+    | 'runId'
+    | 'projectRoot'
+    | 'conversationId'
+    | 'previewRevision'
+    | 'selectedOperationIds'
+    | 'selectedPreviewRevision'
+    | 'plans'
+    | 'expiresAt'
+  >,
+): string {
+  return crypto
+    .createHash('sha256')
+    .update(stableSerialize({ version: 2, ...record }))
     .digest('hex');
 }
 
@@ -121,7 +227,7 @@ function hashToken(token: string): string {
   return crypto.createHash('sha256').update(String(token)).digest('hex');
 }
 
-function summarizeRisk(plans: PlannedOperation[]): Record<string, number> {
+function summarizeRisk(plans: readonly PlannedOperation[]): Record<string, number> {
   const summary: Record<string, number> = {};
   for (const plan of plans) {
     summary[plan.risk] = (summary[plan.risk] ?? 0) + 1;
@@ -129,8 +235,85 @@ function summarizeRisk(plans: PlannedOperation[]): Record<string, number> {
   return summary;
 }
 
-function clonePlans(plans: PlannedOperation[]): PlannedOperation[] {
-  return JSON.parse(JSON.stringify(plans)) as PlannedOperation[];
+function normalizeExpectation(
+  expectation: string | OperationApprovalExpectation,
+): OperationApprovalExpectation {
+  if (typeof expectation === 'string') {
+    return { projectRoot: expectation };
+  }
+  return {
+    projectRoot: requireText(expectation.projectRoot, 'projectRoot'),
+    runId: normalizeOptionalText(expectation.runId),
+    conversationId: normalizeOptionalText(expectation.conversationId),
+    previewRevision: normalizeOptionalText(expectation.previewRevision),
+    selectedOperationIds: expectation.selectedOperationIds
+      ? normalizeOperationIds(expectation.selectedOperationIds)
+      : undefined,
+  };
+}
+
+function assertBinding(
+  record: ApprovalRecord,
+  expectation: OperationApprovalExpectation,
+): void {
+  if (record.projectRoot !== expectation.projectRoot) {
+    throw new Error('Operation approval token is bound to a different project root');
+  }
+  if (expectation.runId !== undefined && record.runId !== expectation.runId) {
+    throw new Error('Operation approval token is bound to a different run');
+  }
+  if (
+    expectation.conversationId !== undefined &&
+    record.conversationId !== expectation.conversationId
+  ) {
+    throw new Error('Operation approval token is bound to a different conversation');
+  }
+  if (
+    expectation.previewRevision !== undefined &&
+    record.previewRevision !== expectation.previewRevision
+  ) {
+    throw new Error('Operation approval token is bound to a different preview revision');
+  }
+  if (
+    expectation.selectedOperationIds !== undefined &&
+    stableSerialize(record.selectedOperationIds) !==
+      stableSerialize(expectation.selectedOperationIds)
+  ) {
+    throw new Error('Operation approval token is bound to different selected operations');
+  }
+}
+
+function normalizeOperationIds(
+  values: readonly string[] | undefined,
+  planCount?: number,
+): string[] {
+  const normalized = values
+    ? values.map((value) => requireText(value, 'selectedOperationId'))
+    : Array.from({ length: planCount ?? 0 }, (_, index) => `op-${index + 1}`);
+  if (new Set(normalized).size !== normalized.length) {
+    throw new Error('selectedOperationIds must be unique');
+  }
+  if (planCount !== undefined && normalized.length !== planCount) {
+    throw new Error('selectedOperationIds must match the approved plan count');
+  }
+  return normalized;
+}
+
+function clonePlans(plans: readonly PlannedOperation[]): PlannedOperation[] {
+  return structuredClone(plans) as PlannedOperation[];
+}
+
+function cloneInspection(record: ApprovalRecord): OperationApprovalInspection {
+  return {
+    runId: record.runId,
+    projectRoot: record.projectRoot,
+    conversationId: record.conversationId,
+    previewRevision: record.previewRevision,
+    selectedOperationIds: [...record.selectedOperationIds],
+    selectedPreviewRevision: record.selectedPreviewRevision,
+    plans: clonePlans(record.plans),
+    expiresAt: record.expiresAt,
+  };
 }
 
 function stableSerialize(value: unknown): string {
@@ -145,6 +328,17 @@ function stableSerialize(value: unknown): string {
     .sort()
     .map((key) => `${JSON.stringify(key)}:${stableSerialize(object[key])}`);
   return `{${entries.join(',')}}`;
+}
+
+function requireText(value: string, field: string): string {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) throw new Error(`${field} is required`);
+  return normalized;
+}
+
+function normalizeOptionalText(value?: string): string | undefined {
+  const normalized = String(value ?? '').trim();
+  return normalized || undefined;
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {
