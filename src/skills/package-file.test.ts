@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -20,7 +20,7 @@ test('accepts an existing regular file with no linked path components', async ()
   const { packageRoot } = await fixture();
   assert.equal(
     await resolveContainedPackageFile(packageRoot, 'runtime/entrypoint.js'),
-    path.join(packageRoot, 'runtime', 'entrypoint.js'),
+    await realpath(path.join(packageRoot, 'runtime', 'entrypoint.js')),
   );
 });
 
