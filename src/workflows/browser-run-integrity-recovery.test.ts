@@ -58,26 +58,29 @@ test('fails closed after a crash between the prepared write and approval transit
   await assertQuarantined(directory, runId);
 });
 
-test('fails closed after a crash between approval transition and prepared write', async () => {
+test('fails closed after a crash between approval record persistence and envelope rebinding', async () => {
   const directory = await temporaryDirectory('browser-run-record-boundary-');
   const runId = 'run-integrity-record-boundary';
   const store = createBrowserRunStore({ runsDir: directory, idFactory: () => runId });
   await prepareVisiblePreview(store);
-  await store.transition(runId, 'awaiting_approval');
+  await store.setPrepared(runId, fixtureArtifact());
+
+  const recordPath = path.join(directory, `${runId}.json`);
+  const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown>;
+  record.status = 'awaiting_approval';
+  await writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
 
   const restarted = createBrowserRunStore({ runsDir: directory });
   const recoverable = await restarted.recover();
   assert.equal(recoverable.some((run) => run.id === runId), true);
   assert.equal(await restarted.getPrepared(runId), null);
-  const events = await restarted.events(runId);
-  assert.equal(events.at(-1)?.type, 'integrity_quarantine');
-  assert.match(String(events.at(-1)?.details?.reason), /missing/u);
+  await assertQuarantined(directory, runId);
 });
 
 async function prepareAwaitingApproval(store: BrowserRunStore): Promise<void> {
   const runId = await prepareVisiblePreview(store);
-  await store.transition(runId, 'awaiting_approval');
   await store.setPrepared(runId, fixtureArtifact());
+  await store.transition(runId, 'awaiting_approval');
 }
 
 async function prepareVisiblePreview(store: BrowserRunStore): Promise<string> {
