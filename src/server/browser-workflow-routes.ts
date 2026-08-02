@@ -1,10 +1,6 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import {
-  AgentApplicationError,
-} from '../workflows/agent-application.js';
-import type {
-  BrowserRunCoordinator,
-} from '../workflows/browser-run-coordinator.js';
+import { AgentApplicationError } from '../workflows/agent-application.js';
+import type { BrowserRunCoordinator } from '../workflows/browser-run-coordinator.js';
 import type {
   BrowserProvider,
   BrowserRunMode,
@@ -14,6 +10,8 @@ import type {
 export interface BrowserWorkflowRouteDependencies {
   coordinator: BrowserRunCoordinator;
 }
+
+const TERMINAL_STATUSES = new Set(['completed', 'rejected', 'cancelled', 'failed']);
 
 export async function registerBrowserWorkflowRoutes(
   app: FastifyInstance,
@@ -64,6 +62,15 @@ export async function registerBrowserWorkflowRoutes(
     return run;
   });
 
+  app.get('/workspace/runs/:runId/audit', async (request, reply) => {
+    const { runId } = request.params as { runId: string };
+    const query = request.query as { limit?: string | number };
+    const run = await coordinator.get(runId);
+    if (!run) return reply.code(404).send({ error: 'Run not found' });
+    const limit = query.limit === undefined ? undefined : Number(query.limit);
+    return { events: await coordinator.events(runId, limit) };
+  });
+
   app.get('/workspace/runs/:runId/events', async (request, reply) => {
     const { runId } = request.params as { runId: string };
     const run = await coordinator.get(runId);
@@ -76,8 +83,26 @@ export async function registerBrowserWorkflowRoutes(
       'X-Accel-Buffering': 'no',
     });
     reply.raw.write(`event: snapshot\ndata: ${JSON.stringify(run)}\n\n`);
+    let lastUpdatedAt = run.updatedAt;
+    const updates = setInterval(() => {
+      void coordinator.get(runId).then((snapshot) => {
+        if (!snapshot || reply.raw.destroyed) return;
+        if (snapshot.updatedAt !== lastUpdatedAt) {
+          lastUpdatedAt = snapshot.updatedAt;
+          reply.raw.write(`event: update\ndata: ${JSON.stringify(snapshot)}\n\n`);
+        }
+        if (TERMINAL_STATUSES.has(snapshot.status)) {
+          clearInterval(updates);
+          clearInterval(heartbeat);
+          reply.raw.end();
+        }
+      }).catch(() => undefined);
+    }, 1000);
     const heartbeat = setInterval(() => reply.raw.write(': heartbeat\n\n'), 15_000);
-    request.raw.on('close', () => clearInterval(heartbeat));
+    request.raw.on('close', () => {
+      clearInterval(updates);
+      clearInterval(heartbeat);
+    });
   });
 
   app.post('/workspace/runs/:runId/approve', async (request, reply) => {
@@ -95,7 +120,7 @@ export async function registerBrowserWorkflowRoutes(
         selectedOperationIds: body.selectedOperationIds,
       });
     } catch (error) {
-      return sendWorkflowError(reply, error);
+      return sendWorkflowError(reply, error, coordinator, runId);
     }
   });
 
@@ -106,7 +131,7 @@ export async function registerBrowserWorkflowRoutes(
     try {
       return await coordinator.apply(runId, { approvalToken: body.approvalToken });
     } catch (error) {
-      return sendWorkflowError(reply, error);
+      return sendWorkflowError(reply, error, coordinator, runId);
     }
   });
 
@@ -115,7 +140,7 @@ export async function registerBrowserWorkflowRoutes(
     try {
       return await coordinator.reject(runId);
     } catch (error) {
-      return sendWorkflowError(reply, error);
+      return sendWorkflowError(reply, error, coordinator, runId);
     }
   });
 
@@ -124,18 +149,23 @@ export async function registerBrowserWorkflowRoutes(
     try {
       return await coordinator.cancel(runId);
     } catch (error) {
-      return sendWorkflowError(reply, error);
+      return sendWorkflowError(reply, error, coordinator, runId);
     }
   });
 }
 
-function sendWorkflowError(reply: FastifyReply, error: unknown) {
+async function sendWorkflowError(
+  reply: FastifyReply,
+  error: unknown,
+  coordinator: BrowserRunCoordinator,
+  runId: string,
+) {
   if (error instanceof AgentApplicationError && error.code === 'STALE_PREVIEW') {
     return reply.code(409).send({
       error: 'STALE_PREVIEW',
       message: error.message,
-      replacementPlans: error.replacementPlans,
       replacementPreviewRevision: error.replacementPreviewRevision,
+      snapshot: await coordinator.get(runId),
     });
   }
   const message = error instanceof Error ? error.message : String(error);
