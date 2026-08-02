@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { chmod, mkdir, readFile, rename, writeFile, lstat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { parseEnvironmentText } from './environment.js';
 
 export interface EnsureBridgeSecurityOptions {
   env?: NodeJS.ProcessEnv;
@@ -150,19 +151,3 @@ function assertStrongToken(token: string | undefined, label: string): void {
   }
 }
 
-function parseEnvironmentText(text: string): Record<string, string> {
-  const values: Record<string, string> = {};
-  for (const rawLine of text.split(/\r?\n/u)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    const separator = line.indexOf('=');
-    if (separator <= 0) continue;
-    const key = line.slice(0, separator).trim();
-    let value = line.slice(separator + 1).trim();
-    if ((value.startsWith('\"') && value.endsWith('\"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (key) values[key] = value;
-  }
-  return values;
-}
