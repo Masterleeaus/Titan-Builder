@@ -44,7 +44,7 @@
     "verify:offline": "npm run test:node && npm run check:extension",
     "verify": "pnpm run typecheck && pnpm run test && pnpm run build && pnpm run smoke:cli && pnpm run check:extension",
     "ci": "pnpm run verify",
-    "test:integration": "tsx --test src/server/workflow.integration.ts src/operations/transaction.integration.test.ts src/workflows/agent-preparation.test.ts src/workflows/agent-application.test.ts"
+    "test:integration": "tsx --test src/server/workflow.integration.ts src/server/browser-workflow.integration.test.ts src/operations/transaction.integration.test.ts src/workflows/agent-preparation.test.ts src/workflows/agent-application.test.ts"
   },
   "engines": {
     "node": ">=22"
