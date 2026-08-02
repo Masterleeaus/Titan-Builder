@@ -34,6 +34,8 @@ export async function resolveProjectPath(
     throw new Error('Project path must be a non-empty path without null bytes');
   }
 
+  assertNotReserved(targetPath);
+
   const root = await canonicalizeProjectRoot(projectRoot);
   const candidate = path.resolve(root, targetPath);
   assertContained(root, candidate, targetPath);
@@ -99,4 +101,13 @@ function assertContained(projectRoot: string, targetPath: string, originalPath: 
 
 function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
+}
+
+function assertNotReserved(targetPath: string): void {
+  const normalized = targetPath.split(path.sep).filter(Boolean).join(path.sep).toLowerCase();
+  const segments = normalized.split(path.sep);
+
+  if (segments[0] === '.openbrowser') {
+    throw new Error(`Path targets reserved Titan Builder metadata: ${targetPath}`);
+  }
 }
