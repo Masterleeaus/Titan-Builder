@@ -1,0 +1,39 @@
+name: Refresh CORS lockfile
+
+on:
+  push:
+    branches:
+      - fix/issue-206-fastify-cors-compatibility
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/issue-206-fastify-cors-compatibility
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.2.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Regenerate lockfile
+        run: pnpm install --lockfile-only --no-frozen-lockfile
+      - name: Commit generated lockfile and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/refresh-cors-lock.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pnpm-lock.yaml .github/workflows/refresh-cors-lock.yml
+          if git diff --cached --quiet; then
+            echo "No lockfile change produced"
+            exit 1
+          fi
+          git commit -m "chore(deps): refresh lockfile for Fastify 5 CORS (#206)"
+          git push
