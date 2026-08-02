@@ -117,8 +117,6 @@ export function resolveToolInvocation(
   }
 }
 
-
-
 export function requiresExplicitApproval(risk: ToolRisk): boolean {
   return risk === 'NETWORK_WRITE'
     || risk === 'ARBITRARY_EXECUTION'
@@ -207,14 +205,28 @@ function invocation(
   cwd: string,
   risk: ToolRisk,
 ): ToolInvocation {
+  const execution = wrapWindowsCommandShim(executable, args);
   return {
     toolId,
-    executable,
-    args,
+    executable: execution.executable,
+    args: execution.args,
     cwd,
     risk,
     displayCommand: [quoteDisplay(executable), ...args.map(quoteDisplay)].join(' '),
     shell: false,
+  };
+}
+
+function wrapWindowsCommandShim(
+  executable: string,
+  args: string[],
+): { executable: string; args: string[] } {
+  if (process.platform !== 'win32' || !/\.cmd$/iu.test(executable)) {
+    return { executable, args: [...args] };
+  }
+  return {
+    executable: process.env.COMSPEC ?? 'cmd.exe',
+    args: ['/d', '/s', '/c', executable, ...args],
   };
 }
 

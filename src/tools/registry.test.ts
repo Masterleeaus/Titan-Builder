@@ -42,21 +42,36 @@ test('restricts npm.run to verification-oriented names without calling them safe
     assert.equal(invocation.risk, 'ARBITRARY_EXECUTION');
     assert.equal(requiresExplicitApproval(invocation.risk), true);
     assert.ok(toolInputFiles(invocation).some((input) => input.path === 'package.json' && input.required));
+    assert.equal(invocation.shell, false);
   }
 });
 
 test('dependency installs disable lifecycle scripts, enforce lockfiles, and require network approval', () => {
   const npm = resolveToolInvocation('npm.install', [], '/tmp/project');
   assert.equal(npm.risk, 'NETWORK_WRITE');
-  assert.deepEqual(npm.args, ['ci', '--ignore-scripts']);
+  assert.deepEqual(npm.args.slice(-2), ['ci', '--ignore-scripts']);
+  assert.match(npm.displayCommand, /npm(?:\.cmd)? ci --ignore-scripts/);
   assert.equal(requiresExplicitApproval(npm.risk), true);
   assert.ok(toolInputFiles(npm).some((input) => input.path === 'package-lock.json' && input.required));
 
   const pnpm = resolveToolInvocation('pnpm.install', [], '/tmp/project');
   assert.equal(pnpm.risk, 'NETWORK_WRITE');
-  assert.deepEqual(pnpm.args, ['install', '--frozen-lockfile', '--ignore-scripts']);
+  assert.deepEqual(pnpm.args.slice(-3), ['install', '--frozen-lockfile', '--ignore-scripts']);
+  assert.match(pnpm.displayCommand, /pnpm(?:\.cmd)? install --frozen-lockfile --ignore-scripts/);
   assert.equal(requiresExplicitApproval(pnpm.risk), true);
   assert.ok(toolInputFiles(pnpm).some((input) => input.path === 'pnpm-lock.yaml' && input.required));
+});
+
+test('Windows command shims remain shell-disabled and use the system command processor explicitly', () => {
+  const npm = resolveToolInvocation('npm.test', [], '/tmp/project');
+  if (process.platform === 'win32') {
+    assert.equal(npm.executable.toLowerCase(), (process.env.COMSPEC ?? 'cmd.exe').toLowerCase());
+    assert.deepEqual(npm.args.slice(0, 4), ['/d', '/s', '/c', 'npm.cmd']);
+  } else {
+    assert.equal(npm.executable, 'npm');
+    assert.deepEqual(npm.args, ['test']);
+  }
+  assert.equal(npm.shell, false);
 });
 
 test('only genuinely low-side-effect risks bypass per-operation approval', () => {

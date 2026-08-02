@@ -9,21 +9,23 @@ import {
   addProjectMemory,
   clearProjectMemory,
   listProjectMemory,
+  readPromptFile,
   removeProjectMemory,
   writePromptFile,
-  readPromptFile,
 } from '../memory/index.js';
 import { executePlannedOperations, planOperations } from '../operations/index.js';
-import { validateOperations } from '../protocol/index.js';
-import { canonicalizeProjectRoot } from '../security/project-path.js';
-import { logger } from '../shared/index.js';
 import { readProjectStatus } from '../project/status.js';
 import {
   getActiveProject,
   listProjects,
   registerProject,
+  resolveRegisteredProjectId,
   setActiveProject,
+  type ProjectRegistryOptions,
 } from '../projects/registry.js';
+import { validateOperations } from '../protocol/index.js';
+import { canonicalizeProjectRoot } from '../security/project-path.js';
+import { logger } from '../shared/index.js';
 import {
   PROMPT_FILE_COMPOSER_NOTE,
   PROMPT_FILE_NAME,
@@ -31,19 +33,17 @@ import {
   shouldDeliverPromptAsFile,
 } from '../shared/prompt-delivery.js';
 import {
-  addBrowserClient,
-  broadcastBrowserJob,
-  createSseStream,
-  writeCorsPreflight,
-  addSessionClient,
-  notifySessionComplete,
-  notifySessionChunk,
-  notifySessionError,
-  removeBrowserClient,
-  removeSessionClient,
-  sendSseEvent,
-  startSessionHeartbeat,
-} from './sse-hub.js';
+  createBrowserRunCoordinator,
+} from '../workflows/browser-run-coordinator.js';
+import { createBrowserRunStore } from '../workflows/browser-run-store.js';
+import type { AgentSubmissionRequest } from '../workflows/agent-preparation.js';
+import { registerBrowserWorkflowRoutes } from './browser-workflow-routes.js';
+import { createOperationApprovalStore } from './operation-approvals.js';
+import {
+  createBridgeSecurityPolicy,
+  parseAllowedExtensionOrigins,
+  resolveBridgeRouteScope,
+} from './security.js';
 import type { PromptSession } from './session-store.js';
 import {
   completeSession,
@@ -56,12 +56,20 @@ import {
   tryClaimSession,
   updateSessionPartial,
 } from './session-store.js';
-import { createOperationApprovalStore } from './operation-approvals.js';
 import {
-  createBridgeSecurityPolicy,
-  parseAllowedExtensionOrigins,
-  resolveBridgeRouteScope,
-} from './security.js';
+  addBrowserClient,
+  addSessionClient,
+  broadcastBrowserJob,
+  createSseStream,
+  notifySessionComplete,
+  notifySessionChunk,
+  notifySessionError,
+  removeBrowserClient,
+  removeSessionClient,
+  sendSseEvent,
+  startSessionHeartbeat,
+  writeCorsPreflight,
+} from './sse-hub.js';
 
 loadOpenBrowserEnvironment();
 
@@ -76,6 +84,11 @@ export interface ServerOptions {
   allowedExtensionOrigins?: string[];
   allowInsecureDev?: boolean;
   approvalTtlMs?: number;
+  projectRegistryOptions?: ProjectRegistryOptions;
+  browserWorkflowSubmitAndWait?: (
+    request: AgentSubmissionRequest,
+    projectRoot: string,
+  ) => Promise<string>;
 }
 
 export async function createBridgeServer(options: ServerOptions = {}): Promise<FastifyInstance> {
@@ -90,12 +103,24 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     allowInsecureDev: insecureDevelopment,
   });
   const operationApprovals = createOperationApprovalStore({ ttlMs: options.approvalTtlMs });
+  const browserRunStore = createBrowserRunStore({
+    homeDir: options.projectRegistryOptions?.homeDir,
+  });
+  const browserCoordinator = createBrowserRunCoordinator({
+    store: browserRunStore,
+    resolveProject: (projectId) =>
+      resolveRegisteredProjectId(projectId, options.projectRegistryOptions),
+    submitAndWait:
+      options.browserWorkflowSubmitAndWait ??
+      ((request, selectedProjectRoot) =>
+        queueBrowserWorkflowPromptAndWait(request, selectedProjectRoot)),
+  });
 
   await app.register(cors, {
     origin: (origin, callback) => {
       callback(null, securityPolicy.isAllowedPreflightOrigin(origin));
     },
-    methods: ['GET', 'POST', 'OPTIONS'],
+    methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
@@ -105,53 +130,22 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     }
   });
 
-  app.options('/browser/events', async (request, reply) => {
-    assertAllowedOrigin(securityPolicy, request.headers.origin);
-    reply.hijack();
-    writeCorsPreflight(reply.raw, request.headers.origin);
-  });
-
-  app.options('/browser/claim', async (request, reply) => {
-    assertAllowedOrigin(securityPolicy, request.headers.origin);
-    reply.hijack();
-    writeCorsPreflight(reply.raw, request.headers.origin);
-  });
-
-  app.options('/browser/pending', async (request, reply) => {
-    assertAllowedOrigin(securityPolicy, request.headers.origin);
-    reply.hijack();
-    writeCorsPreflight(reply.raw, request.headers.origin);
-  });
-
-  app.options('/browser/heartbeat', async (request, reply) => {
-    assertAllowedOrigin(securityPolicy, request.headers.origin);
-    reply.hijack();
-    writeCorsPreflight(reply.raw, request.headers.origin);
-  });
-
-  app.options('/browser/release', async (request, reply) => {
-    assertAllowedOrigin(securityPolicy, request.headers.origin);
-    reply.hijack();
-    writeCorsPreflight(reply.raw, request.headers.origin);
-  });
-
-  app.options('/browser/chunk', async (request, reply) => {
-    assertAllowedOrigin(securityPolicy, request.headers.origin);
-    reply.hijack();
-    writeCorsPreflight(reply.raw, request.headers.origin);
-  });
-
-  app.options('/browser/response', async (request, reply) => {
-    assertAllowedOrigin(securityPolicy, request.headers.origin);
-    reply.hijack();
-    writeCorsPreflight(reply.raw, request.headers.origin);
-  });
-
-  app.options('/browser/prompt-file/:sessionId', async (request, reply) => {
-    assertAllowedOrigin(securityPolicy, request.headers.origin);
-    reply.hijack();
-    writeCorsPreflight(reply.raw, request.headers.origin);
-  });
+  for (const route of [
+    '/browser/events',
+    '/browser/claim',
+    '/browser/pending',
+    '/browser/heartbeat',
+    '/browser/release',
+    '/browser/chunk',
+    '/browser/response',
+    '/browser/prompt-file/:sessionId',
+  ]) {
+    app.options(route, async (request, reply) => {
+      assertAllowedOrigin(securityPolicy, request.headers.origin);
+      reply.hijack();
+      writeCorsPreflight(reply.raw, request.headers.origin);
+    });
+  }
 
   app.addHook('preHandler', async (request, reply) => {
     const scope = resolveBridgeRouteScope(request.method, request.url);
@@ -176,31 +170,36 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     extensionOrigins: securityPolicy.allowedExtensionOrigins(),
   }));
 
+  await registerBrowserWorkflowRoutes(app, { coordinator: browserCoordinator });
+
   app.get('/project/status', async () => {
     const [status, memory, registered] = await Promise.all([
       readProjectStatus(projectRoot),
       listProjectMemory(projectRoot),
-      registerProject(projectRoot),
+      registerProject(projectRoot, options.projectRegistryOptions),
     ]);
     return { ...status, registeredProjectId: registered.id, memoryCount: memory.length };
   });
 
   app.get('/projects', async () => ({
-    projects: await listProjects(),
-    activeProject: await getActiveProject(),
+    projects: await listProjects(options.projectRegistryOptions),
+    activeProject: await getActiveProject(options.projectRegistryOptions),
   }));
 
   app.post('/projects/register-current', async (request) => {
     const body = request.body as { name?: string } | undefined;
-    const project = await registerProject(projectRoot, { name: body?.name });
-    await setActiveProject(project.id);
+    const project = await registerProject(projectRoot, {
+      ...options.projectRegistryOptions,
+      name: body?.name,
+    });
+    await setActiveProject(project.id, options.projectRegistryOptions);
     return { project };
   });
 
   app.post('/projects/active', async (request) => {
     const body = request.body as { projectId?: string };
     if (!body.projectId) throw new Error('projectId is required');
-    return { project: await setActiveProject(body.projectId) };
+    return { project: await setActiveProject(body.projectId, options.projectRegistryOptions) };
   });
 
   app.get('/project/memory', async () => ({
@@ -247,9 +246,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     };
   });
 
-  app.get('/summary', async () => ({
-    context: await generateContext(projectRoot),
-  }));
+  app.get('/summary', async () => ({ context: await generateContext(projectRoot) }));
 
   app.post('/operations/preview', async (request) => {
     const operations = validateOperations((request.body as { operations?: unknown }).operations);
@@ -261,10 +258,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
   });
 
   app.post('/operations/apply', async (request, reply) => {
-    const body = request.body as {
-      approvalToken?: string;
-      conversationId?: string;
-    };
+    const body = request.body as { approvalToken?: string; conversationId?: string };
     if (!body.approvalToken) {
       return reply.code(400).send({ error: 'approvalToken is required' });
     }
@@ -298,49 +292,27 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
       conversationId?: string;
       markdownDraft?: boolean;
     };
-
     if (!body.mode || !body.prompt || !body.systemPrompt || !body.message || !body.conversationId) {
       throw new Error('mode, prompt, systemPrompt, message, and conversationId are required');
     }
-
-    const delivery = shouldDeliverPromptAsFile(body.message) ? 'file' : 'text';
-    const composerMessage =
-      delivery === 'file' ? PROMPT_FILE_COMPOSER_NOTE : body.message;
-
-    const session = createSession({
-      mode: body.mode,
-      prompt: body.prompt,
-      systemPrompt: body.systemPrompt,
-      message: body.message,
-      composerMessage,
-      delivery,
-      conversationId: body.conversationId,
-      markdownDraft: body.markdownDraft,
-    });
-
-    if (delivery === 'file') {
-      await writePromptFile(projectRoot, session.id, body.message);
-      logger.info(
-        { sessionId: session.id, chars: body.message.length },
-        'Prompt saved as attachment file (exceeds injection limit)',
-      );
-    }
-
-    logger.info({ sessionId: session.id, mode: session.mode, delivery }, 'Prompt session queued');
-
-    broadcastBrowserJob(toBrowserJob(session));
-
+    const session = await queuePromptSession(
+      {
+        mode: body.mode,
+        prompt: body.prompt,
+        systemPrompt: body.systemPrompt,
+        message: body.message,
+        conversationId: body.conversationId,
+        markdownDraft: body.markdownDraft,
+      },
+      projectRoot,
+    );
     return { sessionId: session.id, status: session.status };
   });
 
   app.get('/session/:sessionId/status', async (request) => {
     const { sessionId } = request.params as { sessionId: string };
     const session = getSession(sessionId);
-
-    if (!session) {
-      throw new Error('Session not found');
-    }
-
+    if (!session) throw new Error('Session not found');
     return {
       sessionId: session.id,
       status: session.status,
@@ -354,15 +326,11 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
   app.get('/session/:sessionId/events', async (request, reply) => {
     const { sessionId } = request.params as { sessionId: string };
     const session = getSession(sessionId);
-
-    if (!session) {
-      throw new Error('Session not found');
-    }
+    if (!session) throw new Error('Session not found');
 
     reply.hijack();
     const raw = reply.raw;
     const origin = request.headers.origin;
-
     let heartbeat: ReturnType<typeof setInterval>;
     const client = createSseStream(raw, (closedClient) => {
       clearInterval(heartbeat);
@@ -374,7 +342,6 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
       raw.end();
       return;
     }
-
     if (session.status === 'error') {
       sendSseEvent(raw, 'error', { error: session.error });
       raw.end();
@@ -383,27 +350,20 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
 
     addSessionClient(sessionId, client);
     heartbeat = startSessionHeartbeat(sessionId, client);
-
-    if (session.partialText) {
-      sendSseEvent(raw, 'chunk', { text: session.partialText });
-    }
+    if (session.partialText) sendSseEvent(raw, 'chunk', { text: session.partialText });
   });
 
   app.get('/browser/events', async (request, reply) => {
     reply.hijack();
     const raw = reply.raw;
     const origin = request.headers.origin;
-
+    let heartbeat: ReturnType<typeof setInterval>;
     const client = createSseStream(raw, (closedClient) => {
       clearInterval(heartbeat);
       removeBrowserClient(closedClient);
     }, origin);
-
     addBrowserClient(client);
-    const heartbeat = setInterval(() => {
-      client.write(': heartbeat\n\n');
-    }, 15_000);
-
+    heartbeat = setInterval(() => client.write(': heartbeat\n\n'), 15_000);
     request.raw.on('close', () => clearInterval(heartbeat));
   });
 
@@ -413,17 +373,9 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
 
   app.post('/browser/claim', async (request) => {
     const body = request.body as { sessionId?: string; claimantId?: string };
-    if (!body.sessionId) {
-      throw new Error('sessionId is required');
-    }
-
-    const claim = tryClaimSession(body.sessionId, {
-      claimantId: body.claimantId,
-    });
-    if (!claim) {
-      return { claimed: false };
-    }
-
+    if (!body.sessionId) throw new Error('sessionId is required');
+    const claim = tryClaimSession(body.sessionId, { claimantId: body.claimantId });
+    if (!claim) return { claimed: false };
     return {
       claimed: true,
       claimToken: claim.claimToken,
@@ -437,12 +389,8 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     if (!body.sessionId || !body.claimToken) {
       throw new Error('sessionId and claimToken are required');
     }
-
     const session = renewSessionClaim(body.sessionId, body.claimToken);
-    return {
-      accepted: true,
-      claimExpiresAt: session?.claimExpiresAt,
-    };
+    return { accepted: true, claimExpiresAt: session?.claimExpiresAt };
   });
 
   app.post('/browser/release', async (request) => {
@@ -450,7 +398,6 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     if (!body.sessionId || !body.claimToken) {
       throw new Error('sessionId and claimToken are required');
     }
-
     releaseClaim(body.sessionId, body.claimToken);
     return { accepted: true, status: 'pending' };
   });
@@ -458,29 +405,18 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
   app.get('/browser/prompt-file/:sessionId', async (request) => {
     const { sessionId } = request.params as { sessionId: string };
     const session = getSession(sessionId);
-
-    if (!session || session.delivery !== 'file') {
-      throw new Error('Prompt file not found');
-    }
-
-    const content = await readPromptFile(projectRoot, sessionId);
+    if (!session || session.delivery !== 'file') throw new Error('Prompt file not found');
     return {
       fileName: PROMPT_FILE_NAME,
-      content,
+      content: await readPromptFile(projectRoot, sessionId),
     };
   });
 
   app.post('/browser/chunk', async (request) => {
-    const body = request.body as {
-      sessionId?: string;
-      claimToken?: string;
-      text?: string;
-    };
-
+    const body = request.body as { sessionId?: string; claimToken?: string; text?: string };
     if (!body.sessionId || !body.claimToken || body.text === undefined) {
       throw new Error('sessionId, claimToken, and text are required');
     }
-
     updateSessionPartial(body.sessionId, body.text, body.claimToken);
     notifySessionChunk(body.sessionId, { text: body.text });
     return { accepted: true };
@@ -493,38 +429,76 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
       text?: string;
       error?: string;
     };
-
     if (!body.sessionId || !body.claimToken) {
       throw new Error('sessionId and claimToken are required');
     }
-
     if (body.error) {
       failSession(body.sessionId, body.error, body.claimToken);
       notifySessionError(body.sessionId, { error: body.error });
       logger.warn({ sessionId: body.sessionId, error: body.error }, 'Browser session failed');
       return { accepted: true, status: 'error' };
     }
-
-    if (!body.text) {
-      throw new Error('text or error is required');
-    }
-
+    if (!body.text) throw new Error('text or error is required');
     completeSession(body.sessionId, body.text, body.claimToken);
     notifySessionComplete(body.sessionId, { response: body.text });
     logger.info({ sessionId: body.sessionId }, 'Browser response received');
-
     return { accepted: true, status: 'complete' };
   });
 
-  app.post('/browser/message', async (request) => {
-    return {
-      accepted: true,
-      receivedAt: new Date().toISOString(),
-      body: request.body,
-    };
-  });
+  app.post('/browser/message', async (request) => ({
+    accepted: true,
+    receivedAt: new Date().toISOString(),
+    body: request.body,
+  }));
 
   return app;
+}
+
+async function queuePromptSession(
+  request: Pick<
+    AgentSubmissionRequest,
+    'mode' | 'prompt' | 'systemPrompt' | 'message' | 'conversationId' | 'markdownDraft'
+  >,
+  projectRoot: string,
+): Promise<PromptSession> {
+  const delivery = shouldDeliverPromptAsFile(request.message) ? 'file' : 'text';
+  const composerMessage = delivery === 'file' ? PROMPT_FILE_COMPOSER_NOTE : request.message;
+  const session = createSession({
+    mode: request.mode,
+    prompt: request.prompt,
+    systemPrompt: request.systemPrompt,
+    message: request.message,
+    composerMessage,
+    delivery,
+    conversationId: request.conversationId,
+    markdownDraft: request.markdownDraft,
+  });
+  if (delivery === 'file') {
+    await writePromptFile(projectRoot, session.id, request.message);
+    logger.info(
+      { sessionId: session.id, chars: request.message.length },
+      'Prompt saved as attachment file (exceeds injection limit)',
+    );
+  }
+  logger.info({ sessionId: session.id, mode: session.mode, delivery }, 'Prompt session queued');
+  broadcastBrowserJob(toBrowserJob(session));
+  return session;
+}
+
+async function queueBrowserWorkflowPromptAndWait(
+  request: AgentSubmissionRequest,
+  projectRoot: string,
+): Promise<string> {
+  const session = await queuePromptSession(request, projectRoot);
+  const timeoutAt = Date.now() + 15 * 60 * 1000;
+  while (Date.now() < timeoutAt) {
+    const current = getSession(session.id);
+    if (!current) throw new Error('Browser session disappeared');
+    if (current.status === 'complete') return current.response ?? '';
+    if (current.status === 'error') throw new Error(current.error ?? 'Browser session failed');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error('Timed out waiting for browser response');
 }
 
 function toBrowserJob(session: PromptSession) {
@@ -579,8 +553,8 @@ function assertAllowedOrigin(
 }
 
 if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`) {
-  startServer().catch((err) => {
-    logger.error(err, 'Failed to start bridge server');
+  startServer().catch((error) => {
+    logger.error(error, 'Failed to start bridge server');
     process.exit(1);
   });
 }

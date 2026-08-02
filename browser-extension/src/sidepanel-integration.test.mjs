@@ -16,7 +16,13 @@ test('manifest exposes the coding side panel without broad or debugger permissio
     manifest.side_panel.default_path,
     'src/sidepanel.js',
     'src/sidepanel.css',
+    'src/agent-workspace.js',
+    'src/agent-workspace.css',
+    'src/browser-run-events.js',
     'src/coding-prompts.js',
+    'src/prompt-catalog.js',
+    'src/prompt-router.js',
+    'src/generated/prompt-catalog.js',
   ]) {
     const fileUrl = new URL(`../${path}`, import.meta.url);
     const contents = await readFile(fileUrl, 'utf8');
@@ -24,15 +30,19 @@ test('manifest exposes the coding side panel without broad or debugger permissio
   }
 });
 
-test('coding prompt library has unique ids and useful coding categories', () => {
+test('coding prompt library has unique ids, routing metadata, and useful coding categories', () => {
   assert.ok(BUILTIN_CODING_PROMPTS.length >= 10);
   assert.equal(new Set(BUILTIN_CODING_PROMPTS.map((prompt) => prompt.id)).size, BUILTIN_CODING_PROMPTS.length);
   const categories = new Set(BUILTIN_CODING_PROMPTS.map((prompt) => prompt.category));
   for (const category of ['Audit', 'Debugging', 'Implementation', 'Testing', 'Security']) {
     assert.ok(categories.has(category), `missing ${category}`);
   }
+  for (const prompt of BUILTIN_CODING_PROMPTS) {
+    assert.ok(prompt.routingIntents.length > 0, `${prompt.id} should define routing intents`);
+    assert.ok(Array.isArray(prompt.negativeRoutingIntents), `${prompt.id} should define negative routing intents`);
+    assert.ok(prompt.workModes.includes('ask') || prompt.workModes.includes('agent'), `${prompt.id} should support a Work mode`);
+  }
 });
-
 
 test('background and content scripts expose the prompt-routing message pair', async () => {
   const [background, content] = await Promise.all([
@@ -45,13 +55,19 @@ test('background and content scripts expose the prompt-routing message pair', as
   assert.match(content, /handleLibraryPrompt/);
 });
 
-test('side panel exposes workspace, ChatGPT inventory, exporter, and settings views', async () => {
+test('side panel exposes Work, workspace, ChatGPT inventory, exporter, and settings views', async () => {
   const html = await readFile(new URL('./sidepanel.html', import.meta.url), 'utf8');
-  for (const view of ['skills', 'agents', 'plugins', 'library', 'export', 'settings']) {
+  for (const view of ['work', 'skills', 'agents', 'plugins', 'library', 'export', 'settings']) {
     assert.match(html, new RegExp(`data-view=["']${view}["']`));
     assert.match(html, new RegExp(`id=["']view-${view}["']`));
   }
   for (const control of [
+    'work-project',
+    'work-prompt',
+    'work-start',
+    'work-operation-list',
+    'work-approve',
+    'work-apply',
     'scan-chatgpt-plugins',
     'scan-chatgpt-library',
     'scan-conversation-replies',
@@ -62,6 +78,24 @@ test('side panel exposes workspace, ChatGPT inventory, exporter, and settings vi
   ]) {
     assert.match(html, new RegExp(`id=["']${control}["']`));
   }
+  assert.match(html, /src="\.\/agent-workspace\.js"/);
+  assert.match(html, /href="\.\/agent-workspace\.css"/);
+});
+
+test('Work view stays thin, injects explicit prompt routing controls, and renders content as text', async () => {
+  const source = await readFile(new URL('./agent-workspace.js', import.meta.url), 'utf8');
+  assert.match(source, /textContent\s*=/);
+  assert.match(source, /createTextNode/);
+  assert.doesNotMatch(source, /innerHTML\s*=/);
+  assert.doesNotMatch(source, /planOperations|executePlannedOperations|parseAIResponse/);
+  assert.match(source, /\/workspace\/runs/);
+  assert.match(source, /work-prompt-routing-mode/);
+  assert.match(source, /work-manual-prompt/);
+  assert.match(source, /work-prompt-recommendation/);
+  assert.match(source, /\['auto', 'Auto'\]/);
+  assert.match(source, /\['manual', 'Manual'\]/);
+  assert.match(source, /\['off', 'Off'\]/);
+  assert.match(source, /original request will be sent unchanged/i);
 });
 
 test('manifest loads ChatGPT page tools before the content script', async () => {
