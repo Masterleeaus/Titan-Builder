@@ -1,0 +1,205 @@
+name: Apply issue 119 repository identity binding
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-issue-119.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out issue branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: fix/issue-119-repository-identity-approvals-v2
+          fetch-depth: 0
+
+      - name: Confirm expected issue head
+        env:
+          EXPECTED_HEAD: 97e81aedc26563f2e81d94d0b54ecacd5d01ceb9
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Bind direct bridge approvals to repository identity
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('src/server/index.ts')
+          source = source_path.read_text()
+          import_anchor = "import { canonicalizeProjectRoot } from '../security/project-path.js';\n"
+          import_replacement = import_anchor + "import {\n  captureRepositoryIdentity,\n  sameRepositoryIdentity,\n} from '../security/repository-identity.js';\n"
+          if source.count(import_anchor) != 1:
+              raise SystemExit('repository identity import anchor was not found exactly once')
+          source = source.replace(import_anchor, import_replacement, 1)
+
+          preview_before = '''  app.post('/operations/preview', bridgeBodyLimit('/operations/preview'), async (request) => {
+            const operations = validateOperations((request.body as { operations?: unknown }).operations);
+            const plans = await planOperations(operations, projectRoot);
+            return {
+              operations: plans,
+              approval: operationApprovals.issue({ projectRoot, plans }),
+            };
+          });'''
+          preview_after = '''  app.post('/operations/preview', bridgeBodyLimit('/operations/preview'), async (request, reply) => {
+            const operations = validateOperations((request.body as { operations?: unknown }).operations);
+            const identityBeforePlan = await captureRepositoryIdentity(projectRoot);
+            const plans = await planOperations(operations, identityBeforePlan.projectRoot);
+            const identityAfterPlan = await captureRepositoryIdentity(identityBeforePlan.projectRoot);
+            if (!sameRepositoryIdentity(identityBeforePlan, identityAfterPlan)) {
+              return reply.code(409).send({
+                error: 'Operation preview is stale because repository identity changed during planning',
+              });
+            }
+            return {
+              operations: plans,
+              approval: operationApprovals.issue({
+                projectRoot: identityAfterPlan.projectRoot,
+                repositoryIdentity: identityAfterPlan,
+                plans,
+              }),
+            };
+          });'''
+          if source.count(preview_before) != 1:
+              raise SystemExit('operations preview block was not found exactly once')
+          source = source.replace(preview_before, preview_after, 1)
+
+          apply_before = '''  app.post('/operations/apply', bridgeBodyLimit('/operations/apply'), async (request, reply) => {
+            const body = request.body as { approvalToken?: string; conversationId?: string };
+            if (!body.approvalToken) {
+              return reply.code(400).send({ error: 'approvalToken is required' });
+            }
+
+            let plans: Awaited<ReturnType<typeof planOperations>>;
+            try {
+              plans = operationApprovals.consume(body.approvalToken, projectRoot);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'Invalid operation approval';
+              return reply.code(403).send({ error: message });
+            }
+
+            return {
+              operations: await executePlannedOperations(plans, projectRoot, {
+                conversationId: body.conversationId,
+              }),
+            };
+          });'''
+          apply_after = '''  app.post('/operations/apply', bridgeBodyLimit('/operations/apply'), async (request, reply) => {
+            const body = request.body as { approvalToken?: string; conversationId?: string };
+            if (!body.approvalToken) {
+              return reply.code(400).send({ error: 'approvalToken is required' });
+            }
+
+            let identityBeforeInspect;
+            try {
+              identityBeforeInspect = await captureRepositoryIdentity(projectRoot);
+            } catch (error) {
+              return reply.code(409).send({
+                error: `Operation approval is stale because repository identity could not be captured: ${error instanceof Error ? error.message : String(error)}`,
+              });
+            }
+
+            let inspection;
+            try {
+              inspection = operationApprovals.inspect(body.approvalToken, {
+                projectRoot: identityBeforeInspect.projectRoot,
+                repositoryIdentity: identityBeforeInspect,
+              });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'Invalid operation approval';
+              if (/repository identity/i.test(message)) {
+                operationApprovals.revoke(body.approvalToken);
+                return reply.code(409).send({ error: message });
+              }
+              return reply.code(403).send({ error: message });
+            }
+
+            let identityBeforeConsume;
+            try {
+              identityBeforeConsume = await captureRepositoryIdentity(identityBeforeInspect.projectRoot);
+            } catch (error) {
+              operationApprovals.revoke(body.approvalToken);
+              return reply.code(409).send({
+                error: `Operation approval is stale because repository identity could not be revalidated: ${error instanceof Error ? error.message : String(error)}`,
+              });
+            }
+            if (
+              !sameRepositoryIdentity(identityBeforeInspect, identityBeforeConsume) ||
+              !sameRepositoryIdentity(inspection.repositoryIdentity, identityBeforeConsume)
+            ) {
+              operationApprovals.revoke(body.approvalToken);
+              return reply.code(409).send({
+                error: 'Operation approval is stale because repository identity changed before consumption',
+              });
+            }
+
+            let plans: Awaited<ReturnType<typeof planOperations>>;
+            try {
+              plans = operationApprovals.consume(body.approvalToken, {
+                projectRoot: identityBeforeConsume.projectRoot,
+                repositoryIdentity: identityBeforeConsume,
+              });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'Invalid operation approval';
+              return reply.code(/repository identity/i.test(message) ? 409 : 403).send({ error: message });
+            }
+
+            return {
+              operations: await executePlannedOperations(plans, identityBeforeConsume.projectRoot, {
+                conversationId: body.conversationId,
+              }),
+            };
+          });'''
+          if source.count(apply_before) != 1:
+              raise SystemExit('operations apply block was not found exactly once')
+          source = source.replace(apply_before, apply_after, 1)
+          source_path.write_text(source)
+
+          package_path = Path('package.json')
+          package = package_path.read_text()
+          before = 'src/context/context-budget.test.ts src/security/project-path.test.ts'
+          after = 'src/context/context-budget.test.ts src/security/repository-identity.test.ts src/security/project-path.test.ts'
+          if package.count(before) != 1:
+              raise SystemExit('test:node repository identity registration anchor was not found exactly once')
+          package_path.write_text(package.replace(before, after, 1))
+          PY
+          rm .github/workflows/issue-119-red.yml
+          git diff --check
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+          pnpm install --frozen-lockfile
+
+      - name: Run focused and compile verification
+        run: |
+          pnpm run typecheck
+          pnpm exec tsx --test src/security/repository-identity.test.ts src/server/operation-approvals.test.ts src/workflows/agent-application.test.ts src/server/workflow.integration.ts
+          pnpm run test:node
+
+      - name: Commit and publish verified implementation
+        env:
+          GH_PUSH_TOKEN: ${{ github.token }}
+          EXPECTED_OLD_HEAD: 97e81aedc26563f2e81d94d0b54ecacd5d01ceb9
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/server/index.ts package.json .github/workflows/issue-119-red.yml
+          git commit -m "fix(security): bind approvals to repository identity (#119)"
+          auth_header=$(printf 'x-access-token:%s' "$GH_PUSH_TOKEN" | base64 -w0)
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth_header" push \
+            --force-with-lease=refs/heads/fix/issue-119-repository-identity-approvals-v2:${EXPECTED_OLD_HEAD} \
+            origin HEAD:fix/issue-119-repository-identity-approvals-v2
