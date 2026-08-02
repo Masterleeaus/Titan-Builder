@@ -24,7 +24,10 @@ async function fixture(): Promise<{ homeDir: string; packageRoot: string }> {
   return { homeDir, packageRoot };
 }
 
-async function writeValidConfig(homeDir: string): Promise<void> {
+async function writeValidConfig(
+  homeDir: string,
+  extraLines: readonly string[] = [],
+): Promise<void> {
   await writeFile(
     path.join(homeDir, '.openbrowser', '.env'),
     [
@@ -32,6 +35,7 @@ async function writeValidConfig(homeDir: string): Promise<void> {
       `BRIDGE_BROWSER_TOKEN=${BROWSER_TOKEN}`,
       'OPENBROWSER_INSECURE_DEV=0',
       'OPENBROWSER_ALLOW_UNSAFE_COMMANDS=0',
+      ...extraLines,
     ].join('\n'),
     'utf8',
   );
@@ -189,4 +193,36 @@ test('default service inspection preserves stale metadata', async () => {
 
   assert.equal(report.checks.find((check) => check.id === 'service.bridge')?.status, 'warn');
   assert.equal(await readFile(metadataPath, 'utf8'), metadata);
+});
+
+test('default service inspection probes the configured bridge port', async () => {
+  const { homeDir, packageRoot } = await fixture();
+  await writeValidConfig(homeDir, ['PORT=6123']);
+  await writeFile(
+    path.join(homeDir, '.openbrowser', 'service.json'),
+    `${JSON.stringify({
+      version: 1,
+      pid: 4321,
+      entryPath: path.join(packageRoot, 'dist', 'service', 'service-entry.js'),
+      startedAt: '2026-08-02T00:00:00.000Z',
+      logPath: path.join(homeDir, '.openbrowser', 'logs', 'service.log'),
+    }, null, 2)}\n`,
+    'utf8',
+  );
+  let probedPort = 0;
+
+  const report = await runInstallDoctor({
+    homeDir,
+    packageRoot,
+    nodeVersion: '22.0.0',
+    projects: async () => [],
+    isProcessRunning: () => true,
+    probeBridge: async (port) => {
+      probedPort = port;
+      return true;
+    },
+  });
+
+  assert.equal(probedPort, 6123);
+  assert.equal(report.checks.find((check) => check.id === 'service.bridge')?.status, 'pass');
 });
