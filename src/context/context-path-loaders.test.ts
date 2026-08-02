@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   listContextChoices,
   loadContextAttachments,
@@ -93,7 +94,7 @@ test('legacy context loaders reject sibling-prefix and linked directory escapes'
 });
 
 test('legacy context source cannot reintroduce raw project-root prefix containment', async () => {
-  const sourceRoot = path.dirname(new URL(import.meta.url).pathname);
+  const sourceRoot = path.dirname(fileURLToPath(import.meta.url));
   const sources = await Promise.all([
     readFile(path.join(sourceRoot, 'file-context.ts'), 'utf8'),
     readFile(path.join(sourceRoot, 'directory-tree.ts'), 'utf8'),
