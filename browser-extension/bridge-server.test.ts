@@ -8,6 +8,7 @@ import {
   createZipBuffer,
   normalizeExportName,
   normalizeRelativePath,
+  normalizeWorkspaceError,
   resolveProjectPath,
 } from './bridge-server.js';
 
@@ -67,6 +68,42 @@ describe('external command construction', () => {
       'hello; rm -rf /',
       '.',
     ]);
+  });
+});
+
+describe('workspace error normalization', () => {
+  it('fails closed for arbitrary thrown values without exposing them', () => {
+    expect(normalizeWorkspaceError('secret diagnostic')).toEqual({
+      statusCode: 500,
+      error: 'Workspace operation failed',
+    });
+    expect(normalizeWorkspaceError({ statusCode: 418, message: 'object secret' })).toEqual({
+      statusCode: 500,
+      error: 'Workspace operation failed',
+    });
+  });
+
+  it('preserves Error diagnostics only as server detail', () => {
+    expect(normalizeWorkspaceError(new Error('database unavailable'))).toEqual({
+      statusCode: 500,
+      error: 'Workspace operation failed',
+      detail: 'database unavailable',
+    });
+  });
+
+  it('accepts only valid HTTP status codes attached to Error instances', () => {
+    const notFound = Object.assign(new Error('Project not found'), { statusCode: 404 });
+    expect(normalizeWorkspaceError(notFound)).toEqual({
+      statusCode: 404,
+      error: 'Project not found',
+    });
+
+    const invalidStatus = Object.assign(new Error('invalid status'), { statusCode: 200 });
+    expect(normalizeWorkspaceError(invalidStatus)).toEqual({
+      statusCode: 500,
+      error: 'Workspace operation failed',
+      detail: 'invalid status',
+    });
   });
 });
 
