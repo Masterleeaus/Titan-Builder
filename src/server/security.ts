@@ -132,6 +132,9 @@ export function resolveBridgeRouteScope(method: string, rawUrl: string): BridgeR
   if (method.toUpperCase() === 'OPTIONS' || url === '/health' || url === '/bridge/identity') {
     return 'public';
   }
+  if (url === '/ready') {
+    return 'shared';
+  }
   if (url === '/workspace/runs' || url.startsWith('/workspace/runs/')) {
     return 'browser-workflow';
   }

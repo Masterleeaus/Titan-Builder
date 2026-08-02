@@ -235,37 +235,20 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     version: '0.5.0',
   }));
 
-  app.get('/ready', async (request, reply) => {
-    const scope = resolveBridgeRouteScope(request.method, request.url);
-    const origin = request.headers.origin;
-
-    if (!securityPolicy.isAllowedPreflightOrigin(origin)) {
-      return reply.code(403).send({ error: 'Forbidden bridge origin' });
-    }
-
-    if (!securityPolicy.authorize({
-      scope,
-      authorization: request.headers.authorization,
-      origin,
-    })) {
-      return reply.code(401).send({ error: 'Unauthorized bridge request' });
-    }
-
-    return {
-      status: 'ready',
-      product: 'OpenBrowser',
-      version: '0.5.0',
-      protocol: 'v1',
-      authentication: insecureDevelopment ? 'insecure-development' : 'required',
-      instance: process.pid,
-      capabilities: {
-        sessions: true,
-        memory: true,
-        skills: true,
-        browser: true,
-      },
-    };
-  });
+  app.get('/ready', async () => ({
+    status: 'ready',
+    product: 'OpenBrowser',
+    version: '0.5.0',
+    protocol: 'v1',
+    authentication: insecureDevelopment ? 'insecure-development' : 'required',
+    instance: process.pid,
+    capabilities: {
+      sessions: true,
+      memory: true,
+      skills: true,
+      browser: true,
+    },
+  }));
 
   await registerBrowserWorkflowRoutes(app, { coordinator: browserCoordinator });
 
