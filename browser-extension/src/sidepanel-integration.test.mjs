@@ -16,6 +16,9 @@ test('manifest exposes the coding side panel without broad or debugger permissio
     manifest.side_panel.default_path,
     'src/sidepanel.js',
     'src/sidepanel.css',
+    'src/agent-workspace.js',
+    'src/agent-workspace.css',
+    'src/browser-run-events.js',
     'src/coding-prompts.js',
   ]) {
     const fileUrl = new URL(`../${path}`, import.meta.url);
@@ -33,7 +36,6 @@ test('coding prompt library has unique ids and useful coding categories', () => 
   }
 });
 
-
 test('background and content scripts expose the prompt-routing message pair', async () => {
   const [background, content] = await Promise.all([
     readFile(new URL('./background.js', import.meta.url), 'utf8'),
@@ -45,13 +47,19 @@ test('background and content scripts expose the prompt-routing message pair', as
   assert.match(content, /handleLibraryPrompt/);
 });
 
-test('side panel exposes workspace, ChatGPT inventory, exporter, and settings views', async () => {
+test('side panel exposes Work, workspace, ChatGPT inventory, exporter, and settings views', async () => {
   const html = await readFile(new URL('./sidepanel.html', import.meta.url), 'utf8');
-  for (const view of ['skills', 'agents', 'plugins', 'library', 'export', 'settings']) {
+  for (const view of ['work', 'skills', 'agents', 'plugins', 'library', 'export', 'settings']) {
     assert.match(html, new RegExp(`data-view=["']${view}["']`));
     assert.match(html, new RegExp(`id=["']view-${view}["']`));
   }
   for (const control of [
+    'work-project',
+    'work-prompt',
+    'work-start',
+    'work-operation-list',
+    'work-approve',
+    'work-apply',
     'scan-chatgpt-plugins',
     'scan-chatgpt-library',
     'scan-conversation-replies',
@@ -62,6 +70,17 @@ test('side panel exposes workspace, ChatGPT inventory, exporter, and settings vi
   ]) {
     assert.match(html, new RegExp(`id=["']${control}["']`));
   }
+  assert.match(html, /src="\.\/agent-workspace\.js"/);
+  assert.match(html, /href="\.\/agent-workspace\.css"/);
+});
+
+test('Work view stays a thin UI and renders operation content as text', async () => {
+  const source = await readFile(new URL('./agent-workspace.js', import.meta.url), 'utf8');
+  assert.match(source, /textContent\s*=/);
+  assert.match(source, /createTextNode/);
+  assert.doesNotMatch(source, /innerHTML\s*=/);
+  assert.doesNotMatch(source, /planOperations|executePlannedOperations|parseAIResponse/);
+  assert.match(source, /\/workspace\/runs/);
 });
 
 test('manifest loads ChatGPT page tools before the content script', async () => {

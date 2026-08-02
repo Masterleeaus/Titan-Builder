@@ -1,3 +1,8 @@
+[CmdletBinding()]
+param(
+    [switch]$EnableBackgroundService
+)
+
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
@@ -81,6 +86,26 @@ Write-Step 'Registering the global CLI command'
 & pnpm setup
 & pnpm link --global
 
+if ($EnableBackgroundService) {
+    Write-Step 'Enabling the opt-in background bridge service'
+    Require-Command 'openbrowser'
+    & openbrowser service start
+
+    $taskName = 'OpenBrowser Local Agent'
+    $openBrowserPath = (Get-Command openbrowser -ErrorAction Stop).Source
+    $escapedOpenBrowserPath = $openBrowserPath.Replace("'", "''")
+    $taskArguments = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$escapedOpenBrowserPath' service start`""
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $taskArguments
+    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
+    $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Starts the local OpenBrowser bridge for the current user.' -Force | Out-Null
+    Write-Host "Registered current-user Scheduled Task: $taskName"
+} else {
+    Write-Host "Background startup was not enabled. Run this installer with -EnableBackgroundService to opt in."
+}
+
 $extensionPath = Join-Path (Get-Location) 'browser-extension'
 Write-Host "`nInstallation completed." -ForegroundColor Green
 Write-Host "1. Open chrome://extensions"
@@ -88,3 +113,4 @@ Write-Host "2. Enable Developer mode"
 Write-Host "3. Load unpacked: $extensionPath"
 Write-Host "4. Open a new PowerShell window and run: openbrowser --help"
 Write-Host "5. Copy BRIDGE_BROWSER_TOKEN from $configPath into the extension settings"
+Write-Host "6. Manage the background bridge with: openbrowser service status|start|stop|logs"

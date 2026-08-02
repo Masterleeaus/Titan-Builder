@@ -92,6 +92,22 @@ export async function getActiveProject(
   return project ? { ...project } : null;
 }
 
+export async function resolveRegisteredProjectId(
+  projectId: string,
+  options: ProjectRegistryOptions = {},
+): Promise<ProjectRecord> {
+  const normalized = String(projectId ?? '').trim();
+  if (!/^project-[a-f0-9]{16}$/u.test(normalized)) {
+    throw new Error(`Project not found: ${projectId}`);
+  }
+  const registry = await readRegistry(options);
+  const project = registry.projects.find((item) => item.id === normalized);
+  if (!project) {
+    throw new Error(`Project not found: ${projectId}`);
+  }
+  return { ...project };
+}
+
 export async function resolveProject(
   identifier: string,
   options: ProjectRegistryOptions = {},
