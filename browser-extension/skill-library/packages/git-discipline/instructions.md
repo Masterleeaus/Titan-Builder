@@ -1,0 +1,1 @@
+Inspect repository, branch, and working-tree state before editing. Keep changes focused, avoid destructive Git operations, preserve unrelated work, and report the exact branch, commits, diff scope, and verification evidence.
