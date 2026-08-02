@@ -1,0 +1,157 @@
+name: Apply issue 24 process-tree termination
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-issue-24-controller.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: issue-24-process-tree-controller
+  cancel-in-progress: false
+
+jobs:
+  rebuild-and-verify-linux:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out process-tree branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: fix/issue-24-process-tree-termination
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Confirm expected branch head
+        env:
+          EXPECTED_HEAD: 242c156595374bcdbc563f19de06fcaf4c72ce33
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Rebuild implementation on current main
+        run: |
+          cp src/operations/process-runner.ts /tmp/process-runner.ts
+          cp src/operations/process-runner.test.ts /tmp/process-runner.test.ts
+          git fetch origin main
+          git reset --hard origin/main
+          cp /tmp/process-runner.ts src/operations/process-runner.ts
+          cp /tmp/process-runner.test.ts src/operations/process-runner.test.ts
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('src/operations/index.ts')
+          source = source_path.read_text()
+          if source.count("import { exec, spawn } from 'node:child_process';") != 1:
+              raise SystemExit('child_process import anchor was not found exactly once')
+          source = source.replace(
+              "import { exec, spawn } from 'node:child_process';",
+              "import { exec } from 'node:child_process';",
+              1,
+          )
+          import_anchor = "import { preserveOperationOrder } from './operation-order.js';\n"
+          if source.count(import_anchor) != 1:
+              raise SystemExit('operation-order import anchor was not found exactly once')
+          source = source.replace(
+              import_anchor,
+              import_anchor + "import { runContainedProcess } from './process-runner.js';\n",
+              1,
+          )
+          start = source.index('async function runTool(invocation: ToolInvocation): Promise<void> {')
+          end = source.index('\nasync function runShellCommand', start)
+          replacement = '''async function runTool(invocation: ToolInvocation): Promise<void> {
+            const result = await runContainedProcess({
+              executable: invocation.executable,
+              args: invocation.args,
+              cwd: invocation.cwd,
+              env: process.env,
+              toolId: invocation.toolId,
+              timeoutMs: 120_000,
+              maxOutputBytes: 2 * 1024 * 1024,
+            });
+
+            if (result.stdout.trim()) {
+              process.stdout.write(`${result.stdout.trim()}\\n`);
+            }
+            if (result.stderr.trim()) {
+              process.stderr.write(`${result.stderr.trim()}\\n`);
+            }
+          }
+          '''
+          source_path.write_text(source[:start] + replacement + source[end:])
+
+          package_path = Path('package.json')
+          package = package_path.read_text()
+          before = 'src/operations/operation-order.test.ts src/operations/path-security-wiring.test.ts'
+          after = 'src/operations/operation-order.test.ts src/operations/process-runner.test.ts src/operations/path-security-wiring.test.ts'
+          if package.count(before) != 1:
+              raise SystemExit('test:node registration anchor was not found exactly once')
+          package_path.write_text(package.replace(before, after, 1))
+          PY
+          git add package.json src/operations/index.ts src/operations/process-runner.ts src/operations/process-runner.test.ts
+          git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" -eq 4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+          pnpm install --frozen-lockfile
+
+      - name: Run Linux verification
+        run: |
+          pnpm run typecheck
+          node --experimental-strip-types --test src/operations/process-runner.test.ts
+          pnpm run test:node
+          pnpm run build
+
+      - name: Publish clean verified branch
+        env:
+          GH_PUSH_TOKEN: ${{ github.token }}
+          EXPECTED_OLD_HEAD: 242c156595374bcdbc563f19de06fcaf4c72ce33
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(operations): terminate complete tool process trees (#24)"
+          auth_header=$(printf 'x-access-token:%s' "$GH_PUSH_TOKEN" | base64 -w0)
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth_header" push \
+            --force-with-lease=refs/heads/fix/issue-24-process-tree-termination:${EXPECTED_OLD_HEAD} \
+            origin HEAD:fix/issue-24-process-tree-termination
+
+  verify-windows:
+    needs: rebuild-and-verify-linux
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out verified process-tree branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: fix/issue-24-process-tree-termination
+          fetch-depth: 1
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+          pnpm install --frozen-lockfile
+
+      - name: Run native Windows verification
+        shell: pwsh
+        run: |
+          pnpm run typecheck
+          node --experimental-strip-types --test src/operations/process-runner.test.ts
+          pnpm run build
