@@ -1,0 +1,70 @@
+name: Apply issue 95 companion config patch
+
+on:
+  push:
+    branches: [fix/issue-95-companion-dotenv-isolation]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out issue branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: true
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Patch companion entrypoint
+        shell: python
+        run: |
+          from pathlib import Path
+
+          entrypoint = Path('browser-extension/bridge-server.ts')
+          source = entrypoint.read_text(encoding='utf-8')
+
+          import_old = "import { config } from 'dotenv';"
+          import_new = "import { loadWorkspaceEnvironment } from './environment.js';"
+          startup_old = "config();\n\nconst moduleDirectory = path.dirname(fileURLToPath(import.meta.url));"
+          startup_new = "const workspaceConfigPath = loadWorkspaceEnvironment();\n\nconst moduleDirectory = path.dirname(fileURLToPath(import.meta.url));"
+          log_old = "  console.log(`OpenBrowser Workspace companion listening on http://${host}:${port}`);"
+          log_new = "  console.log(`OpenBrowser Workspace companion listening on http://${host}:${port} (config: ${workspaceConfigPath ?? 'process environment only'})`);"
+
+          for old in (import_old, startup_old, log_old):
+              if source.count(old) != 1:
+                  raise SystemExit(f'Expected exactly one entrypoint match for: {old!r}')
+
+          source = source.replace(import_old, import_new)
+          source = source.replace(startup_old, startup_new)
+          source = source.replace(log_old, log_new)
+          entrypoint.write_text(source, encoding='utf-8')
+
+      - name: Activate pnpm 11.2.2
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+
+      - name: Install companion dependencies
+        working-directory: browser-extension
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify companion
+        working-directory: browser-extension
+        run: pnpm run verify
+
+      - name: Commit verified patch and remove temporary workflow
+        run: |
+          rm .github/workflows/issue-95-apply.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add browser-extension/bridge-server.ts browser-extension/environment.ts browser-extension/environment.test.ts browser-extension/package.json browser-extension/tsconfig.json .github/workflows/issue-95-apply.yml
+          git commit -m "fix(config): isolate companion environment authority (#95)"
+          git push origin HEAD:fix/issue-95-companion-dotenv-isolation
