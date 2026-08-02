@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -83,19 +84,16 @@ function hardenGitInvocation(candidate: ToolInvocation): ToolInvocation {
   }
 
   const gitArgs = hardenedGitArgs(candidate.toolId, candidate.args);
-  const modulePath = fileURLToPath(import.meta.url);
-  const sourceRuntime = path.extname(modulePath) === '.ts';
-  const runnerPath = path.resolve(
-    path.dirname(modulePath),
-    '..',
-    'git',
-    sourceRuntime ? 'hardened-cli.ts' : 'hardened-cli.js',
-  );
-  const runnerArgs = [
-    ...(sourceRuntime ? ['--experimental-strip-types'] : []),
-    runnerPath,
-    ...gitArgs,
-  ];
+  const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+  const sourceRunnerPath = path.resolve(moduleDirectory, '..', 'git', 'hardened-cli.ts');
+  const compiledRunnerPath = path.resolve(moduleDirectory, '..', 'git', 'hardened-cli.js');
+  let runnerPath = compiledRunnerPath;
+  const runnerArgs: string[] = [];
+  if (existsSync(sourceRunnerPath)) {
+    runnerPath = sourceRunnerPath;
+    runnerArgs.push('--experimental-strip-types');
+  }
+  runnerArgs.push(runnerPath, ...gitArgs);
 
   return {
     ...candidate,
