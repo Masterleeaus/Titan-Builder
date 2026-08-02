@@ -5,6 +5,7 @@ import {
   type ToolId,
 } from './catalog.js';
 import type { ToolInputFile, ToolInvocation } from './types.js';
+import { validateResolvedToolInvocation } from './validation.js';
 
 export type { ToolId, ToolInputFile, ToolInvocation, ToolRisk };
 export { requiresExplicitApproval };
@@ -22,7 +23,10 @@ export function resolveToolInvocation(
   if (!definition) {
     throw new Error(`Unsupported tool: ${toolId}`);
   }
-  return definition.resolve(args, projectRoot);
+  return validateResolvedToolInvocation(
+    definition.manifest,
+    definition.resolve(args, projectRoot),
+  );
 }
 
 export function toolInputFiles(invocation: ToolInvocation): ToolInputFile[] {
