@@ -10,19 +10,15 @@ import { loadOpenBrowserEnvironment } from './config/environment.js';
 import type { FileOperation } from './core/types/index.js';
 import {
   buildBudgetedContext,
-  formatAgentContextJson,
   formatBudgetedContextMarkdown,
   formatContextBudgetPreview,
-  generateContext,
   listContextChoices,
   parseAtRefs,
   readBufferedPrompt,
 } from './context/index.js';
-import { parseAIResponse } from './parser/index.js';
 import {
   addProjectMemory,
   clearProjectMemory,
-  formatProjectMemory,
   listProjectMemory,
   removeProjectMemory,
 } from './memory/project-memory.js';
@@ -36,13 +32,6 @@ import {
 } from './projects/registry.js';
 import { executePlannedOperations, planOperations } from './operations/index.js';
 import { requiresExplicitApproval } from './tools/registry.js';
-import {
-  buildAgentSystemPrompt,
-  buildAskSystemPrompt,
-  buildAgentCompactRetryMessage,
-  buildFullMessage,
-  isMarkdownDraftRequest,
-} from './prompts/system.js';
 import { extractMarkdownDraftContent } from './parser/markdown-agent.js';
 import { startServer } from './server/index.js';
 import { readProjectStatus, type ProjectStatus } from './project/status.js';
@@ -71,6 +60,13 @@ import {
   writeWarning,
   type TrackerStep,
 } from './shared/index.js';
+import {
+  AgentPreparationError,
+  prepareAgentRun,
+  runAskWorkflow,
+  type AgentSubmissionRequest,
+  type PreparationEvent,
+} from './workflows/agent-preparation.js';
 
 loadOpenBrowserEnvironment();
 
@@ -147,7 +143,6 @@ program
     await runVerification(options.profile, options.dryRun === true);
   });
 
-
 const projectCommand = program.command('project').description('Manage persistent OpenBrowser projects');
 projectCommand
   .command('add')
@@ -191,11 +186,8 @@ memoryCommand
 memoryCommand.command('list').action(async () => {
   const entries = await listProjectMemory(process.cwd());
   if (!entries.length) return writeInfo('No project memory saved.');
-  output.write(`
-${colors.bold}Project memory${colors.reset}
-`);
-  for (const entry of entries) output.write(`${entry.id}  ${entry.text}${entry.tags.length ? ` [${entry.tags.join(', ')}]` : ''}
-`);
+  output.write(`\n${colors.bold}Project memory${colors.reset}\n`);
+  for (const entry of entries) output.write(`${entry.id}  ${entry.text}${entry.tags.length ? ` [${entry.tags.join(', ')}]` : ''}\n`);
 });
 memoryCommand.command('remove').argument('<id>', 'memory id').action(async (id: string) => {
   const removed = await removeProjectMemory(process.cwd(), id);
@@ -220,9 +212,7 @@ contextCommand
       perFileCharacters: options.perFile,
       maxFiles: options.maxFiles,
     });
-    output.write(`
-${formatContextBudgetPreview(result)}
-`);
+    output.write(`\n${formatContextBudgetPreview(result)}\n`);
   });
 contextCommand
   .command('export')
@@ -239,10 +229,7 @@ contextCommand
     });
     const resolvedOutput = path.resolve(process.cwd(), outputPath);
     if (!isPathInside(process.cwd(), resolvedOutput)) throw new Error('Context export must stay inside the current project.');
-    await writeFile(resolvedOutput, `${formatContextBudgetPreview(result)}
-
-${formatBudgetedContextMarkdown(result)}
-`, 'utf8');
+    await writeFile(resolvedOutput, `${formatContextBudgetPreview(result)}\n\n${formatBudgetedContextMarkdown(result)}\n`, 'utf8');
     writeSuccess(`exported context to ${path.relative(process.cwd(), resolvedOutput)}`);
   });
 
@@ -270,9 +257,7 @@ async function runVerification(rawProfile: string, dryRun: boolean): Promise<voi
   }
 
   const plans = await planOperations(detected.operations, process.cwd());
-  output.write(`
-${colors.bold}Verification plan${colors.reset} ${colors.dim}(${profile})${colors.reset}
-`);
+  output.write(`\n${colors.bold}Verification plan${colors.reset} ${colors.dim}(${profile})${colors.reset}\n`);
   for (const plan of plans) {
     writeDiffBlock(plan.diff);
   }
@@ -388,89 +373,51 @@ async function waitForBrowserResponse(sessionId: string): Promise<string> {
   });
 }
 
-
 async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
   const tracker = new AgentStepTracker();
   const currentProject = await registerProject(process.cwd());
   await setActiveProject(currentProject.id);
   const conversationId = crypto.randomUUID();
-  const { cleanPrompt, paths } = parseAtRefs(prompt);
-  const contextPaths = [...new Set([...(options.contextPaths ?? []), ...paths])];
-  const userPrompt = cleanPrompt || prompt;
-  const markdownDraft = isMarkdownDraftRequest(userPrompt);
-  const systemPrompt = buildAskSystemPrompt({ markdownDraft });
-  const shouldIncludeSystemPrompt = !sessionPrimingState.askPrimed || !options.interactive;
-
-  const memoryBlock = formatProjectMemory(await listProjectMemory(process.cwd()));
-  let contextBlock = memoryBlock;
-  if (contextPaths.length > 0) {
-    tracker.step('reading project', `${contextPaths.length} context reference(s)`);
-    const budgeted = await buildBudgetedContext(process.cwd(), contextPaths, {
-      totalCharacters: options.contextBudget,
-    });
-    const fileBlock = formatBudgetedContextMarkdown(budgeted);
-    contextBlock = [memoryBlock, fileBlock].filter(Boolean).join('\n\n');
-    if (budgeted.included.length === 0) {
-      writeWarning(
-        `@ references [${contextPaths.join(', ')}] matched no safe text files. Use Tab after @ to complete paths.`,
-      );
-    } else {
-      writeInfo(`attached ${budgeted.included.length} file(s) using ${budgeted.totalCharacters}/${budgeted.limitCharacters} context characters`);
-      const sensitiveCount = budgeted.excluded.filter((item) => item.reason === 'sensitive').length;
-      if (sensitiveCount > 0) writeInfo(`excluded ${sensitiveCount} sensitive path(s)`);
-    }
-  } else if (memoryBlock) {
-    writeInfo('attached explicit project memory');
-  }
-
-  const message = buildFullMessage('ask', systemPrompt, userPrompt, contextBlock, {
-    includeSystemInstructions: shouldIncludeSystemPrompt,
-  });
-
-  tracker.step('reading browser', markdownDraft ? 'sending markdown draft' : 'sending prompt');
-  writeInfo('sending to browser AI (open ChatGPT with the extension loaded)');
-  if (shouldDeliverPromptAsFile(message)) {
-    writeInfo(
-      `prompt exceeds ${PROMPT_INJECTION_CHAR_LIMIT} chars — attaching ${PROMPT_FILE_NAME} instead of pasting`,
-    );
-  }
-  if (markdownDraft) {
-    writeInfo('draft mode: AI will return a markdown block for you to copy');
-  }
-
-  const spinner = new WaitingSpinner();
-  spinner.start('waiting for response');
-
-  const { sessionId } = await submitPrompt({
-    mode: 'ask',
-    prompt: userPrompt,
-    systemPrompt,
-    message,
-    conversationId,
-    markdownDraft,
-  });
 
   try {
-    const answer = await waitForBrowserResponse(sessionId);
-    spinner.stop();
+    const result = await runAskWorkflow(
+      {
+        projectRoot: process.cwd(),
+        prompt,
+        contextRefs: options.contextPaths ?? [],
+        contextBudget: options.contextBudget,
+        conversationId,
+        includeSystemInstructions:
+          !sessionPrimingState.askPrimed || !options.interactive,
+      },
+      {
+        submitAndWait: (request) => submitBrowserRequest(request, tracker),
+        onEvent: (event) => handlePreparationEvent(event, tracker),
+      },
+    );
+
     sessionPrimingState.askPrimed = true;
+    tracker.complete(
+      result.markdownDraft ? 'markdown draft received' : 'response received',
+    );
+    writeAnswerBlock(result.responseText || '(empty response)');
 
-    tracker.complete(markdownDraft ? 'markdown draft received' : 'response received');
-    writeAnswerBlock(answer || '(empty response)');
-
-    if (markdownDraft && answer?.trim()) {
-      const draft = extractMarkdownDraftContent(answer);
+    if (result.markdownDraft && result.responseText.trim()) {
+      const draft = extractMarkdownDraftContent(result.responseText);
       if (draft && draft.length > 0) {
         output.write(`\n${colors.dim}--- Markdown draft (copy below) ---${colors.reset}\n\n`);
         output.write(draft);
         output.write(`\n\n${colors.dim}--- End draft ---${colors.reset}\n`);
       } else {
-        writeWarning('Could not extract markdown draft. Copy the markdown block from the browser.');
+        writeWarning(
+          'Could not extract markdown draft. Copy the markdown block from the browser.',
+        );
       }
-      writeInfo('to create the file in your project, switch to agent mode and say: create README.md');
+      writeInfo(
+        'to create the file in your project, switch to agent mode and say: create README.md',
+      );
     }
   } catch (error) {
-    spinner.stop();
     writeError(`Ask error: ${formatError(error)}`);
   } finally {
     if (!options.interactive) {
@@ -484,223 +431,216 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
   const currentProject = await registerProject(process.cwd());
   await setActiveProject(currentProject.id);
   tracker.step('reading project', process.cwd());
-
-  const { cleanPrompt, paths } = parseAtRefs(task);
-  const contextPaths = [...new Set([...(options.contextPaths ?? []), ...paths])];
-  const userTask = cleanPrompt || task;
-
-  const projectSummary = await generateContext(process.cwd());
-  const budgeted =
-    contextPaths.length > 0
-      ? await buildBudgetedContext(process.cwd(), contextPaths, {
-          totalCharacters: options.contextBudget,
-        })
-      : null;
-  const memoryBlock = formatProjectMemory(await listProjectMemory(process.cwd()));
-  const budgetedBlock = budgeted ? formatBudgetedContextMarkdown(budgeted) : '';
-  const context = [
-    memoryBlock,
-    formatAgentContextJson([], projectSummary, []),
-    budgetedBlock,
-  ].filter(Boolean).join('\n\n');
-
-  if (budgeted?.included.length) {
-    writeInfo(
-      `attached ${budgeted.included.length} file(s) using ${budgeted.totalCharacters}/${budgeted.limitCharacters} context characters`,
-    );
-  } else if (contextPaths.length > 0) {
-    writeWarning(
-      `@ references [${contextPaths.join(', ')}] matched no safe text files. Use Tab after @ to complete paths.`,
-    );
-  }
-  if (memoryBlock) writeInfo('attached explicit project memory');
-
   const conversationId = crypto.randomUUID();
-  const systemPrompt = buildAgentSystemPrompt(conversationId);
-  let hasRetriedWithFullSystem = false;
-  let message = buildFullMessage('agent', systemPrompt, userTask, context, {
-    includeSystemInstructions: !sessionPrimingState.agentPrimed || !options.interactive,
-  });
 
-  const maxAttempts = 3;
-  let raw = '';
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    tracker.step('reading browser', `attempt ${attempt}/${maxAttempts}`);
-    writeInfo('sending to browser AI (open ChatGPT with the extension loaded)');
-    if (shouldDeliverPromptAsFile(message)) {
-      writeInfo(
-        `prompt exceeds ${PROMPT_INJECTION_CHAR_LIMIT} chars — attaching ${PROMPT_FILE_NAME} instead of pasting`,
-      );
-    }
-
-    const spinner = new WaitingSpinner();
-    spinner.start('waiting for agent response');
-
-    const { sessionId } = await submitPrompt({
-      mode: 'agent',
-      prompt: userTask,
-      systemPrompt,
-      message,
-      conversationId,
-    });
-
-    try {
-      raw = await waitForBrowserResponse(sessionId);
-      spinner.stop();
-    } catch (error) {
-      spinner.stop();
-      const captureError = formatError(error);
-      if (attempt >= maxAttempts) {
-        writeError(`Agent error: ${captureError}`);
-        return;
-      }
-
-      writeWarning(`Browser capture failed (${captureError}). Retrying...`);
-      const retryBody = buildAgentCompactRetryMessage(captureError, conversationId, userTask);
-      const includeSystem = !hasRetriedWithFullSystem;
-      message = buildFullMessage('agent', systemPrompt, retryBody, context, {
-        includeSystemInstructions: includeSystem,
-      });
-      if (includeSystem) {
-        hasRetriedWithFullSystem = true;
-      }
-      continue;
-    }
-
-    if (!raw.trim()) {
-      if (attempt >= maxAttempts) {
-        tracker.complete('no operations received');
-        return;
-      }
-
-      writeWarning('Empty browser response. Retrying...');
-      const retryBody = buildAgentCompactRetryMessage(
-        'Empty response from browser AI',
+  try {
+    const prepared = await prepareAgentRun(
+      {
+        projectRoot: process.cwd(),
+        task,
+        contextRefs: options.contextPaths ?? [],
+        contextBudget: options.contextBudget,
         conversationId,
-        userTask,
-      );
-      const includeSystem = !hasRetriedWithFullSystem;
-      message = buildFullMessage('agent', systemPrompt, retryBody, context, {
-        includeSystemInstructions: includeSystem,
-      });
-      if (includeSystem) {
-        hasRetriedWithFullSystem = true;
+        includeSystemInstructions:
+          !sessionPrimingState.agentPrimed || !options.interactive,
+      },
+      {
+        submitAndWait: (request) => submitBrowserRequest(request, tracker),
+        onEvent: (event) => handlePreparationEvent(event, tracker),
+      },
+    );
+
+    const operations = [...prepared.operations];
+    const plans = [...prepared.previews];
+    const hasMarkdownCreate = operations.some(
+      (operation) =>
+        operation.action === 'CREATE_FILE' && /\.md$/i.test(operation.path ?? ''),
+    );
+
+    output.write(`\n${colors.bold}Changes preview${colors.reset} ${colors.dim}(${plans.length} operation(s))${colors.reset}\n`);
+    writeRiskSummary(plans);
+    for (const plan of plans) {
+      writeDiffBlock(plan.diff);
+    }
+
+    const approvedOperations: FileOperation[] = [];
+    for (const plan of plans) {
+      if (!requiresExplicitApproval(plan.risk)) {
+        approvedOperations.push(plan.operation);
+        continue;
       }
-      continue;
+
+      const firstLine = plan.diff.split(/\r?\n/, 1)[0] ?? plan.operation.action;
+      const approvedRisk = await confirm(
+        `Approve ${plan.risk} operation: ${firstLine}?`,
+      );
+      if (approvedRisk) {
+        approvedOperations.push(plan.operation);
+      } else {
+        writeWarning(`skipped ${plan.operation.action}`);
+      }
+    }
+
+    if (approvedOperations.length === 0) {
+      tracker.complete('rejected');
+      writeWarning('no operations approved');
+      return;
+    }
+
+    const approved = await confirm(
+      `Apply ${approvedOperations.length} approved operation(s)?`,
+    );
+    if (!approved) {
+      tracker.complete('rejected');
+      writeWarning('changes not applied');
+      return;
+    }
+
+    if (hasMarkdownCreate) {
+      writeInfo('README/.md content captured from a markdown block in the browser');
     }
 
     try {
-      tracker.step('loading', 'validating AI response');
-      const payload = parseAIResponse(raw, { conversationId });
-      if (payload.error) {
-        throw new Error(payload.error);
-      }
-
-      const operations = (payload.operations ?? []) as FileOperation[];
-      const hasMarkdownCreate = operations.some(
-        (op) => op.action === 'CREATE_FILE' && /\.md$/i.test(op.path ?? ''),
-      );
-
-      const plans = await planOperations(operations, process.cwd());
-
-      output.write(`
-${colors.bold}Changes preview${colors.reset} ${colors.dim}(${plans.length} operation(s))${colors.reset}
-`);
-      writeRiskSummary(plans);
-      for (const plan of plans) {
-        writeDiffBlock(plan.diff);
-      }
-
-      const approvedOperations: typeof operations = [];
-      for (const plan of plans) {
-        if (!requiresExplicitApproval(plan.risk)) {
-          approvedOperations.push(plan.operation);
-          continue;
-        }
-
-        const firstLine = plan.diff.split(/\r?\n/, 1)[0] ?? plan.operation.action;
-        const approvedRisk = await confirm(`Approve ${plan.risk} operation: ${firstLine}?`);
-        if (approvedRisk) {
-          approvedOperations.push(plan.operation);
-        } else {
-          writeWarning(`skipped ${plan.operation.action}`);
-        }
-      }
-
-      if (approvedOperations.length === 0) {
-        tracker.complete('rejected');
-        writeWarning('no operations approved');
-        return;
-      }
-
-      const approved = await confirm(`Apply ${approvedOperations.length} approved operation(s)?`);
-      if (!approved) {
-        tracker.complete('rejected');
-        writeWarning('changes not applied');
-        return;
-      }
-
-      if (hasMarkdownCreate) {
-        writeInfo('README/.md content captured from a markdown block in the browser');
-      }
-
-      try {
-        const executionPlans = approvedOperations.length === plans.length
+      const executionPlans =
+        approvedOperations.length === plans.length
           ? plans
           : await planOperations(approvedOperations, process.cwd());
-        await executePlannedOperations(executionPlans, process.cwd(), {
-          conversationId: payload.conversationId,
-          onStep: (step, detail) => tracker.step(step as TrackerStep, detail),
-        });
-      } catch (error) {
-        tracker.complete('execution failed');
-        writeError(`Operation execution failed: ${formatError(error)}`);
-        writeWarning('The AI response will not be retried automatically after an execution failure. Review the working tree before continuing.');
-        return;
-      }
-
-      writeSuccess(`applied ${approvedOperations.length} operation(s)`);
-
-      if (options.verificationProfile) {
-        try {
-          await runVerification(options.verificationProfile, false);
-        } catch (error) {
-          tracker.complete('verification failed');
-          writeError(`Post-change verification failed: ${formatError(error)}`);
-          writeWarning('Changes remain in the working tree for inspection; the AI response was not regenerated or reapplied.');
-          return;
-        }
-      }
-
-      const finalStatus = await readProjectStatus(process.cwd());
-      writeInfo(
-        `working tree after pass: ${finalStatus.dirty ? `${finalStatus.changedFiles} changed file(s)` : 'clean'}`,
-      );
-      tracker.complete(`applied ${approvedOperations.length} operation(s)`);
-      sessionPrimingState.agentPrimed = true;
-      return;
-    } catch (error) {
-      const validationError = formatError(error);
-      if (attempt >= maxAttempts) {
-        writeError(`Agent error: ${validationError}`);
-        return;
-      }
-
-      writeWarning(`Invalid agent response (${validationError}). Retrying (${attempt}/${maxAttempts - 1})...`);
-      const retryBody = buildAgentCompactRetryMessage(validationError, conversationId, userTask);
-      const includeSystem = !hasRetriedWithFullSystem;
-      message = buildFullMessage('agent', systemPrompt, retryBody, context, {
-        includeSystemInstructions: includeSystem,
+      await executePlannedOperations(executionPlans, process.cwd(), {
+        conversationId: prepared.conversationId,
+        onStep: (step, detail) => tracker.step(step as TrackerStep, detail),
       });
-      if (includeSystem) {
-        hasRetriedWithFullSystem = true;
+    } catch (error) {
+      tracker.complete('execution failed');
+      writeError(`Operation execution failed: ${formatError(error)}`);
+      writeWarning(
+        'The AI response will not be retried automatically after an execution failure. Review the working tree before continuing.',
+      );
+      return;
+    }
+
+    writeSuccess(`applied ${approvedOperations.length} operation(s)`);
+
+    if (options.verificationProfile) {
+      try {
+        await runVerification(options.verificationProfile, false);
+      } catch (error) {
+        tracker.complete('verification failed');
+        writeError(`Post-change verification failed: ${formatError(error)}`);
+        writeWarning(
+          'Changes remain in the working tree for inspection; the AI response was not regenerated or reapplied.',
+        );
+        return;
       }
     }
+
+    const finalStatus = await readProjectStatus(process.cwd());
+    writeInfo(
+      `working tree after pass: ${finalStatus.dirty ? `${finalStatus.changedFiles} changed file(s)` : 'clean'}`,
+    );
+    tracker.complete(`applied ${approvedOperations.length} operation(s)`);
+    sessionPrimingState.agentPrimed = true;
+  } catch (error) {
+    if (
+      error instanceof AgentPreparationError &&
+      error.code === 'EMPTY_RESPONSE'
+    ) {
+      tracker.complete('no operations received');
+      return;
+    }
+    writeError(`Agent error: ${formatError(error)}`);
+  } finally {
+    if (!options.interactive) {
+      writeSessionEnd('agent session complete');
+    }
+  }
+}
+
+async function submitBrowserRequest(
+  request: AgentSubmissionRequest,
+  tracker: AgentStepTracker,
+): Promise<string> {
+  const detail =
+    request.mode === 'agent'
+      ? `attempt ${request.attempt}/${request.maxAttempts}`
+      : request.markdownDraft
+        ? 'sending markdown draft'
+        : 'sending prompt';
+  tracker.step('reading browser', detail);
+  writeInfo('sending to browser AI (open ChatGPT with the extension loaded)');
+  if (shouldDeliverPromptAsFile(request.message)) {
+    writeInfo(
+      `prompt exceeds ${PROMPT_INJECTION_CHAR_LIMIT} chars — attaching ${PROMPT_FILE_NAME} instead of pasting`,
+    );
+  }
+  if (request.mode === 'ask' && request.markdownDraft) {
+    writeInfo('draft mode: AI will return a markdown block for you to copy');
   }
 
-  if (!options.interactive) {
-    writeSessionEnd('agent session complete');
+  const spinner = new WaitingSpinner();
+  spinner.start(
+    request.mode === 'agent'
+      ? 'waiting for agent response'
+      : 'waiting for response',
+  );
+
+  try {
+    const { sessionId } = await submitPrompt({
+      mode: request.mode,
+      prompt: request.prompt,
+      systemPrompt: request.systemPrompt,
+      message: request.message,
+      conversationId: request.conversationId,
+      markdownDraft: request.markdownDraft,
+    });
+    return await waitForBrowserResponse(sessionId);
+  } finally {
+    spinner.stop();
+  }
+}
+
+function handlePreparationEvent(
+  event: PreparationEvent,
+  tracker: AgentStepTracker,
+): void {
+  if (event.type === 'context_ready') {
+    const { summary } = event;
+    if (summary.references.length > 0) {
+      if (summary.includedFiles === 0) {
+        writeWarning(
+          `@ references [${summary.references.join(', ')}] matched no safe text files. Use Tab after @ to complete paths.`,
+        );
+      } else {
+        writeInfo(
+          `attached ${summary.includedFiles} file(s) using ${summary.totalCharacters}/${summary.limitCharacters} context characters`,
+        );
+      }
+      if (summary.sensitiveExcluded > 0) {
+        writeInfo(`excluded ${summary.sensitiveExcluded} sensitive path(s)`);
+      }
+    }
+    if (summary.memoryAttached) {
+      writeInfo('attached explicit project memory');
+    }
+    return;
+  }
+
+  if (event.type === 'validating_response') {
+    tracker.step('loading', 'validating AI response');
+    return;
+  }
+
+  if (event.type !== 'retrying') {
+    return;
+  }
+
+  if (event.category === 'capture') {
+    writeWarning(`Browser capture failed (${event.reason}). Retrying...`);
+  } else if (event.category === 'empty') {
+    writeWarning('Empty browser response. Retrying...');
+  } else {
+    writeWarning(
+      `Invalid agent response (${event.reason}). Retrying (${event.attempt}/${event.maxAttempts - 1})...`,
+    );
   }
 }
 
