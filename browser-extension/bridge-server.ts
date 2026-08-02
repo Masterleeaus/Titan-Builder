@@ -3,16 +3,63 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { existsSync, readFileSync } from 'node:fs';
+import os from 'node:os';
 import Database from 'better-sqlite3';
 import chokidar from 'chokidar';
-import { config } from 'dotenv';
 import fg from 'fast-glob';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { WebSocket, WebSocketServer } from 'ws';
 import yazl from 'yazl';
 import { z } from 'zod';
 
-config();
+export function loadCompanionEnvironment(options: { homeDir?: string; packageRoot?: string } = {}): string | undefined {
+  const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+  const packageRoot = options.packageRoot ?? path.resolve(moduleDirectory, '..');
+  const homeDir = options.homeDir ?? os.homedir();
+
+  const candidates = [
+    process.env.OPENBROWSER_CONFIG,
+    path.join(homeDir, '.openbrowser', '.env'),
+    path.join(packageRoot, '.env'),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  const configPath = candidates.find((candidate) => existsSync(candidate));
+  if (!configPath) {
+    return undefined;
+  }
+
+  // Parse and load environment variables
+  const content = readFileSync(configPath, 'utf8');
+  for (const line of content.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const normalized = trimmed.startsWith('export ') ? trimmed.slice(7).trimStart() : trimmed;
+    const separatorIndex = normalized.indexOf('=');
+    if (separatorIndex <= 0) continue;
+
+    const key = normalized.slice(0, separatorIndex).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)) continue;
+
+    // Only set if not already in environment
+    if (process.env[key] === undefined) {
+      let value = normalized.slice(separatorIndex + 1).trim();
+      // Remove quotes if present
+      if (value.length >= 2) {
+        const quote = value[0];
+        if ((quote === '"' || quote === "'") && value.at(-1) === quote) {
+          value = value.slice(1, -1);
+        }
+      }
+      process.env[key] = value;
+    }
+  }
+
+  return configPath;
+}
+
+const configPath = loadCompanionEnvironment();
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_HOST = '127.0.0.1';
@@ -1025,6 +1072,9 @@ export async function startWorkspaceServer(options: WorkspaceServerOptions = {})
   const host = options.host ?? process.env.WORKSPACE_HOST ?? DEFAULT_HOST;
   const port = options.port ?? Number(process.env.WORKSPACE_PORT ?? DEFAULT_PORT);
   await app.listen({ host, port });
+  if (configPath) {
+    console.log(`Loaded configuration from: ${configPath}`);
+  }
   console.log(`OpenBrowser Workspace companion listening on http://${host}:${port}`);
 }
 
