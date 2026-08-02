@@ -1,4 +1,4 @@
-import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { readFile, readdir, writeFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -6,6 +6,11 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const packagesRoot = path.join(repositoryRoot, 'browser-extension', 'skill-library', 'packages');
 const outputPath = path.join(repositoryRoot, 'browser-extension', 'src', 'generated', 'skill-catalog.js');
 const checkOnly = process.argv.includes('--check');
+
+function isContained(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
 
 async function walk(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -18,25 +23,73 @@ async function walk(directory) {
   return files;
 }
 
+async function resolveContainedFile(packageRoot, relativePath) {
+  if (path.isAbsolute(relativePath)) throw new Error(`Skill asset must be relative: ${relativePath}`);
+  const canonicalRoot = await realpath(packageRoot);
+  const candidate = path.resolve(packageRoot, relativePath);
+  let canonicalCandidate;
+  try {
+    canonicalCandidate = await realpath(candidate);
+  } catch (error) {
+    throw new Error(`Unable to read skill asset ${relativePath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!isContained(canonicalRoot, canonicalCandidate)) {
+    throw new Error(`Skill asset ${relativePath} escapes its package boundary.`);
+  }
+  return canonicalCandidate;
+}
+
 async function buildCatalog() {
+  // Dynamic import for validation
+  const { validateSkillManifest } = await import(path.join(repositoryRoot, 'src', 'skills', 'manifest.ts'));
+
   const records = [];
+  const seenIds = new Set();
+  const seenAliases = new Set();
+
   for (const manifestPath of await walk(packagesRoot)) {
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-    if (!String(manifest.id || '').startsWith('titan.')) {
-      throw new Error(`Invalid canonical skill ID in ${path.relative(repositoryRoot, manifestPath)}`);
+    const source = JSON.parse(await readFile(manifestPath, 'utf8'));
+
+    // Validate manifest schema
+    const validation = validateSkillManifest(source);
+    if (!validation.success) {
+      const details = validation.issues.map((i) => `${i.path}: ${i.message}`).join('; ');
+      const relPath = path.relative(repositoryRoot, manifestPath);
+      throw new Error(`Invalid manifest in ${relPath}: ${details}`);
     }
+
+    const manifest = validation.data;
+
+    // Check for duplicate IDs
+    if (seenIds.has(manifest.id)) {
+      throw new Error(`Duplicate skill ID: ${manifest.id}`);
+    }
+    seenIds.add(manifest.id);
+
+    // Check for duplicate aliases
+    for (const alias of manifest.aliases ?? []) {
+      if (seenAliases.has(alias)) {
+        throw new Error(`Duplicate skill alias: ${alias}`);
+      }
+      if (seenIds.has(alias)) {
+        throw new Error(`Skill alias ${alias} collides with a canonical ID.`);
+      }
+      seenAliases.add(alias);
+    }
+
     let instructions;
     if (manifest.instructions) {
       const packageRoot = path.dirname(manifestPath);
-      const candidate = path.resolve(packageRoot, manifest.instructions);
-      const relative = path.relative(packageRoot, candidate);
-      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-        throw new Error(`Instruction path escapes package: ${manifest.instructions}`);
+      const instructionsPath = await resolveContainedFile(packageRoot, manifest.instructions);
+      instructions = (await readFile(instructionsPath, 'utf8')).trim();
+      if (!instructions) {
+        throw new Error(`Skill instructions are empty: ${manifest.instructions}`);
       }
-      instructions = (await readFile(candidate, 'utf8')).trim();
     }
+
     records.push({ manifest, ...(instructions ? { instructions } : {}) });
   }
+
   records.sort((left, right) => left.manifest.id.localeCompare(right.manifest.id));
   return records;
 }
@@ -57,5 +110,16 @@ if (checkOnly) {
     process.exitCode = 1;
   }
 } else {
-  await writeFile(outputPath, expected);
+  // Write atomically to temporary file first, then replace
+  const tempPath = `${outputPath}.tmp`;
+  try {
+    await writeFile(tempPath, expected);
+    await writeFile(outputPath, expected);
+  } finally {
+    try {
+      await import('node:fs/promises').then((fs) => fs.unlink(tempPath).catch(() => {}));
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
 }
