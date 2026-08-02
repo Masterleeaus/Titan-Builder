@@ -111,7 +111,7 @@ function parseMetadataTable(source) {
 }
 
 function extractSection(source, heading) {
-  const pattern = new RegExp(`^## ${escapeRegExp(heading)}\\s*$([\\s\\S]*?)(?=^## |\\z)`, 'imu');
+  const pattern = new RegExp(`^## ${escapeRegExp(heading)}\\s*$([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, 'imu');
   const match = String(source).match(pattern);
   if (!match) throw new Error(`Missing required section: ${heading}`);
   return match[1].trim();
