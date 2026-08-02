@@ -71,3 +71,17 @@ test('store returns defensive copies instead of mutable internal records', async
   const reread = await store.get(run.id);
   assert.equal(reread?.prompt, 'explain x');
 });
+
+test('store rejects a filesystem path supplied instead of a registered project id', async () => {
+  const store = createBrowserRunStore({ persistence: 'memory' });
+
+  await assert.rejects(
+    () =>
+      store.create({
+        mode: 'agent',
+        projectId: '/tmp/unregistered-project',
+        prompt: 'change x',
+      }),
+    /registered project id/i,
+  );
+});
