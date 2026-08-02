@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  workspace-tools:
+  workspace-tools-linux:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -39,8 +39,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install companion dependencies
-        run: pnpm install --no-frozen-lockfile
+      - name: Install companion dependencies from lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck companion
         run: pnpm run typecheck
@@ -50,6 +50,72 @@ jobs:
 
       - name: Run Python tests
         run: pnpm run test:python
+
+      - name: Validate Python and Bash entrypoints
+        run: |
+          python -m py_compile analysis_tools.py
+          bash -n gh-openbrowser hooks/pre-commit
+
+      - name: Build companion
+        run: pnpm run build
+
+  workspace-tools-windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: tools/openbrowser-workspace
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Activate pnpm 11.2.2
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+          pnpm --version
+
+      - name: Set up Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install companion dependencies from lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck companion
+        run: pnpm run typecheck
+
+      - name: Run TypeScript tests
+        run: pnpm run test
+
+      - name: Run Python tests
+        run: pnpm run test:python
+
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($script in @('openbrowser.ps1', 'dashboard.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script),
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              Write-Error "$script contains PowerShell parse errors: $($errors | Out-String)"
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
 
       - name: Build companion
         run: pnpm run build
