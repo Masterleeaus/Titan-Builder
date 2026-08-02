@@ -142,6 +142,7 @@ export function resolveBridgeRouteScope(method: string, rawUrl: string): BridgeR
     return 'control';
   }
   if (
+    url === '/tools' ||
     url === '/project/status' ||
     url === '/projects' ||
     url.startsWith('/projects/') ||
