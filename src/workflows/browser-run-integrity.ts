@@ -152,6 +152,7 @@ export function verifyIntegrityBoundPreparedArtifact(
   if (value.auditRevision !== digestValue(auditPrefix)) {
     throw new BrowserRunIntegrityError('Prepared artifact audit sequence binding does not match');
   }
+  assertRecoverableAuditTail(auditEvents.slice(value.auditSequence));
 
   const { digest, ...withoutDigest } = value;
   if (digest !== digestValue(withoutDigest)) {
@@ -259,6 +260,40 @@ function assertAuditEvents(runId: string, events: readonly BrowserRunEvent[]): v
       throw new BrowserRunIntegrityError('Run audit sequence contains a duplicated event');
     }
     ids.add(event.id);
+  }
+}
+
+function assertRecoverableAuditTail(events: readonly BrowserRunEvent[]): void {
+  for (const event of events) {
+    if (
+      event.type === 'operation_selection'
+      || event.type === 'approval_prepared'
+      || event.type === 'recovery_restored'
+      || event.type === 'stale_preview'
+    ) {
+      continue;
+    }
+
+    const previousStatus = event.details?.previousStatus;
+    const status = event.details?.status;
+    if (
+      event.type === 'status_changed'
+      && previousStatus === 'awaiting_approval'
+      && status === 'ready_to_apply'
+    ) {
+      continue;
+    }
+    if (
+      event.type === 'recovery'
+      && previousStatus === 'ready_to_apply'
+      && status === 'awaiting_approval'
+    ) {
+      continue;
+    }
+
+    throw new BrowserRunIntegrityError(
+      `Prepared artifact audit tail contains a non-recoverable event: ${event.type}`,
+    );
   }
 }
 
