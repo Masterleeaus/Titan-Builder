@@ -43,6 +43,29 @@ test('quarantines a prepared artifact when the visible run status is changed ind
   await assertQuarantined(directory, runId);
 });
 
+test('quarantines terminal prepared-artifact replay after record status is rewritten', async () => {
+  const directory = await temporaryDirectory('browser-run-terminal-replay-');
+  const runId = 'run-integrity-terminal-replay';
+  const store = createBrowserRunStore({ runsDir: directory, idFactory: () => runId });
+  await prepareAwaitingApproval(store);
+  await store.appendEvent(runId, {
+    type: 'rejected',
+    summary: 'Run rejected by user',
+  });
+  await store.transition(runId, 'rejected');
+
+  const recordPath = path.join(directory, `${runId}.json`);
+  const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown>;
+  record.status = 'awaiting_approval';
+  await writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+
+  const restarted = createBrowserRunStore({ runsDir: directory });
+  const recoverable = await restarted.recover();
+  assert.equal(recoverable.some((run) => run.id === runId), true);
+  assert.equal(await restarted.getPrepared(runId), null);
+  await assertQuarantined(directory, runId);
+});
+
 test('fails closed after a crash between the prepared write and approval transition', async () => {
   const directory = await temporaryDirectory('browser-run-prepared-boundary-');
   const runId = 'run-integrity-prepared-boundary';
