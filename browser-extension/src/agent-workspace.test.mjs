@@ -5,6 +5,7 @@ import {
   buildOperationSelection,
   createAgentWorkspaceController,
   parseBridgeError,
+  prepareRoutedWorkPrompt,
   reduceRunViewState,
 } from './agent-workspace.js';
 
@@ -33,6 +34,116 @@ test('agent payload requires an explicit registered project', () => {
       verificationProfile: 'standard',
     },
   );
+});
+
+test('prepareRoutedWorkPrompt composes a high-confidence automatic route', async () => {
+  const catalog = [{
+    id: 'TB-PROMPT-TZ-ARCH-001',
+    title: 'Titan Zero and WorkCore Authority Boundary Audit',
+    purpose: 'Audit authority boundaries and duplicated operational truth.',
+    tags: ['titan-zero', 'workcore', 'authority-boundary'],
+    routingIntents: ['audit titan zero workcore authority'],
+    workModes: ['agent'],
+    sourceType: 'canonical',
+    path: 'prompt-library/titan-zero/tz-arch-001.md',
+  }];
+  const prepared = await prepareRoutedWorkPrompt({
+    prompt: 'Audit Titan Zero and WorkCore authority boundaries.',
+    mode: 'agent',
+    promptRoutingMode: 'auto',
+  }, {
+    catalog,
+    loadPromptBody: async () => '# Canonical audit prompt',
+  });
+  assert.equal(prepared.route.status, 'selected');
+  assert.equal(prepared.selectedPrompt.id, 'TB-PROMPT-TZ-ARCH-001');
+  assert.equal(prepared.originalPrompt, 'Audit Titan Zero and WorkCore authority boundaries.');
+  assert.match(prepared.prompt, /# Canonical audit prompt/);
+  assert.match(prepared.prompt, /Audit Titan Zero and WorkCore authority boundaries\./);
+});
+
+test('prepareRoutedWorkPrompt preserves the raw task for ambiguous, none, and off routes', async () => {
+  const catalog = [
+    { id: 'one', title: 'Runtime Architecture Audit', purpose: 'Audit runtime architecture.', routingIntents: ['audit runtime architecture'], workModes: ['agent'], content: 'one', sourceType: 'builtin' },
+    { id: 'two', title: 'Platform Architecture Audit', purpose: 'Audit platform architecture.', routingIntents: ['audit platform architecture'], workModes: ['agent'], content: 'two', sourceType: 'builtin' },
+  ];
+  const ambiguous = await prepareRoutedWorkPrompt({
+    prompt: 'Audit runtime platform architecture',
+    mode: 'agent',
+    promptRoutingMode: 'auto',
+  }, { catalog });
+  assert.equal(ambiguous.route.status, 'ambiguous');
+  assert.equal(ambiguous.prompt, 'Audit runtime platform architecture');
+
+  const none = await prepareRoutedWorkPrompt({
+    prompt: 'Explain the colour blue',
+    mode: 'agent',
+    promptRoutingMode: 'auto',
+  }, { catalog });
+  assert.equal(none.route.status, 'none');
+  assert.equal(none.prompt, 'Explain the colour blue');
+
+  const off = await prepareRoutedWorkPrompt({
+    prompt: 'Audit runtime architecture',
+    mode: 'agent',
+    promptRoutingMode: 'off',
+  }, { catalog });
+  assert.equal(off.route.status, 'off');
+  assert.equal(off.prompt, 'Audit runtime architecture');
+});
+
+test('prepareRoutedWorkPrompt honours a manual prompt and rejects an invalid manual ID', async () => {
+  const catalog = [{
+    id: 'systematic-debug',
+    title: 'Systematic Bug Debugger',
+    workModes: ['ask', 'agent'],
+    content: 'Debug systematically.',
+    sourceType: 'builtin',
+  }];
+  const prepared = await prepareRoutedWorkPrompt({
+    prompt: 'Fix the failing test.',
+    mode: 'agent',
+    promptRoutingMode: 'manual',
+    manualPromptId: 'systematic-debug',
+  }, { catalog });
+  assert.equal(prepared.route.reason, 'manual');
+  assert.match(prepared.prompt, /Debug systematically\./);
+  await assert.rejects(
+    () => prepareRoutedWorkPrompt({
+      prompt: 'Fix the failing test.',
+      mode: 'agent',
+      promptRoutingMode: 'manual',
+      manualPromptId: 'missing',
+    }, { catalog }),
+    /manual prompt/i,
+  );
+});
+
+test('controller sends the prepared routed prompt without changing approval behaviour', async () => {
+  const calls = [];
+  const controller = createAgentWorkspaceController({
+    bridgeRequest: async (message) => {
+      calls.push(message);
+      return { id: 'run-routed', status: 'preparing', operations: [] };
+    },
+    storage: { set: async () => undefined, remove: async () => undefined },
+    render: () => undefined,
+    preparePrompt: async (input) => ({
+      prompt: `ROUTED\n${input.prompt}`,
+      originalPrompt: input.prompt,
+      route: { status: 'selected', selected: { id: 'systematic-debug' }, score: 60, margin: 20 },
+      selectedPrompt: { id: 'systematic-debug', title: 'Systematic Bug Debugger' },
+    }),
+  });
+  await controller.start({
+    mode: 'agent',
+    prompt: 'Fix it',
+    projectId: 'project-1234567890abcdef',
+    contextRefs: 'src',
+    promptRoutingMode: 'auto',
+  });
+  assert.equal(calls[0].payload.prompt, 'ROUTED\nFix it');
+  assert.equal(controller.getState().promptRoute.selected.id, 'systematic-debug');
 });
 
 test('awaiting approval exposes review controls but not final apply', () => {
