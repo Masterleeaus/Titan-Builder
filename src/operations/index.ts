@@ -13,6 +13,12 @@ import { canonicalizeProjectRoot, resolveProjectPath } from '../security/project
 import { expandMkdirOperations, looksLikePowerShellCommand } from './mkdir-normalize.js';
 import { preserveOperationOrder } from './operation-order.js';
 import {
+  preflightRollback,
+  removeRollbackBackup,
+  restoreRollbackParent,
+  restoreRollbackTarget,
+} from './rollback-containment.js';
+import {
   isUnsafeLegacyCommandEnabled,
   resolveToolInvocation,
   toolInputFiles,
@@ -575,58 +581,24 @@ async function rollbackTransaction(
   await writeTransactionJournal(transaction).catch(() => undefined);
 
   try {
-    const targets = transaction.snapshots
-      .filter((snapshot) => snapshot.role === 'target')
-      .sort((left, right) => pathDepth(right.absolutePath) - pathDepth(left.absolutePath));
+    const validation = await preflightRollback(
+      transaction.journal.projectRoot,
+      transaction.backupRoot,
+      transaction.snapshots,
+    );
 
-    for (const snapshot of targets) {
-      if (snapshot.kind === 'missing') {
-        await fs.remove(snapshot.absolutePath);
-        continue;
-      }
-      if (snapshot.kind === 'directory') {
-        if (await fs.pathExists(snapshot.absolutePath)) {
-          const current = await fs.lstat(snapshot.absolutePath);
-          if (!current.isDirectory()) {
-            await fs.remove(snapshot.absolutePath);
-          }
-        }
-        await fs.ensureDir(snapshot.absolutePath);
-        continue;
-      }
-      if (!snapshot.backupPath) {
-        throw new Error(`Missing rollback backup for ${snapshot.relativePath}`);
-      }
-      await fs.remove(snapshot.absolutePath);
-      await fs.ensureDir(path.dirname(snapshot.absolutePath));
-      await fs.copyFile(snapshot.backupPath, snapshot.absolutePath);
-      if (snapshot.mode !== undefined) {
-        await fs.chmod(snapshot.absolutePath, snapshot.mode);
-      }
+    for (const snapshot of validation.targets) {
+      await restoreRollbackTarget(validation, snapshot);
     }
 
-    const parents = transaction.snapshots
-      .filter((snapshot) => snapshot.role === 'parent')
-      .sort((left, right) => pathDepth(right.absolutePath) - pathDepth(left.absolutePath));
-    for (const snapshot of parents) {
-      if (snapshot.kind === 'missing') {
-        try {
-          await fs.rmdir(snapshot.absolutePath);
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (code !== 'ENOENT' && code !== 'ENOTEMPTY' && code !== 'EEXIST') {
-            throw error;
-          }
-        }
-      } else if (snapshot.kind === 'directory') {
-        await fs.ensureDir(snapshot.absolutePath);
-      }
+    for (const snapshot of validation.parents) {
+      await restoreRollbackParent(validation, snapshot);
     }
 
     transaction.journal.status = 'rolled_back';
     transaction.journal.rollbackStatus = 'rolled_back';
     transaction.journal.updatedAt = new Date().toISOString();
-    await fs.remove(transaction.backupRoot);
+    await removeRollbackBackup(validation);
     await writeTransactionJournal(transaction);
     return 'rolled_back';
   } catch (rollbackError) {
