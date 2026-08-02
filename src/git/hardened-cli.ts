@@ -1,17 +1,21 @@
 import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const implementationPath = import.meta.url.endsWith('.ts')
+const modulePath = fileURLToPath(import.meta.url);
+const implementationPath = path.extname(modulePath) === '.ts'
   ? './hardened-read.ts'
   : './hardened-read.js';
-const { createHardenedGitEnvironment } = await import(implementationPath);
+const { buildHardenedGitInvocation } = await import(implementationPath);
 
 const args = process.argv.slice(2);
 if (args.length === 0) {
   process.stderr.write('Hardened Git runner requires a command.\n');
   process.exitCode = 2;
 } else {
-  const child = spawn('git', args, {
-    env: createHardenedGitEnvironment(process.env),
+  const invocation = buildHardenedGitInvocation(args, process.env);
+  const child = spawn(invocation.executable, invocation.args, {
+    env: invocation.env,
     shell: false,
     windowsHide: true,
     stdio: 'inherit',
