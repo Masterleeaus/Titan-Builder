@@ -27,5 +27,9 @@ Make privileged companion-to-bridge forwarding fail closed unless the destinatio
 - [x] Pin the authenticated bridge instance UUID.
 - [x] Add unit, integration, real-socket, replacement, redirect, and oversized-response tests.
 - [x] Normalize unknown Fastify errors without exposing primitive thrown values.
-- [x] Confirm repository, companion, and security-policy workflows are green on the final head.
-- [x] Mark PR #158 ready for review after final-head verification.
+- [x] Confirm repository, companion, and security-policy workflows are green on the verified implementation.
+- [x] Mark PR #158 ready for review after verification.
+
+## Completion record
+
+The verified security patch was rebuilt onto `main` after the Fastify 5 compatibility prerequisite landed. Full root and companion verification passed during the rebuild, and the standard repository, workspace-tools, and security/dependency workflows passed on the equivalent final implementation before the history cleanup. The pull request is review-ready; this execution did not merge it.
