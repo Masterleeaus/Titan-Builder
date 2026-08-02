@@ -1,0 +1,157 @@
+name: Rebuild bridge security fix
+
+on:
+  push:
+    branches:
+      - agent/rebase2-tb-deep-106-bridge-forwarding
+    paths:
+      - .github/workflows/agent-security-rebase.yml
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out clean branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/rebase2-tb-deep-106-bridge-forwarding
+          fetch-depth: 0
+
+      - name: Import isolated bridge-security files
+        run: |
+          git fetch origin agent/fix-tb-deep-106-bridge-forwarding
+          git checkout origin/agent/fix-tb-deep-106-bridge-forwarding -- \
+            browser-extension/bridge-authenticated-client.ts \
+            browser-extension/bridge-endpoint-policy.ts \
+            browser-extension/bridge-forwarding-security.test.ts \
+            browser-extension/bridge-identity-verifier.ts \
+            src/server/bridge-identity.ts \
+            src/server/bridge-identity.test.ts \
+            src/server/index.ts
+
+      - name: Apply guarded integration edits
+        shell: python
+        run: |
+          from pathlib import Path
+          import json
+
+          server_path = Path('browser-extension/bridge-server.ts')
+          source = server_path.read_text()
+
+          old_import = """import yazl from 'yazl';
+          import { z } from 'zod';
+
+          config();"""
+          new_import = """import yazl from 'yazl';
+          import { z } from 'zod';
+          import {
+            BridgeClientError,
+            createAuthenticatedBridgeClient,
+          } from './bridge-authenticated-client.js';
+          import { parseLoopbackBridgeUrl } from './bridge-endpoint-policy.js';
+
+          export { parseLoopbackBridgeUrl } from './bridge-endpoint-policy.js';
+
+          config();"""
+          if source.count(old_import) != 1:
+              raise SystemExit('bridge-server import anchor was not found exactly once')
+          source = source.replace(old_import, new_import)
+
+          old_config = """  const bridgeUrl = (options.bridgeUrl ?? process.env.OPENBROWSER_BRIDGE_URL ?? DEFAULT_BRIDGE_URL)
+            .replace(/\\/$/, '');
+          const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;
+          const databasePath = path.resolve("""
+          new_config = """  const bridgeEndpoint = parseLoopbackBridgeUrl(
+            options.bridgeUrl ?? process.env.OPENBROWSER_BRIDGE_URL ?? DEFAULT_BRIDGE_URL,
+          );
+          const bridgeUrl = bridgeEndpoint.origin;
+          const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;
+          const bridgeClient = bridgeToken
+            ? createAuthenticatedBridgeClient({ bridgeUrl, controlToken: bridgeToken })
+            : undefined;
+          const databasePath = path.resolve("""
+          if source.count(old_config) != 1:
+              raise SystemExit('bridge-server endpoint anchor was not found exactly once')
+          source = source.replace(old_config, new_config)
+
+          old_request = """  async function bridgeRequest(method: string, route: string, body?: unknown): Promise<unknown> {
+            if (!bridgeToken) {
+              throw new WorkspaceHttpError('BRIDGE_TOKEN is required for main-bridge operations', 503);
+            }
+            const response = await fetch(`${bridgeUrl}${route}`, {
+              method,
+              headers: {
+                Authorization: `Bearer ${bridgeToken}`,
+                ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+              },
+              body: body === undefined ? undefined : JSON.stringify(body),
+              signal: AbortSignal.timeout(60_000),
+            });
+            const text = await response.text();"""
+          new_request = """  async function bridgeRequest(method: string, route: string, body?: unknown): Promise<unknown> {
+            if (!bridgeClient) {
+              throw new WorkspaceHttpError('BRIDGE_TOKEN is required for main-bridge operations', 503);
+            }
+
+            let response: Response;
+            try {
+              response = await bridgeClient.request(method, route, body);
+            } catch (error) {
+              if (error instanceof BridgeClientError) {
+                throw new WorkspaceHttpError(error.message, error.statusCode);
+              }
+              throw error;
+            }
+
+            const text = await response.text();"""
+          if source.count(old_request) != 1:
+              raise SystemExit('bridge-server forwarding anchor was not found exactly once')
+          server_path.write_text(source.replace(old_request, new_request))
+
+          root_manifest_path = Path('package.json')
+          root_manifest = json.loads(root_manifest_path.read_text())
+          old_node_tests = 'src/server/security.test.ts src/server/operation-approvals.test.ts'
+          new_node_tests = 'src/server/security.test.ts src/server/bridge-identity.test.ts src/server/operation-approvals.test.ts'
+          test_node = root_manifest['scripts']['test:node']
+          if test_node.count(old_node_tests) != 1:
+              raise SystemExit('root test:node anchor was not found exactly once')
+          root_manifest['scripts']['test:node'] = test_node.replace(old_node_tests, new_node_tests)
+          root_manifest_path.write_text(json.dumps(root_manifest, indent=2) + '\n')
+
+          companion_manifest_path = Path('browser-extension/package.json')
+          companion_manifest = json.loads(companion_manifest_path.read_text())
+          companion_manifest['scripts']['test'] = 'vitest run bridge-server.test.ts bridge-forwarding-security.test.ts bridge-error-normalization.test.ts'
+          companion_manifest['scripts']['test:watch'] = 'vitest bridge-server.test.ts bridge-forwarding-security.test.ts bridge-error-normalization.test.ts'
+          companion_manifest_path.write_text(json.dumps(companion_manifest, indent=2) + '\n')
+
+      - name: Install and verify targeted security path
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm run typecheck
+          pnpm --dir browser-extension run typecheck
+          node --experimental-strip-types --test src/server/bridge-identity.test.ts
+          pnpm --dir browser-extension exec vitest run bridge-forwarding-security.test.ts bridge-error-normalization.test.ts
+
+      - name: Commit rebuilt security branch
+        run: |
+          rm .github/workflows/agent-security-rebase.yml
+          git config user.name "titan-builder-agent"
+          git config user.email "titan-builder-agent@users.noreply.github.com"
+          git add \
+            browser-extension/bridge-authenticated-client.ts \
+            browser-extension/bridge-endpoint-policy.ts \
+            browser-extension/bridge-forwarding-security.test.ts \
+            browser-extension/bridge-identity-verifier.ts \
+            browser-extension/bridge-server.ts \
+            browser-extension/package.json \
+            package.json \
+            src/server/bridge-identity.ts \
+            src/server/bridge-identity.test.ts \
+            src/server/index.ts \
+            .github/workflows/agent-security-rebase.yml
+          git commit -m "fix: authenticate companion bridge forwarding"
+          git push origin HEAD:agent/rebase2-tb-deep-106-bridge-forwarding
