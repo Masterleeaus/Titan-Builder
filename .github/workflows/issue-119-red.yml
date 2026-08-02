@@ -1,10 +1,11 @@
-name: Issue 119 repository identity red phase
+name: Issue 119 repository identity contract
 
 on:
   pull_request:
     branches:
       - main
     paths:
+      - src/security/repository-identity.ts
       - src/security/repository-identity.test.ts
       - .github/workflows/issue-119-red.yml
 
@@ -12,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  repository-identity-red:
+  repository-identity-contract:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
