@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -148,42 +147,24 @@ describe('workspace server', () => {
   });
 });
 
-
 describe('authenticated bridge forwarding', () => {
-  it('proves bridge identity before attaching the control token', async () => {
+  it('routes privileged calls through the authenticated request boundary', async () => {
     const databaseDirectory = await temporaryDirectory('workspace-auth-db-');
     const bridgeToken = 'bridge-test-token-12345678901234567890';
-    const instanceId = '12345678-1234-4234-8234-123456789abc';
-    const bridgeFetch = vi.fn<typeof fetch>(async (input, init) => {
-      const url = new URL(String(input));
-      if (url.pathname === '/bridge/identity') {
-        expect(init?.headers).toBeUndefined();
-        expect(init?.redirect).toBe('manual');
-        const nonce = url.searchParams.get('nonce') ?? '';
-        const unsigned = {
-          protocol: 'openbrowser-bridge',
-          version: '1',
-          instanceId,
-          nonce,
-          address: '127.0.0.1',
-          port: 51234,
-        };
-        return new Response(JSON.stringify({
-          ...unsigned,
-          mac: crypto.createHmac('sha256', bridgeToken).update(JSON.stringify([
-            unsigned.protocol,
-            unsigned.version,
-            unsigned.instanceId,
-            unsigned.nonce,
-            unsigned.address,
-            unsigned.port,
-          ])).digest('hex'),
-        }), { status: 200 });
-      }
-
-      expect(url.pathname).toBe('/session/prompt');
-      expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${bridgeToken}`);
-      expect(init?.redirect).toBe('manual');
+    const bridgeRequest = vi.fn(async (input) => {
+      expect(input.endpoint).toMatchObject({
+        origin: 'http://127.0.0.1:51234',
+        hostname: '127.0.0.1',
+        port: 51234,
+      });
+      expect(input.controlToken).toBe(bridgeToken);
+      expect(input.method).toBe('POST');
+      expect(input.route).toBe('/session/prompt');
+      expect(input.body).toMatchObject({
+        mode: 'ask',
+        prompt: 'Inspect the project',
+        message: 'Inspect the project',
+      });
       return new Response(JSON.stringify({ sessionId: 'session-1', status: 'pending' }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -196,7 +177,7 @@ describe('authenticated bridge forwarding', () => {
       bridgeToken,
       bridgeUrl: 'http://127.0.0.1:51234',
       bridgeAllowedPorts: [51234],
-      bridgeFetch,
+      bridgeRequest,
     });
 
     try {
@@ -207,7 +188,7 @@ describe('authenticated bridge forwarding', () => {
         payload: { prompt: 'Inspect the project', mode: 'ask' },
       });
       expect(response.statusCode).toBe(200);
-      expect(bridgeFetch).toHaveBeenCalledTimes(2);
+      expect(bridgeRequest).toHaveBeenCalledTimes(1);
     } finally {
       await app.close();
     }
