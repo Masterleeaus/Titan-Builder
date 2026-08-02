@@ -3,6 +3,202 @@ export const GENERATED_SKILL_CATALOG = Object.freeze([
   {
     "manifest": {
       "schemaVersion": "1",
+      "id": "titan.guidance.architecture-review",
+      "name": "Architecture Review",
+      "version": "1.0.0",
+      "status": "stable",
+      "kind": "guidance",
+      "category": "architecture",
+      "description": "Preserve established boundaries and avoid duplicate runtimes or state owners.",
+      "owner": "Titan Builder",
+      "runtimeTargets": [
+        "cli",
+        "extension-sidepanel"
+      ],
+      "instructions": "instructions.md",
+      "inputs": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "outputs": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "dependencies": [],
+      "capabilities": [],
+      "risk": "READ",
+      "approval": "none",
+      "tags": [
+        "architecture",
+        "refactor"
+      ],
+      "aliases": [
+        "architecture"
+      ],
+      "compatibility": {
+        "minTitanVersion": "0.5.0",
+        "platforms": [
+          "linux",
+          "windows",
+          "macos",
+          "browser"
+        ]
+      }
+    },
+    "instructions": "Trace existing registrations, lifecycle, state ownership, runtime adapters, persistence, and tests before proposing structural changes. Extend the authoritative path, avoid parallel systems, and keep each responsibility behind one clear interface."
+  },
+  {
+    "manifest": {
+      "schemaVersion": "1",
+      "id": "titan.guidance.browser-performance",
+      "name": "Browser Performance",
+      "version": "1.0.0",
+      "status": "stable",
+      "kind": "guidance",
+      "category": "performance",
+      "description": "Find and reduce expensive browser observers, timers, rendering, and service-worker churn.",
+      "owner": "Titan Builder",
+      "runtimeTargets": [
+        "cli",
+        "extension-sidepanel"
+      ],
+      "instructions": "instructions.md",
+      "inputs": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "outputs": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "dependencies": [],
+      "capabilities": [],
+      "risk": "READ",
+      "approval": "none",
+      "tags": [
+        "performance",
+        "browser"
+      ],
+      "aliases": [
+        "performance"
+      ],
+      "compatibility": {
+        "minTitanVersion": "0.5.0",
+        "platforms": [
+          "linux",
+          "windows",
+          "macos",
+          "browser"
+        ]
+      }
+    },
+    "instructions": "Prefer event-driven, bounded work over polling and repeated full scans. Dispose observers, timers, listeners, and stale state when their lifecycle ends, and require measurable profiling evidence before making or claiming performance improvements."
+  },
+  {
+    "manifest": {
+      "schemaVersion": "1",
+      "id": "titan.guidance.extension-security",
+      "name": "Extension Security",
+      "version": "1.0.0",
+      "status": "stable",
+      "kind": "guidance",
+      "category": "security",
+      "description": "Review extension, bridge, filesystem, and execution trust boundaries.",
+      "owner": "Titan Builder",
+      "runtimeTargets": [
+        "cli",
+        "extension-sidepanel"
+      ],
+      "instructions": "instructions.md",
+      "inputs": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "outputs": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "dependencies": [],
+      "capabilities": [],
+      "risk": "READ",
+      "approval": "none",
+      "tags": [
+        "security",
+        "manifest-v3"
+      ],
+      "aliases": [
+        "security"
+      ],
+      "compatibility": {
+        "minTitanVersion": "0.5.0",
+        "platforms": [
+          "linux",
+          "windows",
+          "macos",
+          "browser"
+        ]
+      }
+    },
+    "instructions": "Treat page content, model output, extension messages, and imported data as untrusted. Validate origins, message sources, paths, commands, secrets, permissions, approval boundaries, and browser-to-local trust transitions before allowing access or execution."
+  },
+  {
+    "manifest": {
+      "schemaVersion": "1",
+      "id": "titan.guidance.git-discipline",
+      "name": "Git Discipline",
+      "version": "1.0.0",
+      "status": "stable",
+      "kind": "guidance",
+      "category": "source-control",
+      "description": "Keep repository changes branch-safe, focused, reviewable, and evidence-backed.",
+      "owner": "Titan Builder",
+      "runtimeTargets": [
+        "cli",
+        "extension-sidepanel"
+      ],
+      "instructions": "instructions.md",
+      "inputs": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "outputs": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "dependencies": [],
+      "capabilities": [],
+      "risk": "READ",
+      "approval": "none",
+      "tags": [
+        "git",
+        "review"
+      ],
+      "aliases": [
+        "git"
+      ],
+      "compatibility": {
+        "minTitanVersion": "0.5.0",
+        "platforms": [
+          "linux",
+          "windows",
+          "macos",
+          "browser"
+        ]
+      }
+    },
+    "instructions": "Inspect repository, branch, and working-tree state before editing. Keep changes focused, avoid destructive Git operations, preserve unrelated work, and report the exact branch, commits, diff scope, and verification evidence."
+  },
+  {
+    "manifest": {
+      "schemaVersion": "1",
       "id": "titan.guidance.systematic-debugging",
       "name": "Systematic Debugging",
       "version": "1.0.0",
@@ -48,6 +244,55 @@ export const GENERATED_SKILL_CATALOG = Object.freeze([
       }
     },
     "instructions": "Reproduce or trace the defect, identify the root cause, then make the smallest coherent fix. Verify the original failure and the relevant broader checks before claiming completion."
+  },
+  {
+    "manifest": {
+      "schemaVersion": "1",
+      "id": "titan.guidance.test-driven-development",
+      "name": "Test-Driven Development",
+      "version": "1.0.0",
+      "status": "stable",
+      "kind": "guidance",
+      "category": "quality",
+      "description": "Define expected behaviour with a failing test before implementation.",
+      "owner": "Titan Builder",
+      "runtimeTargets": [
+        "cli",
+        "extension-sidepanel"
+      ],
+      "instructions": "instructions.md",
+      "inputs": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "outputs": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "dependencies": [],
+      "capabilities": [],
+      "risk": "READ",
+      "approval": "none",
+      "tags": [
+        "testing",
+        "tdd"
+      ],
+      "aliases": [
+        "testing"
+      ],
+      "compatibility": {
+        "minTitanVersion": "0.5.0",
+        "platforms": [
+          "linux",
+          "windows",
+          "macos",
+          "browser"
+        ]
+      }
+    },
+    "instructions": "Define the expected behaviour with one focused failing test, run it and confirm it fails for the intended missing behaviour, implement the smallest coherent change, then run the focused test and relevant broader verification before claiming completion."
   },
   {
     "manifest": {
