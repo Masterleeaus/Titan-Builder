@@ -51,6 +51,19 @@ function executeInvocation(
   });
 }
 
+function assertHardenedCommand(
+  invocation: ReturnType<typeof buildHardenedGitInvocation>,
+  command: string[],
+): void {
+  assert.deepEqual(invocation.args.slice(-command.length), command);
+  assert.ok(invocation.args.includes('--no-pager'));
+  assert.ok(invocation.args.includes('--no-optional-locks'));
+  assert.ok(invocation.args.includes('core.fsmonitor=false'));
+  assert.ok(invocation.args.some((argument) => argument.startsWith('core.hooksPath=')));
+  assert.ok(invocation.args.includes('diff.external='));
+  assert.ok(invocation.args.includes('credential.helper='));
+}
+
 test('sanitizes inherited Git configuration and replaces it with trusted command-scope overrides', () => {
   const helper = 'malicious-helper';
   const environment = createHardenedGitEnvironment({
@@ -116,7 +129,7 @@ test('hardened status disables repository fsmonitor and ignores malicious aliase
   executeInvocation(invocation, root);
 
   assert.equal(existsSync(sentinel), false);
-  assert.deepEqual(invocation.args, ['status', '--short', '--branch']);
+  assertHardenedCommand(invocation, ['status', '--short', '--branch']);
   assert.equal(invocation.env.GIT_CONFIG_KEY_0, 'core.fsmonitor');
   assert.equal(invocation.env.GIT_CONFIG_VALUE_0, 'false');
   assert.equal(invocation.env.GIT_CONFIG_KEY_1, 'core.hooksPath');
@@ -141,7 +154,7 @@ test('hardened diff disables external diff and textconv drivers', () => {
   executeInvocation(invocation, root);
 
   assert.equal(existsSync(sentinel), false);
-  assert.deepEqual(invocation.args, ['diff', '--no-ext-diff', '--no-textconv']);
+  assertHardenedCommand(invocation, ['diff', '--no-ext-diff', '--no-textconv']);
   assert.equal(invocation.env.GIT_EXTERNAL_DIFF, undefined);
   assert.equal(invocation.env.GIT_CONFIG_KEY_2, 'diff.external');
   assert.equal(invocation.env.GIT_CONFIG_VALUE_2, '');
