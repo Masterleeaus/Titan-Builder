@@ -154,10 +154,11 @@ export function validateSkillActivation(
   }
 
   const requiresApproval = manifest.approval !== 'none';
+  const finalStatus: ActivationStatus = (status === 'available' && issues.some((i) => i.severity === 'error') ? 'unavailable' : status) as ActivationStatus;
 
   const result: ActivationResult = {
-    status: status === 'available' && issues.some((i) => i.severity === 'error') ? 'unavailable' : status,
-    available: !issues.some((i) => i.severity === 'error') && status !== 'incompatible' && status !== 'missing_dependency',
+    status: finalStatus,
+    available: !issues.some((i) => i.severity === 'error') && (finalStatus !== 'incompatible' && finalStatus !== 'missing_dependency'),
     manifest,
     issues,
     requiresApproval,
