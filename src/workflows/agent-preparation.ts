@@ -383,10 +383,18 @@ async function buildAgentContext(
       })
     : null;
   const budgetedBlock = budgeted ? formatBudgetedContextMarkdown(budgeted) : '';
+  const agentFiles = budgeted
+    ? budgeted.included.map((item) => ({
+        path: item.path,
+        language: detectLanguageForPath(item.path),
+        content: item.content,
+        truncated: item.truncated,
+      }))
+    : [];
   return {
     block: [
       memoryBlock,
-      formatAgentContextJson([], projectSummary, []),
+      formatAgentContextJson(agentFiles, projectSummary, []),
       budgetedBlock,
     ]
       .filter(Boolean)
@@ -501,6 +509,25 @@ function deepFreeze<T>(value: T): T {
     deepFreeze(child);
   }
   return value;
+}
+
+function detectLanguageForPath(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
+  const map: Record<string, string> = {
+    ts: 'typescript',
+    tsx: 'tsx',
+    js: 'javascript',
+    jsx: 'jsx',
+    json: 'json',
+    md: 'markdown',
+    css: 'css',
+    html: 'html',
+    yaml: 'yaml',
+    yml: 'yaml',
+    sh: 'bash',
+    py: 'python',
+  };
+  return map[ext] ?? 'text';
 }
 
 function formatUnknownError(error: unknown): string {
