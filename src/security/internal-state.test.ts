@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  link,
   lstat,
   mkdir,
   mkdtemp,
@@ -23,6 +24,14 @@ import {
 
 async function createDirectoryLink(target: string, linkPath: string): Promise<void> {
   await symlink(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+}
+
+async function createFileRedirect(target: string, linkPath: string): Promise<void> {
+  if (process.platform === 'win32') {
+    await link(target, linkPath);
+    return;
+  }
+  await symlink(target, linkPath, 'file');
 }
 
 async function createFixture(prefix: string): Promise<{
@@ -91,7 +100,7 @@ test('trusted state rejects a redirected memory file and preserves the outside t
   const outsideMemory = path.join(fixture.outside, 'memory.json');
   await mkdir(stateRoot, { recursive: true });
   await writeFile(outsideMemory, '[]\n', 'utf8');
-  await symlink(outsideMemory, path.join(stateRoot, 'memory.json'), 'file');
+  await createFileRedirect(outsideMemory, path.join(stateRoot, 'memory.json'));
 
   try {
     await assert.rejects(
