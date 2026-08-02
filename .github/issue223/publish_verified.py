@@ -1,15 +1,19 @@
 from pathlib import Path
 
 
-def replace_once(path: str, old: str, new: str) -> None:
+def apply_or_confirm(path: str, old: str, new: str) -> None:
     file = Path(path)
     text = file.read_text()
-    if text.count(old) != 1:
-        raise SystemExit(f"Expected exactly one verified publication anchor in {path}: {old[:120]!r}")
-    file.write_text(text.replace(old, new, 1))
+    if old in text:
+        if text.count(old) != 1:
+            raise SystemExit(f"Ambiguous verified publication anchor in {path}: {old[:120]!r}")
+        file.write_text(text.replace(old, new, 1))
+        return
+    if new not in text:
+        raise SystemExit(f"Neither vulnerable nor corrected form exists in {path}: {old[:120]!r}")
 
 
-replace_once(
+apply_or_confirm(
     "browser-extension/bridge-server.ts",
     """import {
   BridgeConnectionError,
@@ -17,7 +21,7 @@ replace_once(
 } from './bridge-connection-transport.js';""",
     """import { requestAuthenticatedBridge } from './bridge-connection-transport.js';""",
 )
-replace_once(
+apply_or_confirm(
     "browser-extension/bridge-server.ts",
     """    let response: Response;
     try {
@@ -46,7 +50,7 @@ replace_once(
 
     const text = await response.text();""",
 )
-replace_once(
+apply_or_confirm(
     "browser-extension/bridge-connection-transport.ts",
     """    if (identityResponse.socket.destroyed || !identityResponse.socket.writable) {
       throw new BridgeConnectionError(
