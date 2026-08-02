@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - feature/openbrowser-workspace-tools
-    paths:
-      - '.github/workflows/relocate-workspace-tools.yml'
 
 permissions:
   contents: write
@@ -88,6 +86,7 @@ jobs:
               Path('.github/workflows/workspace-tools.yml'),
               Path('docs/superpowers/plans/2026-08-02-openbrowser-workspace-tools.md'),
               Path('docs/superpowers/specs/2026-08-02-openbrowser-workspace-tools-design.md'),
+              Path('.titan/todo/issues/workspace-relocation-correction.md'),
               Path('browser-extension/README.md'),
               Path('browser-extension/openbrowser.ps1'),
               Path('browser-extension/dashboard.ps1'),
@@ -99,7 +98,10 @@ jobs:
           for file_path in paths:
               source = file_path.read_text(encoding='utf-8')
               source = source.replace('tools/openbrowser-workspace', 'browser-extension')
-              source = source.replace('under `browser-extension/` as an independent pnpm workspace package', 'directly inside `browser-extension/` as the extension\'s local tooling package')
+              source = source.replace(
+                  'under `browser-extension/` as an independent pnpm workspace package',
+                  "directly inside `browser-extension/` as the extension's local tooling package",
+              )
               file_path.write_text(source, encoding='utf-8')
           PY
 
