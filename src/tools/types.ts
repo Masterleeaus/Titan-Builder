@@ -9,6 +9,7 @@ export interface ToolInvocation {
   toolId: string;
   executable: string;
   args: string[];
+  env: NodeJS.ProcessEnv;
   cwd: string;
   risk: ToolRisk;
   displayCommand: string;
