@@ -23,6 +23,9 @@ import {
 
 const execAsync = promisify(exec);
 
+const MAX_FILE_READ_BYTES = 10 * 1024 * 1024;
+const MAX_DIFF_BYTES = 5 * 1024 * 1024;
+
 export type PathStateKind = 'missing' | 'file' | 'directory';
 
 export interface PathPrecondition {
@@ -371,8 +374,10 @@ async function planFileOperation(
       }
       const after = normalizeMultilineText(operation.content ?? '');
       virtualState.set(absolutePath, createSnapshot('file', after));
+      const diff = createPatch(relativePath, before.content ?? '', after, 'before', 'after');
+      validateDiffSize(diff, relativePath);
       return {
-        diff: createPatch(relativePath, before.content ?? '', after, 'before', 'after'),
+        diff,
         preconditions,
         affectedPaths,
       };
@@ -388,8 +393,10 @@ async function planFileOperation(
       }
       const after = nextContent(operation, before.content ?? '');
       virtualState.set(absolutePath, createSnapshot('file', after));
+      const diff = createPatch(relativePath, before.content ?? '', after, 'before', 'after');
+      validateDiffSize(diff, relativePath);
       return {
-        diff: createPatch(relativePath, before.content ?? '', after, 'before', 'after'),
+        diff,
         preconditions,
         affectedPaths,
       };
@@ -399,8 +406,10 @@ async function planFileOperation(
         throw new Error(`DELETE_FILE requires existing file ${relativePath}`);
       }
       virtualState.set(absolutePath, createSnapshot('missing'));
+      const diff = createPatch(relativePath, before.content ?? '', '', 'before', 'after');
+      validateDiffSize(diff, relativePath);
       return {
-        diff: createPatch(relativePath, before.content ?? '', '', 'before', 'after'),
+        diff,
         preconditions,
         affectedPaths,
       };
@@ -476,6 +485,10 @@ async function readPathSnapshot(absolutePath: string): Promise<PathSnapshot> {
   }
   if (!stats.isFile()) {
     throw new Error(`Unsupported filesystem target: ${absolutePath}`);
+  }
+
+  if (stats.size > MAX_FILE_READ_BYTES) {
+    throw new Error(`File ${absolutePath} is too large (${stats.size} bytes, limit ${MAX_FILE_READ_BYTES} bytes)`);
   }
 
   const content = await fs.readFile(absolutePath, 'utf8');
@@ -1191,6 +1204,12 @@ function countOccurrences(text: string, search: string): number {
     index += search.length;
   }
   return count;
+}
+
+function validateDiffSize(diff: string, filePath: string): void {
+  if (diff.length > MAX_DIFF_BYTES) {
+    throw new Error(`Diff for ${filePath} is too large (${diff.length} bytes, limit ${MAX_DIFF_BYTES} bytes); cannot generate complete preview`);
+  }
 }
 
 function assertNever(value: never): never {
