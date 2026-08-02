@@ -1,9 +1,6 @@
 import crypto from 'node:crypto';
 import type { PlannedOperation } from '../operations/index.js';
-import {
-  sameRepositoryIdentity,
-  type RepositoryIdentity,
-} from '../security/repository-identity.js';
+import type { RepositoryIdentity } from '../security/repository-identity.js';
 
 export interface OperationApprovalStoreOptions {
   ttlMs?: number;
@@ -288,7 +285,10 @@ function assertBinding(
   if (record.projectRoot !== expectation.projectRoot) {
     throw new Error('Operation approval token is bound to a different project root');
   }
-  if (!sameRepositoryIdentity(record.repositoryIdentity, expectation.repositoryIdentity)) {
+  if (
+    stableSerialize(record.repositoryIdentity) !==
+    stableSerialize(expectation.repositoryIdentity)
+  ) {
     throw new Error('Operation approval token is bound to a different repository identity');
   }
   if (expectation.runId !== undefined && record.runId !== expectation.runId) {

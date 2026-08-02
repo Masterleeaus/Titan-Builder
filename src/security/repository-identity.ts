@@ -1,11 +1,10 @@
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
-import { constants as fsConstants } from 'node:fs';
+import { constants as fsConstants, type BigIntStats } from 'node:fs';
 import {
   lstat,
   open,
   realpath,
-  type BigIntStats,
 } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
