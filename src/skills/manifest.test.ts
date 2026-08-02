@@ -53,5 +53,8 @@ test('requires approval for high-side-effect risk', () => {
 test('rejects undeclared manifest fields', () => {
   const result = validateSkillManifest({ ...guidanceManifest, surprise: true });
   assert.equal(result.success, false);
-  assert.match(result.issues.map((issue) => issue.path).join('\n'), /surprise/);
+  assert.match(
+    result.issues.map((issue) => `${issue.path}: ${issue.message}`).join('\n'),
+    /surprise/i,
+  );
 });
