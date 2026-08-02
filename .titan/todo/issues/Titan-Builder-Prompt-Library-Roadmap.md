@@ -4,6 +4,7 @@
 
 - Repository: `Masterleeaus/Titan-Builder`
 - Base branch: `main`
+- Current pass branch: `feature/prompt-library-pass-03`
 - Last completed pass branch: `feature/prompt-library-pass-02`
 - Pass 01 pull request: `#6`
 - Pass 01 merge commit: `cfa0862bc9a9ccf045d360e4fbdbdf3982c0f8c8`
@@ -61,7 +62,7 @@ No existing built-in card is deleted during Markdown authoring. Runtime replacem
 |---|---|---:|---|---|
 | `TB-PROMPT-FOUND-001` | Repository Architecture Discovery | P0 | None | COMPLETE — merged in PR `#6` |
 | `TB-PROMPT-FOUND-002` | Prompt Duplicate and Overlap Detection | P0 | FOUND-001 | COMPLETE — merged in PR `#9` |
-| `TB-PROMPT-FOUND-003` | Prompt Specification Validation | P0 | FOUND-001 | PLANNED — next prompt |
+| `TB-PROMPT-FOUND-003` | Prompt Specification Validation | P0 | FOUND-001 | IN PROGRESS — pass 03 |
 | `TB-PROMPT-FOUND-004` | Multi-Provider Prompt Compatibility Audit | P1 | FOUND-003 | PLANNED |
 | `TB-PROMPT-FOUND-005` | Prompt Semantic Version Upgrade | P1 | FOUND-002, FOUND-003 | PLANNED |
 | `TB-PROMPT-FOUND-006` | Prompt Library Metadata Index Generation | P1 | FOUND-003 | PLANNED |
@@ -231,3 +232,18 @@ A future migration pass must create a deterministic loader before the Markdown l
 - [x] Open pull request `#9`.
 - [x] Verify the branch through the repair gate, full OpenBrowser verification, existing-application verification, Linux workspace verification, and Windows workspace verification.
 - [x] Merge pull request `#9` into `main` at `0eb8520df0bb1a0b9326f987b54e5ca505b22d92`.
+
+## Pass 03 progress
+
+- [x] Resolve current `main` and create `feature/prompt-library-pass-03`.
+- [x] Search repository prompt locations for an existing specification-validation prompt.
+- [x] Confirm no standalone prompt validates one candidate against the complete Titan Builder prompt-document contract.
+- [x] Create the Pass 03 implementation plan.
+- [x] Create `TB-PROMPT-FOUND-003` version `1.0.0`.
+- [x] Update this cumulative roadmap.
+- [ ] Perform parser-aware variable and required-section validation.
+- [ ] Perform final Superpowers consistency review.
+- [ ] Review the exact branch diff.
+- [ ] Open the Pass 03 pull request.
+- [ ] Verify all triggered repository checks.
+- [ ] Merge Pass 03 into `main`.
