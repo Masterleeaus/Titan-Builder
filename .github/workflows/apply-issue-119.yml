@@ -32,6 +32,19 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
+          identity_path = Path('src/security/repository-identity.ts')
+          identity = identity_path.read_text()
+          before_fs_import = "import { constants as fsConstants } from 'node:fs';"
+          after_fs_import = "import { constants as fsConstants, type BigIntStats } from 'node:fs';"
+          if identity.count(before_fs_import) != 1:
+              raise SystemExit('BigIntStats node:fs import anchor was not found exactly once')
+          identity = identity.replace(before_fs_import, after_fs_import, 1)
+          before_promises_import = "  realpath,\n  type BigIntStats,\n} from 'node:fs/promises';"
+          after_promises_import = "  realpath,\n} from 'node:fs/promises';"
+          if identity.count(before_promises_import) != 1:
+              raise SystemExit('BigIntStats node:fs/promises import anchor was not found exactly once')
+          identity_path.write_text(identity.replace(before_promises_import, after_promises_import, 1))
+
           source_path = Path('src/server/index.ts')
           source = source_path.read_text()
           import_anchor = "import { canonicalizeProjectRoot } from '../security/project-path.js';\n"
@@ -173,7 +186,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/server/index.ts package.json .github/workflows/issue-119-red.yml
+          git add src/security/repository-identity.ts src/server/index.ts package.json .github/workflows/issue-119-red.yml
           git commit -m "fix(security): bind approvals to repository identity (#119)"
           auth_header=$(printf 'x-access-token:%s' "$GH_PUSH_TOKEN" | base64 -w0)
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth_header" push \
