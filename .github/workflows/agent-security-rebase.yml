@@ -22,7 +22,8 @@ jobs:
 
       - name: Import isolated bridge-security files
         run: |
-          git fetch origin agent/fix-tb-deep-106-bridge-forwarding
+          git fetch origin \
+            agent/fix-tb-deep-106-bridge-forwarding:refs/remotes/origin/agent/fix-tb-deep-106-bridge-forwarding
           git checkout origin/agent/fix-tb-deep-106-bridge-forwarding -- \
             browser-extension/bridge-authenticated-client.ts \
             browser-extension/bridge-endpoint-policy.ts \
