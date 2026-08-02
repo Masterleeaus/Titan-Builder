@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import {
   mkdir,
   mkdtemp,
+  realpath,
   rename,
   rm,
   writeFile,
@@ -47,14 +48,15 @@ async function createGitProject(): Promise<string> {
 test('captures canonical Git repository, common-dir, worktree, branch, HEAD, and index identity', async () => {
   const projectRoot = await createGitProject();
   try {
+    const canonicalProjectRoot = await realpath(projectRoot);
     const identity = await captureRepositoryIdentity(projectRoot);
     assert.equal(identity.kind, 'git');
     if (identity.kind !== 'git') return;
 
     assert.equal(identity.branch, 'feature/review');
     assert.match(identity.head, /^[a-f0-9]{40,64}$/u);
-    assert.equal(path.resolve(identity.projectRoot), path.resolve(projectRoot));
-    assert.equal(path.resolve(identity.repositoryRoot), path.resolve(projectRoot));
+    assert.equal(identity.projectRoot, canonicalProjectRoot);
+    assert.equal(identity.repositoryRoot, canonicalProjectRoot);
     assert.ok(path.isAbsolute(identity.commonDir));
     assert.ok(path.isAbsolute(identity.gitDir));
     assert.match(identity.indexDigest, /^(missing|[a-f0-9]{64})$/u);
