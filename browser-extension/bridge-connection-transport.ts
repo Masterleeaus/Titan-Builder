@@ -11,6 +11,7 @@ const MAX_PRIVILEGED_RESPONSE_BYTES = 50 * 1024 * 1024;
 const MAX_REQUEST_BODY_BYTES = 50 * 1024 * 1024;
 const IDENTITY_TIMEOUT_MS = 10_000;
 const PRIVILEGED_TIMEOUT_MS = 60_000;
+const NULL_BODY_STATUS_CODES = new Set([204, 205, 304]);
 
 interface BufferedHttpResponse {
   statusCode: number;
@@ -103,7 +104,14 @@ export async function requestAuthenticatedBridge(
       throw normalizeConnectionError(error, 'Bridge identity verification');
     }
 
-    if (identityResponse.socket.destroyed || !identityResponse.socket.writable) {
+    const identityConnection = identityResponse.headers.get('connection')
+      ?.split(',')
+      .map((value) => value.trim().toLowerCase());
+    if (
+      identityConnection?.includes('close')
+      || identityResponse.socket.destroyed
+      || !identityResponse.socket.writable
+    ) {
       throw new BridgeConnectionError(
         'Authenticated bridge connection closed before bearer delivery.',
       );
@@ -126,11 +134,16 @@ export async function requestAuthenticatedBridge(
     });
     rejectRedirect(privilegedResponse.statusCode, 'Privileged bridge request');
 
-    return new Response(privilegedResponse.body, {
-      status: privilegedResponse.statusCode,
-      statusText: privilegedResponse.statusMessage,
-      headers: privilegedResponse.headers,
-    });
+    return new Response(
+      NULL_BODY_STATUS_CODES.has(privilegedResponse.statusCode)
+        ? null
+        : privilegedResponse.body,
+      {
+        status: privilegedResponse.statusCode,
+        statusText: privilegedResponse.statusMessage,
+        headers: privilegedResponse.headers,
+      },
+    );
   } finally {
     agent.destroy();
   }
