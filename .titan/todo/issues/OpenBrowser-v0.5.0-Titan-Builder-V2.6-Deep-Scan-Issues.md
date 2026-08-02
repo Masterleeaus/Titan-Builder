@@ -16,14 +16,14 @@
 
 The original archive passed 83 dependency-free tests. The current repair branch passes:
 
-- 116/116 Node tests.
-- 4/4 dependency-backed integration tests.
+- 127/127 Node tests.
+- 6/6 dependency-backed integration tests.
 - TypeScript typecheck.
 - Production build.
 - CLI smoke test.
 - Manifest V3 extension integrity.
 
-Latest full verification: run `30724273543`, job `91432999078`.
+Latest full verification: run `30724796467`, job `91434359979`.
 
 Windows-native junction/reparse-point verification remains required before OB-002 can be promoted from FIXED to VERIFIED.
 
@@ -46,8 +46,8 @@ Windows-native junction/reparse-point verification remains required before OB-00
 | OB-005 | High | ZIP export crashes far below its advertised 15 MB entry limit | VERIFIED |
 | OB-006 | High | Active workspace skills and profiles can be omitted from CLI-created jobs | VERIFIED |
 | OB-007 | High | Attachment detection can accept an unrelated pre-existing file | VERIFIED |
-| OB-008 | High | Bridge authentication, origin checks, and approval boundaries are weaker than documented | IN PROGRESS |
-| OB-009 | High | npm/pnpm scripts and lifecycle execution are labelled safer than their arbitrary-code capability | TODO |
+| OB-008 | High | Bridge authentication, origin checks, and approval boundaries are weaker than documented | VERIFIED |
+| OB-009 | High | npm/pnpm scripts and lifecycle execution are labelled safer than their arbitrary-code capability | IN PROGRESS |
 | OB-010 | High | Session, prompt, chunk, and response retention is unbounded | TODO |
 | OB-011 | High | Unlabelled Markdown/YAML fences can be attached to the wrong target file | TODO |
 | OB-012 | Medium | Secondary JSON balancing does not correctly account for strings and escapes | TODO |
@@ -64,7 +64,7 @@ Windows-native junction/reparse-point verification remains required before OB-00
 | OB-023 | Low/Medium | Documented branch operations are implemented as read-only inspection | TODO |
 | OB-024 | Low | `SECURITY.md` support table and version wording are stale | TODO |
 | OB-025 | Low/Medium | Titan Builder product/version identity and upstream attribution are absent | TODO |
-| OB-026 | Medium | Release tests omit the most safety-critical edge cases | IN PROGRESS — coverage expanded from 83 to 116 Node tests plus 4 integrations |
+| OB-026 | Medium | Release tests omit the most safety-critical edge cases | IN PROGRESS — coverage expanded from 83 to 127 Node tests plus 6 integrations |
 
 ## Verified repairs
 
@@ -134,6 +134,18 @@ Windows-native junction/reparse-point verification remains required before OB-00
 - Verified by run `30724273543`, job `91432999078`.
 - Detailed evidence: `OB-007-Attachment-Correlation.md`.
 
+### OB-008 — hardened bridge security boundary
+
+- Generates distinct strong control and browser credentials and fails closed by default.
+- Separates browser lifecycle, shared project, and privileged control route authority.
+- Restricts extension origins through exact allowlists or authenticated first-use pinning.
+- Rejects normal website origins and secondary extension origins.
+- Replaces raw-operation apply with one-time, short-lived capabilities bound to the exact canonical project and approved preview.
+- Stores approval capabilities only as hashes and rejects replay, expiry, or mismatch.
+- Source commit: `bb896fe49928ac05b01aaff24c853104fa1f3ca7`.
+- Verified by run `30724796467`, job `91434359979`.
+- Detailed evidence: `OB-008-Bridge-Security.md`.
+
 ## Additional CI defects repaired
 
 1. NodeNext integration imports now use emitted `.js` specifiers. Commit: `75e817f3c7b57c6b09b369496aa69f64feb1c42e`.
@@ -143,8 +155,8 @@ Windows-native junction/reparse-point verification remains required before OB-00
 
 ## Next sequence
 
-1. Repair OB-008 with failure-first tests for mandatory authentication, scoped browser origins, and one-time operation-approval capabilities.
-2. Continue with OB-009 package-script and install risk classification.
+1. Repair OB-009 with failure-first tests proving package scripts and install lifecycle commands are never classified as safe execution.
+2. Continue with OB-010 bounded session and response retention.
 3. Add Windows CI for OB-002 junction behavior.
 4. Keep this ledger and draft PR synchronized with every verified increment.
 5. Keep PR #1 in draft until all release blockers and required security gates are resolved.
