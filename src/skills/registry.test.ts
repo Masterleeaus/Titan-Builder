@@ -69,7 +69,10 @@ test('rejects instruction paths that escape the package', async () => {
   try {
     await writePackage(root, 'escaped', manifest('titan.guidance.escaped', [], '../outside.md'));
     await writeFile(path.join(root, 'outside.md'), 'Do not load me.');
-    await assert.rejects(() => loadSkillRegistry(root), /outside.*package|escape/i);
+    await assert.rejects(
+      () => loadSkillRegistry(root),
+      /contained relative asset path|outside.*package|escape/i,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
