@@ -4,7 +4,9 @@
 
 - Repository: `Masterleeaus/Titan-Builder`
 - Base branch: `main`
-- Current pass branch: `feature/prompt-library-pass-01`
+- Last completed pass branch: `feature/prompt-library-pass-01`
+- Pass 01 pull request: `#6`
+- Pass 01 merge commit: `cfa0862bc9a9ccf045d360e4fbdbdf3982c0f8c8`
 - Canonical prompt authoring location: `browser-extension/prompt-library/`
 - Existing extension runtime prompt source: `browser-extension/src/coding-prompts.js`
 - Existing prompt utilities: `browser-extension/src/prompt-library.js`
@@ -55,7 +57,7 @@ No existing built-in card is deleted during Markdown authoring. Runtime replacem
 
 | ID | Name | Priority | Dependencies | Status |
 |---|---|---:|---|---|
-| `TB-PROMPT-FOUND-001` | Repository Architecture Discovery | P0 | None | IN PROGRESS — pass 01 |
+| `TB-PROMPT-FOUND-001` | Repository Architecture Discovery | P0 | None | COMPLETE — merged in PR `#6` |
 | `TB-PROMPT-FOUND-002` | Prompt Duplicate and Overlap Detection | P0 | FOUND-001 | PLANNED |
 | `TB-PROMPT-FOUND-003` | Prompt Specification Validation | P0 | FOUND-001 | PLANNED |
 | `TB-PROMPT-FOUND-004` | Multi-Provider Prompt Compatibility Audit | P1 | FOUND-003 | PLANNED |
@@ -199,15 +201,16 @@ A future migration pass must create a deterministic loader before the Markdown l
 - Existing JavaScript prompt cards remain the runtime source.
 - New Markdown prompts are not claimed to be visible in the side panel.
 
-## Pass 01 checklist
+## Pass 01 completion
 
-- [x] Resolve repository and create `feature/prompt-library-pass-01` from latest `main`.
+- [x] Resolve repository and create `feature/prompt-library-pass-01` from the then-current `main`.
 - [x] Inspect root `src/`, extension runtime, prompt utilities, skills, agents, manifest, tests, and prior plans.
 - [x] Determine canonical prompt placement.
 - [x] Create architecture design.
 - [x] Create implementation plan.
 - [x] Create this cumulative roadmap.
-- [ ] Create `TB-PROMPT-FOUND-001`.
-- [ ] Review branch diff.
-- [ ] Open pull request.
-- [ ] Merge into `main`.
+- [x] Create `TB-PROMPT-FOUND-001`.
+- [x] Review the branch diff: four added Markdown files and no runtime changes.
+- [x] Verify the branch through OpenBrowser, Linux workspace, and Windows workspace CI.
+- [x] Open pull request `#6`.
+- [x] Merge pull request `#6` into `main`.
