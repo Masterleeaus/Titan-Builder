@@ -171,7 +171,10 @@ test('routePromptRequest distinguishes selected, ambiguous, none, manual, and of
     { ...routingPrompts[0], id: 'one', title: 'Runtime Architecture Audit', routingIntents: ['audit runtime architecture'] },
     { ...routingPrompts[1], id: 'two', title: 'Platform Architecture Audit', routingIntents: ['audit platform architecture'], workModes: ['ask', 'agent'] },
   ];
-  const ambiguous = routePromptRequest('Audit runtime platform architecture', closePrompts, { mode: 'agent' });
+  const ambiguous = routePromptRequest('Audit runtime platform architecture', closePrompts, {
+    mode: 'agent',
+    minMargin: 100,
+  });
   assert.equal(ambiguous.status, 'ambiguous');
   assert.equal(ambiguous.candidates.length, 2);
 
