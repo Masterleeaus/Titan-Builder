@@ -434,8 +434,21 @@ const BUILTIN_TOOL_DEFINITION_MAP = {
 export type ToolId = keyof typeof BUILTIN_TOOL_DEFINITION_MAP;
 
 export function createToolRegistry(input: readonly BuiltinToolDefinition[]): ToolRegistry {
-  const definitions = [...input].sort((left, right) =>
-    left.manifest.runtimeId.localeCompare(right.manifest.runtimeId));
+  const definitions = input
+    .map((definition): BuiltinToolDefinition => Object.freeze({
+      manifest: parseToolManifest(definition.manifest),
+      resolve(args: string[], projectRoot: string): ToolInvocation {
+        return definition.resolve(args, projectRoot);
+      },
+      ...(definition.inputFiles
+        ? {
+          inputFiles(invocation: ToolInvocation): ToolInputFile[] {
+            return definition.inputFiles!(invocation);
+          },
+        }
+        : {}),
+    }))
+    .sort((left, right) => left.manifest.runtimeId.localeCompare(right.manifest.runtimeId));
   const byId = new Map<string, BuiltinToolDefinition>();
   const aliases = new Map<string, string>();
 
