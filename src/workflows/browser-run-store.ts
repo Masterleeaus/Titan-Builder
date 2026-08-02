@@ -14,6 +14,7 @@ import {
   createIntegrityBoundPreparedArtifact,
   verifyIntegrityBoundPreparedArtifact,
 } from './browser-run-integrity.ts';
+import type { BrowserRunRecord } from './browser-run-types.js';
 
 export type {
   BrowserPreparedArtifact,
@@ -56,7 +57,19 @@ export function createBrowserRunStore(
         await quarantinePreparedArtifact(inner, runsDir, runId, persistence, quarantined, error);
         return null;
       }
-      if (candidate === null) return null;
+      if (candidate === null) {
+        if (requiresPreparedArtifact(record)) {
+          await quarantinePreparedArtifact(
+            inner,
+            runsDir,
+            runId,
+            persistence,
+            quarantined,
+            new BrowserRunIntegrityError('Prepared artifact is missing for a recoverable approval run'),
+          );
+        }
+        return null;
+      }
 
       try {
         const events = await readAuditEvents(inner, runId, persistence, runsDir);
@@ -72,10 +85,19 @@ export function createBrowserRunStore(
 async function requireRecord(
   store: BrowserRunStore,
   runId: string,
-) {
+): Promise<BrowserRunRecord> {
   const record = await store.get(runId);
   if (!record) throw new BrowserRunIntegrityError(`Browser run not found: ${runId}`);
   return record;
+}
+
+function requiresPreparedArtifact(record: BrowserRunRecord): boolean {
+  return [
+    'awaiting_approval',
+    'ready_to_apply',
+    'applying',
+    'verifying',
+  ].includes(record.status);
 }
 
 async function readPreparedArtifactFile(
