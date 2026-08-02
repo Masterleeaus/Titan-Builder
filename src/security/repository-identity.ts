@@ -111,6 +111,34 @@ export function sameRepositoryIdentity(
   return stableSerialize(left) === stableSerialize(right);
 }
 
+
+export function normalizeProtectedBranches(
+  value: readonly string[] | string | undefined,
+): string[] {
+  const values = typeof value === 'string' ? value.split(',') : value ?? [];
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of values) {
+    const branch = String(entry ?? '').trim();
+    if (!branch || seen.has(branch)) continue;
+    seen.add(branch);
+    normalized.push(branch);
+  }
+  return normalized;
+}
+
+export function assertRepositoryApprovalPolicy(
+  identity: RepositoryIdentity,
+  protectedBranches: readonly string[] | string | undefined,
+): void {
+  if (identity.kind !== 'git' || identity.branch === null) return;
+  if (normalizeProtectedBranches(protectedBranches).includes(identity.branch)) {
+    throw new Error(
+      `Operation approval is forbidden on protected branch ${identity.branch}`,
+    );
+  }
+}
+
 export function repositoryIdentityDigest(identity: RepositoryIdentity): string {
   return crypto
     .createHash('sha256')

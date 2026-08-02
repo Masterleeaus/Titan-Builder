@@ -7,6 +7,7 @@ import {
   type PlannedOperation,
 } from '../operations/index.js';
 import {
+  assertRepositoryApprovalPolicy,
   captureRepositoryIdentity,
   sameRepositoryIdentity,
   type RepositoryIdentity,
@@ -68,6 +69,7 @@ export interface AgentApplicationDependencies {
   execute?: typeof executePlannedOperations;
   verify?: typeof runProjectVerification;
   captureIdentity?: typeof captureRepositoryIdentity;
+  protectedBranches?: readonly string[];
   onStep?: ExecuteOptions['onStep'];
 }
 
@@ -174,6 +176,20 @@ export async function prepareSelectedApproval(
       { replacementPlans: currentPlans },
     );
   }
+
+
+try {
+  assertRepositoryApprovalPolicy(
+    identityAfterPlan,
+    dependencies.protectedBranches,
+  );
+} catch (error) {
+  throw new AgentApplicationError(
+    'APPROVAL_INVALID',
+    formatUnknownError(error),
+    { cause: error },
+  );
+}
 
   const reviewedSelectedRevision = createPlannedOperationRevision(
     root,
