@@ -24,6 +24,7 @@ export interface PreparedRunForApproval {
   operations: readonly FileOperation[];
   previews: readonly PlannedOperation[];
   previewRevision: string;
+  plannedPreviewRevision?: string;
 }
 
 export interface PreparedSelectedApproval {
@@ -128,7 +129,9 @@ export async function prepareSelectedApproval(
 
   const reviewedPlans = [...preparedRun.previews];
   const reviewedRevision = createPlannedOperationRevision(root, reviewedPlans);
-  if (reviewedRevision !== preparedRun.previewRevision) {
+  const expectedPlannedRevision =
+    preparedRun.plannedPreviewRevision ?? preparedRun.previewRevision;
+  if (reviewedRevision !== expectedPlannedRevision) {
     throw new AgentApplicationError(
       'STALE_PREVIEW',
       'Preview is stale or no longer matches the reviewed operations',
@@ -160,10 +163,7 @@ export async function prepareSelectedApproval(
       'Preview is stale because the project changed after review',
       {
         replacementPlans: currentPlans,
-        replacementPreviewRevision: createPlannedOperationRevision(
-          root,
-          currentPlans,
-        ),
+        replacementPreviewRevision: currentSelectedRevision,
       },
     );
   }
@@ -199,10 +199,7 @@ export async function applyApprovedAgentRun(
   const projectRoot = requireText(input.projectRoot, 'projectRoot');
   const conversationId = requireText(input.conversationId, 'conversationId');
   const approvalToken = requireText(input.approvalToken, 'approvalToken');
-  const previewRevision = requireText(
-    input.previewRevision,
-    'previewRevision',
-  );
+  const previewRevision = requireText(input.previewRevision, 'previewRevision');
   const selectedOperationIds = normalizeSelectedIds(input.selectedOperationIds);
   const approvals = dependencies.approvals ?? defaultApprovals;
   const expectation = {
@@ -227,10 +224,7 @@ export async function applyApprovedAgentRun(
   const plan = dependencies.plan ?? planOperations;
   const operations = inspection.plans.map((item) => item.operation);
   const currentPlans = await plan(operations, projectRoot);
-  const currentRevision = createPlannedOperationRevision(
-    projectRoot,
-    currentPlans,
-  );
+  const currentRevision = createPlannedOperationRevision(projectRoot, currentPlans);
   if (currentRevision !== inspection.selectedPreviewRevision) {
     approvals.revoke(approvalToken);
     throw new AgentApplicationError(
