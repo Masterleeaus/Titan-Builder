@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { lstat, readFile, realpath } from 'node:fs/promises';
 import fg from 'fast-glob';
 import { resolveApprovedSkillEntrypoint, type SkillRuntimeHandler } from './dispatcher.js';
 import { parseSkillEntrypoint } from './entrypoint.js';
@@ -18,7 +18,7 @@ export interface LoadedSkillPackage {
   packageRoot: string;
   manifestPath: string;
   instructions?: string;
-  entrypoint?: { modulePath: string; exportName: string };
+  entrypointPath?: string;
 }
 
 function isContained(root: string, candidate: string): boolean {
@@ -42,42 +42,45 @@ async function resolveContainedFile(packageRoot: string, relativePath: string): 
   return canonicalCandidate;
 }
 
-async function resolveEntrypointModule(packageRoot: string, entrypointStr: string): Promise<{ modulePath: string; exportName: string }> {
-  const [modulePathStr, exportName] = entrypointStr.split('#');
-  if (!modulePathStr || !exportName) {
-    throw new Error(`Invalid entrypoint format: ${entrypointStr}`);
+async function resolveEntrypoint(packageRoot: string, entrypoint: string): Promise<string> {
+  const [modulePath, exportName] = entrypoint.split('#');
+
+  if (!modulePath || !exportName) {
+    throw new Error(`Invalid entrypoint format: ${entrypoint}`);
   }
 
-  const moduleName = modulePathStr.endsWith('.js') || modulePathStr.endsWith('.ts')
-    ? modulePathStr
-    : `${modulePathStr}.js`;
+  if (!modulePath.endsWith('.js')) {
+    throw new Error(`Entrypoint module must be a .js file: ${entrypoint}`);
+  }
 
   const canonicalRoot = await realpath(packageRoot);
-  const candidate = path.resolve(packageRoot, moduleName);
+  const candidate = path.resolve(packageRoot, modulePath);
+
+  if (path.isAbsolute(modulePath)) {
+    throw new Error(`Entrypoint must be relative: ${entrypoint}`);
+  }
+
   let canonicalCandidate: string;
   try {
     canonicalCandidate = await realpath(candidate);
   } catch (error) {
-    throw new Error(`Unable to resolve entrypoint module ${modulePathStr}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Unable to resolve entrypoint ${entrypoint}: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   if (!isContained(canonicalRoot, canonicalCandidate)) {
-    throw new Error(`Entrypoint module ${modulePathStr} escapes its package boundary.`);
+    throw new Error(`Entrypoint ${entrypoint} escapes package boundary.`);
   }
 
-  try {
-    const stats = await stat(canonicalCandidate);
-    if (!stats.isFile()) {
-      throw new Error(`Entrypoint module must be a regular file, not a directory or symlink.`);
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('regular file')) {
-      throw error;
-    }
-    throw new Error(`Unable to verify entrypoint module ${modulePathStr}: ${error instanceof Error ? error.message : String(error)}`);
+  const stat = await lstat(canonicalCandidate);
+  if (!stat.isFile()) {
+    throw new Error(`Entrypoint must be a regular file: ${entrypoint}`);
   }
 
-  return { modulePath: canonicalCandidate, exportName };
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Entrypoint cannot be a symlink: ${entrypoint}`);
+  }
+
+  return canonicalCandidate;
 }
 
 export async function discoverSkillManifestPaths(libraryRoot: string): Promise<string[]> {
@@ -110,7 +113,8 @@ export async function loadSkillPackage(manifestPath: string): Promise<LoadedSkil
     if (!loaded.instructions) throw new Error(`Skill instructions are empty: ${manifest.instructions}`);
   }
   if (manifest.entrypoint) {
-    loaded.entrypoint = await resolveEntrypointModule(packageRoot, manifest.entrypoint);
+    const entrypointPath = await resolveEntrypoint(packageRoot, manifest.entrypoint);
+    loaded.entrypointPath = entrypointPath;
   }
   return loaded;
 }
