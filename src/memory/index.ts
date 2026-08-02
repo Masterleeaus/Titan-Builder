@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { lstat, realpath } from 'node:fs/promises';
 import fs from 'fs-extra';
 
 export const OPENBROWSER_DIR = '.openbrowser';
@@ -30,8 +31,37 @@ function memoryPath(projectRoot: string, fileName?: string): string {
   return path.join(projectRoot, OPENBROWSER_DIR, fileName ?? '');
 }
 
+async function validateMemoryRoot(projectRoot: string): Promise<string> {
+  const memoryRoot = memoryPath(projectRoot);
+
+  try {
+    const stats = await lstat(memoryRoot);
+
+    if (stats.isSymbolicLink()) {
+      throw new Error(`.openbrowser is a symbolic link or junction, which is not allowed`);
+    }
+
+    if (!stats.isDirectory()) {
+      throw new Error(`.openbrowser must be a directory`);
+    }
+
+    const canonical = await realpath(memoryRoot);
+    if (!canonical.startsWith(path.resolve(projectRoot))) {
+      throw new Error(`.openbrowser resolves outside the project root`);
+    }
+
+    return canonical;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return memoryRoot;
+    }
+    throw error;
+  }
+}
+
 export async function ensureMemory(projectRoot: string): Promise<void> {
-  await fs.ensureDir(memoryPath(projectRoot));
+  await validateMemoryRoot(projectRoot);
+  await fs.ensureDir(memoryPath(projectRoot), { mode: 0o700 });
   await Promise.all([
     ensureJson(projectRoot, MEMORY_FILES.project, {}),
     ensureJson(projectRoot, MEMORY_FILES.history, []),
@@ -75,7 +105,7 @@ async function ensureJson(
 ): Promise<void> {
   const filePath = memoryPath(projectRoot, fileName);
   if (!(await fs.pathExists(filePath))) {
-    await fs.writeJson(filePath, value, { spaces: 2 });
+    await fs.writeJson(filePath, value, { spaces: 2, mode: 0o600 });
   }
 }
 
