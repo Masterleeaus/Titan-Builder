@@ -2,6 +2,7 @@ import path from 'node:path';
 import fg from 'fast-glob';
 import fs from 'fs-extra';
 import { CONTEXT_IGNORE } from './file-context.js';
+import { normalizeContextReference, resolveContextPath } from './context-path.js';
 
 const MAX_TREE_DEPTH = 10;
 const MAX_TREE_ENTRIES = 200;
@@ -27,41 +28,47 @@ export async function scanDirectoryTree(
   projectRoot: string,
   dirRef: string,
 ): Promise<ContextDirectory | null> {
-  const normalizedRef = dirRef.replace(/\\/g, '/').replace(/\/$/, '');
-  const resolved = path.resolve(projectRoot, normalizedRef);
-  const rootResolved = path.resolve(projectRoot);
-
-  if (!resolved.startsWith(rootResolved)) {
+  let normalizedRef: string;
+  let resolvedDirectory;
+  try {
+    normalizedRef = normalizeContextReference(dirRef);
+    resolvedDirectory = await resolveContextPath(projectRoot, normalizedRef, {
+      requireExisting: true,
+      expectedType: 'directory',
+    });
+  } catch {
     return null;
   }
 
-  if (!(await fs.pathExists(resolved))) {
-    return null;
-  }
-
-  const stat = await fs.stat(resolved);
-  if (!stat.isDirectory()) {
-    return null;
-  }
-
-  const relativePath = path.relative(projectRoot, resolved).replace(/\\/g, '/');
+  const root = resolvedDirectory.projectRoot;
+  const resolved = resolvedDirectory.absolutePath;
+  const relativePath = resolvedDirectory.relativePath === '.' ? '' : resolvedDirectory.relativePath;
   const treeLines: string[] = [];
   const directories: string[] = [];
   const files: string[] = [];
 
-  await walkDirectory(resolved, relativePath, 0, treeLines, directories, files);
+  await walkDirectory(root, resolved, relativePath, 0, treeLines, directories, files);
 
   const nestedFiles = await fg('**/*', {
     cwd: resolved,
     dot: false,
     onlyFiles: true,
+    followSymbolicLinks: false,
     ignore: CONTEXT_IGNORE,
   });
 
   for (const nestedFile of nestedFiles) {
-    const filePath = path.posix.join(relativePath, nestedFile.replace(/\\/g, '/'));
-    if (!files.includes(filePath)) {
-      files.push(filePath);
+    const candidateRef = path.posix.join(relativePath, nestedFile.replace(/\\/g, '/'));
+    try {
+      const safeFile = await resolveContextPath(root, candidateRef, {
+        requireExisting: true,
+        expectedType: 'file',
+      });
+      if (!files.includes(safeFile.relativePath)) {
+        files.push(safeFile.relativePath);
+      }
+    } catch {
+      // Ignore files that no longer resolve through the canonical project boundary.
     }
   }
 
@@ -69,7 +76,7 @@ export async function scanDirectoryTree(
   const treeText =
     treeLines.length > 0
       ? treeLines.join('\n')
-      : `${relativePath}/ (empty — no files or subfolders)`;
+      : `${relativePath || '.'}/ (empty — no files or subfolders)`;
 
   return {
     path: normalizedRef,
@@ -83,6 +90,7 @@ export async function scanDirectoryTree(
 }
 
 async function walkDirectory(
+  projectRoot: string,
   absoluteDir: string,
   relativeDir: string,
   depth: number,
@@ -115,13 +123,24 @@ async function walkDirectory(
     const childRelative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
 
     if (entry.isDirectory()) {
-      const dirPath = `${childRelative}/`;
+      let safeDirectory;
+      try {
+        safeDirectory = await resolveContextPath(projectRoot, childRelative, {
+          requireExisting: true,
+          expectedType: 'directory',
+        });
+      } catch {
+        continue;
+      }
+
+      const dirPath = `${safeDirectory.relativePath}/`;
       directories.push(dirPath);
       treeLines.push(`${indent}${entry.name}/`);
 
       await walkDirectory(
-        path.join(absoluteDir, entry.name),
-        childRelative,
+        projectRoot,
+        safeDirectory.absolutePath,
+        safeDirectory.relativePath,
         depth + 1,
         treeLines,
         directories,
@@ -131,31 +150,60 @@ async function walkDirectory(
     }
 
     if (entry.isFile()) {
-      files.push(childRelative);
-      treeLines.push(`${indent}${entry.name}`);
+      try {
+        const safeFile = await resolveContextPath(projectRoot, childRelative, {
+          requireExisting: true,
+          expectedType: 'file',
+        });
+        files.push(safeFile.relativePath);
+        treeLines.push(`${indent}${entry.name}`);
+      } catch {
+        // Ignore files that no longer resolve through the canonical project boundary.
+      }
     }
   }
 }
 
 export async function collectProjectDirectories(projectRoot: string): Promise<string[]> {
   const dirs = new Set<string>();
+  let root: string;
+  try {
+    root = (await resolveContextPath(projectRoot, '.', {
+      requireExisting: true,
+      expectedType: 'directory',
+    })).projectRoot;
+  } catch {
+    return [];
+  }
 
   async function walk(relativeDir: string): Promise<void> {
-    const absoluteDir = relativeDir ? path.join(projectRoot, relativeDir) : projectRoot;
-    if (!(await fs.pathExists(absoluteDir))) {
+    let currentDirectory;
+    try {
+      currentDirectory = await resolveContextPath(root, relativeDir || '.', {
+        requireExisting: true,
+        expectedType: 'directory',
+      });
+    } catch {
       return;
     }
 
-    const entries = await fs.readdir(absoluteDir, { withFileTypes: true });
+    const entries = await fs.readdir(currentDirectory.absolutePath, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory() || shouldSkipDir(entry.name)) {
         continue;
       }
 
       const childRelative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-      const normalized = `${childRelative.replace(/\\/g, '/')}/`;
-      dirs.add(normalized);
-      await walk(childRelative);
+      try {
+        const safeDirectory = await resolveContextPath(root, childRelative, {
+          requireExisting: true,
+          expectedType: 'directory',
+        });
+        dirs.add(`${safeDirectory.relativePath}/`);
+        await walk(safeDirectory.relativePath);
+      } catch {
+        // Ignore linked, missing, or escaped directories.
+      }
     }
   }
 
