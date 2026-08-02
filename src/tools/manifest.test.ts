@@ -77,6 +77,20 @@ test('rejects malformed identifiers, versions, and non-object schemas', () => {
   }
 });
 
+test('binds the canonical ID to the runtime ID', () => {
+  const input = validManifest();
+  input.id = 'titan.tool.git.diff';
+
+  const result = validateToolManifest(input);
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.match(
+      result.issues.map((issue) => issue.message).join('\n'),
+      /Canonical tool ID must equal titan\.tool\.<runtimeId>/u,
+    );
+  }
+});
+
 test('rejects duplicate declarations, aliases to self, and dependencies on self', () => {
   const input = validManifest();
   input.aliases = ['git.status', 'git.state', 'git.state'];
