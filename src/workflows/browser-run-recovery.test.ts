@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { planOperations } from '../operations/index.ts';
+import { createBrowserRunCoordinator } from './browser-run-coordinator.ts';
 import { createBrowserRunStore } from './browser-run-store.ts';
 
 async function fixtureDirectory(): Promise<string> {
@@ -102,4 +103,42 @@ test('audit events are immutable, token-redacted, and bounded', async () => {
   assert.equal(events.at(-1)?.summary.length <= 500, true);
   assert.equal(String(events.at(-1)?.details?.responseText).length <= 1000, true);
   assert.equal(Object.isFrozen(events[0]), true);
+});
+
+test('coordinator shutdown waits for detached preparation and persistence', async () => {
+  const runsDir = await fixtureDirectory();
+  const projectRoot = await fixtureDirectory();
+  const store = createBrowserRunStore({ runsDir });
+  const project = {
+    id: 'project-1234567890abcdef',
+    name: 'Fixture',
+    root: projectRoot,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  let releaseResponse!: (value: string) => void;
+  const response = new Promise<string>((resolve) => {
+    releaseResponse = resolve;
+  });
+  const coordinator = createBrowserRunCoordinator({
+    store,
+    resolveProject: async () => project,
+    submitAndWait: async () => response,
+  });
+
+  const run = await coordinator.create({
+    mode: 'ask',
+    projectId: project.id,
+    prompt: 'Explain',
+  });
+  let closed = false;
+  const closing = coordinator.close().then(() => {
+    closed = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(closed, false);
+
+  releaseResponse('# Complete');
+  await closing;
+  assert.equal((await store.get(run.id))?.status, 'completed');
 });
