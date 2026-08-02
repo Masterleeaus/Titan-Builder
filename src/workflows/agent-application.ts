@@ -317,10 +317,16 @@ function operationChangedPaths(operation: FileOperation): string[] {
     case 'RUN_COMMAND':
       return [];
     case 'RENAME_FILE':
-      return [operation.path, operation.replace];
+      return definedText([operation.path, operation.replace]);
     default:
-      return [operation.path];
+      return definedText([operation.path]);
   }
+}
+
+function definedText(values: readonly (string | undefined)[]): string[] {
+  return values.filter(
+    (value): value is string => typeof value === 'string' && value.trim().length > 0,
+  );
 }
 
 function uniqueText(values: readonly string[]): string[] {
