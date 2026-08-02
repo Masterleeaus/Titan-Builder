@@ -27,6 +27,7 @@ export function normalizeContextReference(value: string): string {
     || driveQualifiedPattern.test(raw)
     || portable.startsWith('//')
     || encodedPathSyntaxPattern.test(portable)
+    || portable.includes('%')
   ) {
     throw new Error('Context reference must be a portable relative path.');
   }
