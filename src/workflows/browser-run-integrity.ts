@@ -1,8 +1,7 @@
 import crypto from 'node:crypto';
 import type { FileOperation } from '../core/types/index.js';
 import type { PlannedOperation } from '../operations/index.js';
-import { requiresExplicitApproval } from '../tools/registry.js';
-import { operationIdForIndex } from './agent-application.js';
+import { requiresExplicitApproval } from '../tools/registry.ts';
 import type {
   BrowserPreparedArtifact,
   BrowserRunEvent,
@@ -57,7 +56,7 @@ export function reducePlansToBrowserPreviews(
   plans: readonly PlannedOperation[],
 ): BrowserOperationPreview[] {
   return plans.map((plan, index) => ({
-    id: operationIdForIndex(index),
+    id: `op-${index + 1}`,
     action: plan.operation.action,
     path: 'path' in plan.operation ? plan.operation.path : undefined,
     risk: plan.risk,
