@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -24,11 +24,7 @@ async function fixture(): Promise<{ homeDir: string; packageRoot: string }> {
   return { homeDir, packageRoot };
 }
 
-const CONTROL_TOKEN = 'control-token-abcdefghijklmnopqrstuvwxyz-123456';
-const BROWSER_TOKEN = 'browser-token-abcdefghijklmnopqrstuvwxyz-654321';
-
-test('installation doctor returns stable passing checks without exposing credentials', async () => {
-  const { homeDir, packageRoot } = await fixture();
+async function writeValidConfig(homeDir: string): Promise<void> {
   await writeFile(
     path.join(homeDir, '.openbrowser', '.env'),
     [
@@ -39,6 +35,14 @@ test('installation doctor returns stable passing checks without exposing credent
     ].join('\n'),
     'utf8',
   );
+}
+
+const CONTROL_TOKEN = 'control-token-abcdefghijklmnopqrstuvwxyz-123456';
+const BROWSER_TOKEN = 'browser-token-abcdefghijklmnopqrstuvwxyz-654321';
+
+test('installation doctor returns stable passing checks without exposing credentials', async () => {
+  const { homeDir, packageRoot } = await fixture();
+  await writeValidConfig(homeDir);
 
   const report = await runInstallDoctor({
     homeDir,
@@ -87,16 +91,7 @@ test('installation doctor returns stable passing checks without exposing credent
 
 test('missing projects and a stopped service are warnings rather than failures', async () => {
   const { homeDir, packageRoot } = await fixture();
-  await writeFile(
-    path.join(homeDir, '.openbrowser', '.env'),
-    [
-      `BRIDGE_TOKEN=${CONTROL_TOKEN}`,
-      `BRIDGE_BROWSER_TOKEN=${BROWSER_TOKEN}`,
-      'OPENBROWSER_INSECURE_DEV=0',
-      'OPENBROWSER_ALLOW_UNSAFE_COMMANDS=0',
-    ].join('\n'),
-    'utf8',
-  );
+  await writeValidConfig(homeDir);
 
   const report = await runInstallDoctor({
     homeDir,
@@ -168,4 +163,30 @@ test('missing configuration is reported as a blocking failure without throwing',
   assert.equal(report.checks.find((check) => check.id === 'config.file')?.status, 'fail');
   assert.equal(report.checks.find((check) => check.id === 'config.control-token')?.status, 'fail');
   assert.equal(report.checks.find((check) => check.id === 'config.browser-token')?.status, 'fail');
+});
+
+test('default service inspection preserves stale metadata', async () => {
+  const { homeDir, packageRoot } = await fixture();
+  await writeValidConfig(homeDir);
+  const metadataPath = path.join(homeDir, '.openbrowser', 'service.json');
+  const metadata = `${JSON.stringify({
+    version: 1,
+    pid: 999999,
+    entryPath: path.join(packageRoot, 'dist', 'service', 'service-entry.js'),
+    startedAt: '2026-08-02T00:00:00.000Z',
+    logPath: path.join(homeDir, '.openbrowser', 'logs', 'service.log'),
+  }, null, 2)}\n`;
+  await writeFile(metadataPath, metadata, 'utf8');
+
+  const report = await runInstallDoctor({
+    homeDir,
+    packageRoot,
+    nodeVersion: '22.0.0',
+    projects: async () => [],
+    isProcessRunning: () => false,
+    probeBridge: async () => false,
+  });
+
+  assert.equal(report.checks.find((check) => check.id === 'service.bridge')?.status, 'warn');
+  assert.equal(await readFile(metadataPath, 'utf8'), metadata);
 });
