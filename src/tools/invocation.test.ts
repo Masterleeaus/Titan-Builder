@@ -13,8 +13,9 @@ function validInvocation(): ToolInvocation {
     toolId: 'git.status',
     executable: 'git',
     args: ['status', '--short', '--branch'],
+    env: { PATH: process.env.PATH ?? '' },
     cwd: path.resolve('/tmp/project'),
-    risk: 'READ',
+    risk: 'ARBITRARY_EXECUTION',
     displayCommand: 'git status --short --branch',
     shell: false,
   };
@@ -28,6 +29,7 @@ test('normalizes and freezes a resolved invocation that matches its manifest', (
   assert.notEqual(invocation, input);
   assert.equal(Object.isFrozen(invocation), true);
   assert.equal(Object.isFrozen(invocation.args), true);
+  assert.equal(Object.isFrozen(invocation.env), true);
 });
 
 test('rejects resolver output whose tool ID or risk drifts from the manifest', () => {
@@ -37,11 +39,11 @@ test('rejects resolver output whose tool ID or risk drifts from the manifest', (
   );
   assert.throws(
     () => validateResolvedToolInvocation(manifest, { ...validInvocation(), risk: 'PUBLISH' }),
-    /returned risk PUBLISH but manifest requires READ/u,
+    /returned risk PUBLISH but manifest requires ARBITRARY_EXECUTION/u,
   );
 });
 
-test('rejects shell execution, relative working directories, and malformed command data', () => {
+test('rejects shell execution, relative working directories, malformed commands, and invalid environments', () => {
   assert.throws(
     () => validateResolvedToolInvocation(manifest, { ...validInvocation(), shell: true } as unknown as ToolInvocation),
     /shell must be false/u,
@@ -57,5 +59,16 @@ test('rejects shell execution, relative working directories, and malformed comma
   assert.throws(
     () => validateResolvedToolInvocation(manifest, { ...validInvocation(), args: ['status', 'bad\narg'] }),
     /argument 1/u,
+  );
+  assert.throws(
+    () => validateResolvedToolInvocation(manifest, { ...validInvocation(), env: null } as unknown as ToolInvocation),
+    /environment must be an object/u,
+  );
+  assert.throws(
+    () => validateResolvedToolInvocation(manifest, {
+      ...validInvocation(),
+      env: { 'BAD=KEY': 'value' },
+    }),
+    /environment key is invalid/u,
   );
 });
