@@ -6,17 +6,20 @@ import {
   resolveBuiltinSkillId,
 } from './skill-registry.js';
 
-test('resolves the legacy debugging id to the canonical skill', () => {
-  assert.equal(resolveBuiltinSkillId('debugging'), 'titan.guidance.systematic-debugging');
-  assert.equal(
-    BUILTIN_SKILLS.find((skill) => skill.id === 'titan.guidance.systematic-debugging')?.title,
-    'Systematic Debugging',
-  );
+const LEGACY_TO_CANONICAL = Object.freeze({
+  debugging: 'titan.guidance.systematic-debugging',
+  testing: 'titan.guidance.test-driven-development',
+  security: 'titan.guidance.extension-security',
+  architecture: 'titan.guidance.architecture-review',
+  git: 'titan.guidance.git-discipline',
+  performance: 'titan.guidance.browser-performance',
 });
 
-test('preserves unmigrated legacy guidance skills', () => {
-  for (const id of ['testing', 'security', 'architecture', 'git', 'performance']) {
-    assert.ok(BUILTIN_SKILLS.some((skill) => skill.id === id), `missing ${id}`);
+test('resolves every built-in legacy id to a canonical guidance skill', () => {
+  for (const [legacyId, canonicalId] of Object.entries(LEGACY_TO_CANONICAL)) {
+    assert.equal(resolveBuiltinSkillId(legacyId), canonicalId);
+    assert.ok(BUILTIN_SKILLS.some((skill) => skill.id === canonicalId), `missing ${canonicalId}`);
+    assert.equal(BUILTIN_SKILLS.some((skill) => skill.id === legacyId), false);
   }
 });
 
@@ -27,7 +30,6 @@ test('rejects generated alias collisions', () => {
         { id: 'titan.guidance.one', title: 'One', instructions: 'One', aliases: ['shared'], kind: 'guidance' },
         { id: 'titan.guidance.two', title: 'Two', instructions: 'Two', aliases: ['shared'], kind: 'guidance' },
       ],
-      legacySkills: [],
     }),
     /alias.*shared/i,
   );
