@@ -1,12 +1,14 @@
 import crypto from 'node:crypto';
-import { constants as fsConstants } from 'node:fs';
+import { constants as fsConstants, type Stats } from 'node:fs';
 import {
   chmod,
   lstat,
   mkdir,
   open,
+  readdir,
   realpath,
   rename,
+  rmdir,
   unlink,
   type FileHandle,
 } from 'node:fs/promises';
@@ -16,9 +18,9 @@ import { canonicalizeProjectRoot, isPathInsideProject } from './project-path.js'
 const OPENBROWSER_STATE_DIRECTORY = '.openbrowser';
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
-const NO_FOLLOW = typeof fsConstants.O_NOFOLLOW === 'number'
-  ? fsConstants.O_NOFOLLOW
-  : 0;
+const NO_FOLLOW = process.platform === 'win32'
+  ? 0
+  : (fsConstants.O_NOFOLLOW ?? 0);
 
 interface FilesystemIdentity {
   device: string;
@@ -30,6 +32,92 @@ interface TrustedStateRoot {
   stateRoot: string;
   projectIdentity: FilesystemIdentity;
   stateIdentity: FilesystemIdentity;
+}
+
+export interface ProjectInternalState {
+  readonly projectRoot: string;
+  readonly stateRoot: string;
+  ensureDirectory(relativePath: string): Promise<string>;
+  fileExists(relativePath: string): Promise<boolean>;
+  readBuffer(relativePath: string): Promise<Buffer>;
+  readText(relativePath: string): Promise<string>;
+  readJson<T>(relativePath: string): Promise<T>;
+  writeBuffer(relativePath: string, content: Uint8Array): Promise<void>;
+  writeText(relativePath: string, content: string): Promise<void>;
+  writeJson(relativePath: string, value: unknown): Promise<void>;
+  ensureJson(relativePath: string, value: unknown): Promise<void>;
+  copyFromFile(relativePath: string, sourcePath: string): Promise<void>;
+  removeTree(relativePath: string): Promise<void>;
+}
+
+export async function openProjectInternalState(
+  projectRoot: string,
+): Promise<ProjectInternalState> {
+  const authority = await ensureTrustedStateRoot(projectRoot);
+
+  return {
+    projectRoot: authority.projectRoot,
+    stateRoot: authority.stateRoot,
+    ensureDirectory: (relativePath) =>
+      ensureOpenBrowserStateDirectory(authority.projectRoot, relativePath),
+    async fileExists(relativePath) {
+      try {
+        const filePath = await resolveOpenBrowserStateFile(authority.projectRoot, relativePath);
+        await lstat(filePath);
+        return true;
+      } catch (error) {
+        if (isNotFound(error)) return false;
+        throw error;
+      }
+    },
+    readBuffer: (relativePath) =>
+      readOpenBrowserStateBuffer(authority.projectRoot, relativePath),
+    readText: (relativePath) =>
+      readOpenBrowserStateFile(authority.projectRoot, relativePath),
+    async readJson<T>(relativePath: string): Promise<T> {
+      return JSON.parse(
+        await readOpenBrowserStateFile(authority.projectRoot, relativePath),
+      ) as T;
+    },
+    async writeBuffer(relativePath, content) {
+      await writeOpenBrowserStateFile(authority.projectRoot, relativePath, content);
+    },
+    async writeText(relativePath, content) {
+      await writeOpenBrowserStateFile(authority.projectRoot, relativePath, content);
+    },
+    async writeJson(relativePath, value) {
+      await writeOpenBrowserStateFile(
+        authority.projectRoot,
+        relativePath,
+        `${JSON.stringify(value, null, 2)}\n`,
+      );
+    },
+    async ensureJson(relativePath, value) {
+      if (!(await this.fileExists(relativePath))) {
+        await this.writeJson(relativePath, value);
+      }
+    },
+    async copyFromFile(relativePath, sourcePath) {
+      let handle: FileHandle | undefined;
+      try {
+        handle = await open(sourcePath, fsConstants.O_RDONLY | NO_FOLLOW);
+        const metadata = await handle.stat();
+        if (!metadata.isFile() || metadata.isSymbolicLink()) {
+          throw new Error(`Rollback source is not a regular file: ${sourcePath}`);
+        }
+        await writeOpenBrowserStateFile(
+          authority.projectRoot,
+          relativePath,
+          await handle.readFile(),
+        );
+      } finally {
+        await handle?.close();
+      }
+    },
+    async removeTree(relativePath) {
+      await removeOpenBrowserStateTree(authority.projectRoot, relativePath);
+    },
+  };
 }
 
 export async function ensureOpenBrowserStateDirectory(
@@ -67,11 +155,7 @@ export async function resolveOpenBrowserStateFile(
 
   try {
     const metadata = await lstat(candidate);
-    assertSafeStateFile(candidate, metadata, authority.stateIdentity.device);
-    const canonical = await realpath(candidate);
-    if (!sameCanonicalPath(canonical, candidate)) {
-      throw unsafeStateError(candidate, 'resolves through a symbolic link, junction, or redirect');
-    }
+    await validateSafeStateFile(candidate, metadata, authority.stateIdentity.device);
   } catch (error) {
     if (!isNotFound(error)) throw error;
   }
@@ -80,23 +164,41 @@ export async function resolveOpenBrowserStateFile(
   return candidate;
 }
 
+export async function readOpenBrowserStateBuffer(
+  projectRoot: string,
+  relativeFile: string,
+): Promise<Buffer> {
+  const filePath = await resolveOpenBrowserStateFile(projectRoot, relativeFile);
+  const before = await lstat(filePath);
+  const authority = await readTrustedStateRoot(projectRoot);
+  await validateSafeStateFile(filePath, before, authority.stateIdentity.device);
+
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(filePath, fsConstants.O_RDONLY | NO_FOLLOW);
+    const opened = await handle.stat();
+    assertSafeStateFile(filePath, opened, authority.stateIdentity.device);
+    if (!sameIdentity(identityOf(opened), identityOf(before))) {
+      throw unsafeStateError(filePath, 'changed identity before it was opened');
+    }
+    const content = await handle.readFile();
+    const after = await handle.stat();
+    if (!sameIdentity(identityOf(after), identityOf(opened))) {
+      throw unsafeStateError(filePath, 'changed identity while it was being read');
+    }
+    await assertAuthorityIdentity(authority);
+    return content;
+  } finally {
+    await handle?.close();
+  }
+}
+
 export async function readOpenBrowserStateFile(
   projectRoot: string,
   relativeFile: string,
   encoding: BufferEncoding = 'utf8',
 ): Promise<string> {
-  const filePath = await resolveOpenBrowserStateFile(projectRoot, relativeFile);
-  let handle: FileHandle | undefined;
-  try {
-    handle = await open(filePath, fsConstants.O_RDONLY | NO_FOLLOW);
-    const metadata = await handle.stat();
-    const authority = await readTrustedStateRoot(projectRoot);
-    assertSafeStateFile(filePath, metadata, authority.stateIdentity.device);
-    await assertAuthorityIdentity(authority);
-    return handle.readFile({ encoding });
-  } finally {
-    await handle?.close();
-  }
+  return (await readOpenBrowserStateBuffer(projectRoot, relativeFile)).toString(encoding);
 }
 
 export async function writeOpenBrowserStateFile(
@@ -129,6 +231,11 @@ export async function writeOpenBrowserStateFile(
 
     await resolveOpenBrowserStateFile(projectRoot, relative);
     await assertAuthorityIdentity(authority);
+    await validateSafeStateFile(
+      tempPath,
+      await lstat(tempPath),
+      authority.stateIdentity.device,
+    );
     await rename(tempPath, targetPath);
     if (process.platform !== 'win32') await chmod(targetPath, PRIVATE_FILE_MODE);
 
@@ -143,9 +250,34 @@ export async function writeOpenBrowserStateFile(
   }
 }
 
+export async function removeOpenBrowserStateTree(
+  projectRoot: string,
+  relativePath: string,
+): Promise<void> {
+  const segments = normalizeStatePath(relativePath, false);
+  const authority = await readTrustedStateRoot(projectRoot);
+  let parent = authority.stateRoot;
+
+  for (const segment of segments.slice(0, -1)) {
+    parent = path.join(parent, segment);
+    const metadata = await lstat(parent);
+    assertRealDirectory(parent, metadata, authority.stateIdentity.device, segment);
+    const canonical = await realpath(parent);
+    if (!sameCanonicalPath(canonical, parent)) {
+      throw unsafeStateError(parent, 'is redirected during cleanup');
+    }
+  }
+
+  const candidate = path.join(parent, segments.at(-1) ?? '');
+  assertContained(authority.stateRoot, candidate, relativePath);
+  await removeValidatedNode(candidate, authority.stateIdentity.device);
+  await assertAuthorityIdentity(authority);
+}
+
 async function ensureTrustedStateRoot(projectRoot: string): Promise<TrustedStateRoot> {
   const canonicalProjectRoot = await canonicalizeProjectRoot(projectRoot);
   const projectMetadata = await lstat(canonicalProjectRoot);
+  assertOwned(projectMetadata, 'project root');
   const stateRoot = path.join(canonicalProjectRoot, OPENBROWSER_STATE_DIRECTORY);
   await ensurePrivateRealDirectory(
     stateRoot,
@@ -167,6 +299,7 @@ async function ensureTrustedStateRoot(projectRoot: string): Promise<TrustedState
 async function readTrustedStateRoot(projectRoot: string): Promise<TrustedStateRoot> {
   const canonicalProjectRoot = await canonicalizeProjectRoot(projectRoot);
   const projectMetadata = await lstat(canonicalProjectRoot);
+  assertOwned(projectMetadata, 'project root');
   const stateRoot = path.join(canonicalProjectRoot, OPENBROWSER_STATE_DIRECTORY);
   const stateMetadata = await lstat(stateRoot);
   assertRealDirectory(stateRoot, stateMetadata, identityOf(projectMetadata).device);
@@ -203,7 +336,7 @@ async function ensurePrivateRealDirectory(
 
 function assertRealDirectory(
   directoryPath: string,
-  metadata: Awaited<ReturnType<typeof lstat>>,
+  metadata: Stats,
   expectedDevice: string,
   label = directoryPath,
 ): void {
@@ -213,14 +346,28 @@ function assertRealDirectory(
   if (!metadata.isDirectory()) {
     throw unsafeStateError(label, 'is not a real directory');
   }
+  assertOwned(metadata, label);
   if (identityOf(metadata).device !== expectedDevice) {
     throw unsafeStateError(label, 'crosses a filesystem or mount redirect');
   }
 }
 
+async function validateSafeStateFile(
+  filePath: string,
+  metadata: Stats,
+  expectedDevice: string,
+): Promise<void> {
+  assertSafeStateFile(filePath, metadata, expectedDevice);
+  const canonical = await realpath(filePath);
+  if (!sameCanonicalPath(canonical, filePath)) {
+    throw unsafeStateError(filePath, 'resolves through a symbolic link, junction, or redirect');
+  }
+  if (process.platform !== 'win32') await chmod(filePath, PRIVATE_FILE_MODE);
+}
+
 function assertSafeStateFile(
   filePath: string,
-  metadata: Awaited<ReturnType<typeof lstat>>,
+  metadata: Stats,
   expectedDevice: string,
 ): void {
   if (metadata.isSymbolicLink()) {
@@ -229,6 +376,7 @@ function assertSafeStateFile(
   if (!metadata.isFile()) {
     throw unsafeStateError(filePath, 'is not a regular file');
   }
+  assertOwned(metadata, `internal state file ${filePath}`);
   if (identityOf(metadata).device !== expectedDevice) {
     throw unsafeStateError(filePath, 'crosses a filesystem or mount redirect');
   }
@@ -262,14 +410,53 @@ async function assertAuthorityIdentity(authority: TrustedStateRoot): Promise<voi
   }
 }
 
+async function removeValidatedNode(nodePath: string, expectedDevice: string): Promise<void> {
+  let metadata: Stats;
+  try {
+    metadata = await lstat(nodePath);
+  } catch (error) {
+    if (isNotFound(error)) return;
+    throw error;
+  }
+
+  if (metadata.isSymbolicLink()) {
+    throw unsafeStateError(nodePath, 'cleanup refuses a symbolic link, junction, or redirect');
+  }
+  assertOwned(metadata, `internal state cleanup target ${nodePath}`);
+  if (identityOf(metadata).device !== expectedDevice) {
+    throw unsafeStateError(nodePath, 'cleanup refuses a mounted redirect');
+  }
+
+  if (metadata.isFile()) {
+    if (metadata.nlink !== 1) {
+      throw unsafeStateError(nodePath, 'cleanup refuses a hardlinked file');
+    }
+    await unlink(nodePath);
+    return;
+  }
+  if (!metadata.isDirectory()) {
+    throw unsafeStateError(nodePath, 'cleanup refuses a non-file target');
+  }
+
+  const originalIdentity = identityOf(metadata);
+  for (const name of await readdir(nodePath)) {
+    await removeValidatedNode(path.join(nodePath, name), expectedDevice);
+  }
+  const current = await lstat(nodePath);
+  if (!sameIdentity(identityOf(current), originalIdentity)) {
+    throw unsafeStateError(nodePath, 'cleanup target changed identity');
+  }
+  await rmdir(nodePath);
+}
+
 function normalizeStatePath(value: string, allowEmpty: boolean): string[] {
   const raw = String(value ?? '');
   if (raw.includes('\0')) throw new Error('OpenBrowser state path contains a null byte');
-  if (path.isAbsolute(raw) || /^[A-Za-z]:[\\/]/u.test(raw)) {
+  if (path.isAbsolute(raw) || /^[A-Za-z]:[\\/]/u.test(raw) || raw.startsWith('\\\\')) {
     throw new Error(`OpenBrowser state path must be relative: ${raw}`);
   }
 
-  const portable = raw.replaceAll('\\', '/');
+  const portable = raw.normalize('NFKC').replaceAll('\\', '/');
   const normalized = path.posix.normalize(portable || '.');
   const segments = normalized === '.'
     ? []
@@ -293,7 +480,14 @@ function assertContained(stateRoot: string, candidate: string, original: string)
   }
 }
 
-function identityOf(metadata: Awaited<ReturnType<typeof lstat>>): FilesystemIdentity {
+function assertOwned(metadata: Stats, label: string): void {
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') return;
+  if (metadata.uid !== process.getuid()) {
+    throw unsafeStateError(label, 'is not owned by the current user');
+  }
+}
+
+function identityOf(metadata: Stats): FilesystemIdentity {
   return {
     device: String(metadata.dev),
     inode: String(metadata.ino),
