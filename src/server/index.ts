@@ -450,9 +450,9 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     reply.hijack();
     const raw = reply.raw;
     const origin = request.headers.origin;
-    let heartbeat: ReturnType<typeof setInterval>;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
     const client = createSseStream(raw, (closedClient) => {
-      clearInterval(heartbeat);
+      if (heartbeat !== undefined) clearInterval(heartbeat);
       removeSessionClient(sessionId, closedClient);
     }, origin);
 
@@ -476,9 +476,9 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     reply.hijack();
     const raw = reply.raw;
     const origin = request.headers.origin;
-    let heartbeat: ReturnType<typeof setInterval>;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
     const client = createSseStream(raw, (closedClient) => {
-      clearInterval(heartbeat);
+      if (heartbeat !== undefined) clearInterval(heartbeat);
       removeBrowserClient(closedClient);
     }, origin);
     addBrowserClient(client);
