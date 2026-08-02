@@ -613,14 +613,41 @@ function findOperationsJsonBlock(
 }
 
 function extractBalancedJson(text: string, start: number): string | null {
+  if (start >= text.length || text[start] !== '{') {
+    return null;
+  }
+
   let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+
   for (let index = start; index < text.length; index += 1) {
     const char = text[index];
-    if (char === '{') {
+
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escapeNext = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (char === '{' || char === '[') {
       depth += 1;
-    } else if (char === '}') {
+    } else if (char === '}' || char === ']') {
       depth -= 1;
-      if (depth === 0) {
+      if (depth === 0 && char === '}') {
         return text.slice(start, index + 1);
       }
     }
