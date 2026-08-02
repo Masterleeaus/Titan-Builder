@@ -91,7 +91,7 @@ export function validateEnvironmentGrants(names: readonly string[] = []): string
     if (!ENVIRONMENT_NAME_PATTERN.test(name)) {
       throw new Error(`${name || '<empty>'} is not a valid environment variable name`);
     }
-    grants.add(name);
+    grants.add(canonicalEnvironmentName(name));
   }
 
   return [...grants].sort((left, right) => left.localeCompare(right));
@@ -107,20 +107,21 @@ export function buildRepositoryChildEnvironment(
   requestedGrants: readonly string[] = [],
 ): RepositoryChildEnvironment {
   const grants = validateEnvironmentGrants(requestedGrants);
-  const grantNames = new Set(grants.map(canonicalEnvironmentName));
+  const grantNames = new Set(grants);
   const env: NodeJS.ProcessEnv = {};
   const redactions = new Set<string>();
 
   for (const [name, value] of Object.entries(source)) {
     if (value === undefined) continue;
     const canonicalName = canonicalEnvironmentName(name);
+    const explicitlyGranted = grantNames.has(canonicalName);
 
-    if (isSensitiveEnvironmentName(name) && value.length >= 4) {
+    if ((isSensitiveEnvironmentName(name) || explicitlyGranted) && value.length >= 4) {
       addRedactionVariants(redactions, value);
     }
 
     if (isBlockedEnvironmentName(name)) continue;
-    if (isBaselineEnvironmentName(canonicalName) || grantNames.has(canonicalName)) {
+    if (isBaselineEnvironmentName(canonicalName) || explicitlyGranted) {
       env[name] = value;
     }
   }
