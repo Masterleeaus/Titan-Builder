@@ -43,13 +43,6 @@ export async function runInstallDoctor(
   const nodeVersion = options.nodeVersion ?? process.versions.node;
   const env = options.env ?? process.env;
   const readText = options.readText ?? ((filePath: string) => readFile(filePath, 'utf8'));
-  const serviceStatus = options.serviceStatus ?? (() => inspectServiceStatus({
-    homeDir,
-    port: normalizePort(env.PORT),
-    readText,
-    isProcessRunning: options.isProcessRunning ?? processIsRunning,
-    probeBridge: options.probeBridge ?? probeLocalBridge,
-  }));
   const projects = options.projects ?? (() => listProjects({ homeDir }));
   const now = options.now ?? (() => new Date());
 
@@ -62,6 +55,14 @@ export async function runInstallDoctor(
     packageRoot,
     readText,
   });
+  const serviceStatus = options.serviceStatus ?? (() => inspectServiceStatus({
+    homeDir,
+    port: normalizePort(env.PORT ?? config.values.PORT),
+    readText,
+    isProcessRunning: options.isProcessRunning ?? processIsRunning,
+    probeBridge: options.probeBridge ?? probeLocalBridge,
+  }));
+
   checks.push(config.fileCheck);
   checks.push(checkToken('config.control-token', 'control', config.values.BRIDGE_TOKEN));
   checks.push(
