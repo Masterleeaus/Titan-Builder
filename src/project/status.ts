@@ -5,6 +5,13 @@ import { access } from 'node:fs/promises';
 
 const execFileAsync = promisify(execFile);
 
+export function redactRemoteUrl(url: string): string {
+  if (!url) return url;
+  // Match credentials in git URLs (https://, http://, git+https://, ssh+git://, etc.)
+  // Pattern: [protocol]://[username[:password]@]host/path
+  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)([^@/]+@)/, '$1***@');
+}
+
 export interface ProjectStatus {
   projectRoot: string;
   projectName: string;
@@ -52,7 +59,7 @@ export async function readProjectStatus(projectRoot: string): Promise<ProjectSta
     branch: branch || 'unknown',
     dirty: changedFiles > 0,
     changedFiles,
-    remote: remote || undefined,
+    remote: remote ? redactRemoteUrl(remote) : undefined,
   };
 }
 
