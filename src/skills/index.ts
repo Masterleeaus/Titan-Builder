@@ -12,15 +12,15 @@ export {
   type SkillManifestIssue,
   type SkillManifestValidationResult,
   type TitanSkillManifest,
-} from './manifest.ts';
+} from './manifest.js';
 export {
   discoverSkillManifestPaths,
   discoverSkillPackages,
   loadSkillPackage,
   type LoadedSkillPackage,
-} from './loader.ts';
+} from './loader.js';
 export {
   createSkillRegistry,
   loadSkillRegistry,
   type SkillRegistry,
-} from './registry.ts';
+} from './registry.js';
