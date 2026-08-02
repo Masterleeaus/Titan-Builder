@@ -4,6 +4,7 @@ import {
   buildCreateRunPayload,
   buildOperationSelection,
   createAgentWorkspaceController,
+  parseBridgeError,
   reduceRunViewState,
 } from './agent-workspace.js';
 
@@ -53,6 +54,23 @@ test('high-risk operation is unselected until separately approved', () => {
   assert.equal(model.selected.has('safe'), true);
   assert.equal(model.selected.has('danger'), false);
   assert.equal(model.highRisk.has('danger'), true);
+});
+
+test('serialized stale errors preserve the latest server snapshot', () => {
+  const snapshot = {
+    id: 'run-1',
+    status: 'awaiting_approval',
+    previewRevision: 'next',
+    operations: [{ id: 'op-2', risk: 'WRITE' }],
+  };
+  const error = parseBridgeError(`Bridge request failed (409): ${JSON.stringify({
+    error: 'STALE_PREVIEW',
+    message: 'Review again',
+    snapshot,
+  })}`);
+  assert.equal(error.code, 'STALE_PREVIEW');
+  assert.deepEqual(error.snapshot, snapshot);
+  assert.equal(error.message, 'Review again');
 });
 
 test('controller clears approval token and restores review on stale preview', async () => {
