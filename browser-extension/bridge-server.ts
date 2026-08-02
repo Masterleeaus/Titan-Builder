@@ -5,14 +5,14 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import Database from 'better-sqlite3';
 import chokidar from 'chokidar';
-import { config } from 'dotenv';
+import { loadWorkspaceEnvironment } from './environment.js';
 import fg from 'fast-glob';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { WebSocket, WebSocketServer } from 'ws';
 import yazl from 'yazl';
 import { z } from 'zod';
 
-config();
+const workspaceConfigPath = loadWorkspaceEnvironment();
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_HOST = '127.0.0.1';
@@ -743,10 +743,16 @@ export async function createWorkspaceServer(
     if (error instanceof WorkspaceHttpError) {
       return reply.code(error.statusCode).send({ error: error.message });
     }
-    const statusCode = typeof error.statusCode === 'number' ? error.statusCode : 500;
+    const statusCode = typeof error === 'object'
+      && error !== null
+      && 'statusCode' in error
+      && typeof error.statusCode === 'number'
+      ? error.statusCode
+      : 500;
+    const message = error instanceof Error ? error.message : 'Unknown workspace error';
     return reply.code(statusCode).send({
-      error: statusCode >= 500 ? 'Workspace operation failed' : error.message,
-      detail: statusCode >= 500 ? error.message : undefined,
+      error: statusCode >= 500 ? 'Workspace operation failed' : message,
+      detail: statusCode >= 500 ? message : undefined,
     });
   });
 
@@ -1025,7 +1031,7 @@ export async function startWorkspaceServer(options: WorkspaceServerOptions = {})
   const host = options.host ?? process.env.WORKSPACE_HOST ?? DEFAULT_HOST;
   const port = options.port ?? Number(process.env.WORKSPACE_PORT ?? DEFAULT_PORT);
   await app.listen({ host, port });
-  console.log(`OpenBrowser Workspace companion listening on http://${host}:${port}`);
+  console.log(`OpenBrowser Workspace companion listening on http://${host}:${port} (config: ${workspaceConfigPath ?? 'process environment only'})`);
 }
 
 const invokedDirectly = process.argv[1]
