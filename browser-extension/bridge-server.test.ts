@@ -1,13 +1,15 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildRipgrepArguments,
   createWorkspaceServer,
   createZipBuffer,
   normalizeExportName,
   normalizeRelativePath,
+  normalizeWorkspaceError,
   resolveProjectPath,
 } from './bridge-server.js';
 
@@ -50,6 +52,24 @@ describe('path security', () => {
     }
 
     await expect(resolveProjectPath(root, 'linked/secret.txt')).rejects.toThrow(/symbolic-link/i);
+  });
+});
+
+describe('workspace error normalization', () => {
+  it('preserves validated HTTP errors and Error diagnostics', () => {
+    expect(normalizeWorkspaceError(Object.assign(new Error('Conflict'), { statusCode: 409 })))
+      .toEqual({ statusCode: 409, message: 'Conflict' });
+    expect(normalizeWorkspaceError(new Error('Database unavailable')))
+      .toEqual({ statusCode: 500, message: 'Database unavailable' });
+  });
+
+  it('rejects invalid status values and non-Error diagnostics', () => {
+    expect(normalizeWorkspaceError({ statusCode: 200, message: 'not an error' }))
+      .toEqual({ statusCode: 500, message: 'Unknown workspace error' });
+    expect(normalizeWorkspaceError({ statusCode: '404', message: 'wrong type' }))
+      .toEqual({ statusCode: 500, message: 'Unknown workspace error' });
+    expect(normalizeWorkspaceError('raw secret value'))
+      .toEqual({ statusCode: 500, message: 'Unknown workspace error' });
   });
 });
 
@@ -122,6 +142,72 @@ describe('workspace server', () => {
       });
       expect(projects.statusCode).toBe(200);
       expect(projects.json().projects).toHaveLength(1);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+
+describe('authenticated bridge forwarding', () => {
+  it('proves bridge identity before attaching the control token', async () => {
+    const databaseDirectory = await temporaryDirectory('workspace-auth-db-');
+    const bridgeToken = 'bridge-test-token-12345678901234567890';
+    const instanceId = '12345678-1234-4234-8234-123456789abc';
+    const bridgeFetch = vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/bridge/identity') {
+        expect(init?.headers).toBeUndefined();
+        expect(init?.redirect).toBe('manual');
+        const nonce = url.searchParams.get('nonce') ?? '';
+        const unsigned = {
+          protocol: 'openbrowser-bridge',
+          version: '1',
+          instanceId,
+          nonce,
+          address: '127.0.0.1',
+          port: 51234,
+        };
+        return new Response(JSON.stringify({
+          ...unsigned,
+          mac: crypto.createHmac('sha256', bridgeToken).update(JSON.stringify([
+            unsigned.protocol,
+            unsigned.version,
+            unsigned.instanceId,
+            unsigned.nonce,
+            unsigned.address,
+            unsigned.port,
+          ])).digest('hex'),
+        }), { status: 200 });
+      }
+
+      expect(url.pathname).toBe('/session/prompt');
+      expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${bridgeToken}`);
+      expect(init?.redirect).toBe('manual');
+      return new Response(JSON.stringify({ sessionId: 'session-1', status: 'pending' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+
+    const app = await createWorkspaceServer({
+      workspaceToken: TOKEN,
+      databasePath: path.join(databaseDirectory, 'workspace.db'),
+      bridgeToken,
+      bridgeUrl: 'http://127.0.0.1:51234',
+      bridgeAllowedPorts: [51234],
+      bridgeFetch,
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/prompt',
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { prompt: 'Inspect the project', mode: 'ask' },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(bridgeFetch).toHaveBeenCalledTimes(2);
     } finally {
       await app.close();
     }
