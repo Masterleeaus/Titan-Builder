@@ -1,0 +1,73 @@
+{
+  "schemaVersion": "1",
+  "id": "titan.security.project-path-containment",
+  "name": "Project Path Containment",
+  "version": "1.0.0",
+  "status": "stable",
+  "kind": "executable",
+  "category": "security",
+  "description": "Resolve a project-relative path while rejecting traversal, absolute paths, symlink escape, and target type confusion.",
+  "owner": "Titan Builder",
+  "runtimeTargets": [
+    "root"
+  ],
+  "inputs": {
+    "type": "object",
+    "properties": {
+      "projectRoot": {
+        "type": "string"
+      },
+      "requestedPath": {
+        "type": "string"
+      },
+      "expectedType": {
+        "enum": [
+          "file",
+          "directory"
+        ]
+      },
+      "requireExisting": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "projectRoot",
+      "requestedPath"
+    ],
+    "additionalProperties": false
+  },
+  "outputs": {
+    "type": "object",
+    "properties": {
+      "absolutePath": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "absolutePath"
+    ],
+    "additionalProperties": false
+  },
+  "dependencies": [],
+  "capabilities": [
+    "filesystem.read"
+  ],
+  "risk": "READ",
+  "approval": "none",
+  "tags": [
+    "security",
+    "filesystem",
+    "path-containment"
+  ],
+  "aliases": [
+    "path-containment"
+  ],
+  "compatibility": {
+    "minTitanVersion": "0.5.0",
+    "platforms": [
+      "linux",
+      "windows",
+      "macos"
+    ]
+  }
+}
