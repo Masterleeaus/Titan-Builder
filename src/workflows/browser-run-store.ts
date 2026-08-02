@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   appendFile,
+  chmod,
   mkdir,
   readFile,
   readdir,
@@ -308,7 +309,18 @@ export function createBrowserRunStore(
       eventRecords.set(runId, existing);
       if (persistence !== 'memory') {
         await mkdir(runsDir, { recursive: true, mode: 0o700 });
-        await appendFile(eventsPath(runsDir, runId), `${JSON.stringify(normalized)}\n`, 'utf8');
+        const eventPath = eventsPath(runsDir, runId);
+        try {
+          await appendFile(eventPath, `${JSON.stringify(normalized)}\n`, 'utf8');
+          if (process.platform !== 'win32') {
+            await chmod(eventPath, 0o600);
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+            throw error;
+          }
+          await writeFile(eventPath, `${JSON.stringify(normalized)}\n`, { encoding: 'utf8', mode: 0o600 });
+        }
       }
       return freezeClone(normalized);
     },
@@ -448,6 +460,9 @@ async function writeAtomicJson(filePath: string, value: unknown): Promise<void> 
   const tempPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
   await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   await rename(tempPath, filePath);
+  if (process.platform !== 'win32') {
+    await chmod(filePath, 0o600);
+  }
 }
 
 function createPreviewRevision(operations: BrowserOperationPreview[]): string {
