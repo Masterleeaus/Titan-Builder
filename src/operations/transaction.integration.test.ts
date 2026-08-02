@@ -58,6 +58,11 @@ test('a failed multi-file transaction restores earlier mutations and records rol
   const secondPath = path.join(projectRoot, 'second.txt');
   await writeFile(firstPath, 'before first\n', 'utf8');
   await writeFile(secondPath, 'before second\n', 'utf8');
+  await writeFile(
+    path.join(projectRoot, 'package.json'),
+    JSON.stringify({ scripts: { test: 'node -e "process.exit(1)"' } }),
+    'utf8',
+  );
 
   try {
     const plans = await planOperations([
@@ -65,11 +70,9 @@ test('a failed multi-file transaction restores earlier mutations and records rol
       { action: 'EDIT_FILE', path: 'second.txt', content: 'after second\n' },
       { action: 'RUN_TOOL', tool: 'npm.test' },
     ], projectRoot);
-    await writeFile(path.join(projectRoot, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(1)"' } }), 'utf8');
-    const replanned = await planOperations(plans.map((plan) => plan.operation), projectRoot);
 
     await assert.rejects(
-      executePlannedOperations(replanned, projectRoot),
+      executePlannedOperations(plans, projectRoot),
       /Operation transaction failed/i,
     );
     assert.equal(await readFile(firstPath, 'utf8'), 'before first\n');
