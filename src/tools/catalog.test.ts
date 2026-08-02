@@ -99,8 +99,11 @@ test('catalog resolves declared aliases to their canonical runtime ID', () => {
     }),
   };
   const registry = createToolRegistry([aliased]);
+  const resolved = registry.resolve('git.state');
 
   assert.equal(registry.canonicalId('git.state'), 'git.status.aliased');
-  assert.notEqual(registry.resolve('git.state'), aliased);
-  assert.equal(registry.resolve('git.state')?.manifest, aliased.manifest);
+  assert.notEqual(resolved, aliased);
+  assert.deepEqual(resolved?.manifest, aliased.manifest);
+  assert.equal(Object.isFrozen(resolved), true);
+  assert.equal(Object.isFrozen(resolved?.manifest), true);
 });
