@@ -40,6 +40,9 @@ import type { AgentSubmissionRequest } from '../workflows/agent-preparation.js';
 import { registerBrowserWorkflowRoutes } from './browser-workflow-routes.js';
 import { createOperationApprovalStore } from './operation-approvals.js';
 import {
+  BRIDGE_IDENTITY_PRODUCT,
+  BRIDGE_IDENTITY_PROTOCOL_VERSION,
+  createBridgeIdentityProof,
   createBridgeSecurityPolicy,
   parseAllowedExtensionOrigins,
   resolveBridgeRouteScope,
@@ -95,8 +98,10 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
   const app = Fastify({ logger: false });
   const projectRoot = await canonicalizeProjectRoot(options.projectRoot ?? process.cwd());
   const insecureDevelopment = options.allowInsecureDev ?? process.env.OPENBROWSER_INSECURE_DEV === '1';
+  const controlToken = String(options.controlToken ?? process.env.BRIDGE_TOKEN ?? '').trim();
+  const bridgeInstanceId = crypto.randomUUID();
   const securityPolicy = createBridgeSecurityPolicy({
-    controlToken: options.controlToken ?? process.env.BRIDGE_TOKEN,
+    controlToken: controlToken || undefined,
     browserToken: options.browserToken ?? process.env.BRIDGE_BROWSER_TOKEN,
     allowedExtensionOrigins:
       options.allowedExtensionOrigins ?? parseAllowedExtensionOrigins(process.env.BRIDGE_EXTENSION_ORIGINS),
@@ -162,6 +167,24 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     })) {
       return reply.code(401).send({ error: 'Unauthorized bridge request' });
     }
+  });
+
+  app.get('/identity', async (request, reply) => {
+    const nonce = String((request.query as { nonce?: string }).nonce ?? '');
+    if (!/^[a-f0-9]{64}$/u.test(nonce)) {
+      return reply.code(400).send({ error: 'A 64-character hexadecimal nonce is required' });
+    }
+    if (!controlToken) {
+      return reply.code(503).send({ error: 'Authenticated bridge identity is unavailable' });
+    }
+    reply.header('Cache-Control', 'no-store');
+    return {
+      product: BRIDGE_IDENTITY_PRODUCT,
+      protocolVersion: BRIDGE_IDENTITY_PROTOCOL_VERSION,
+      instanceId: bridgeInstanceId,
+      nonce,
+      proof: createBridgeIdentityProof(controlToken, nonce, bridgeInstanceId),
+    };
   });
 
   app.get('/health', async () => ({

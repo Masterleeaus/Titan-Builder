@@ -11,6 +11,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { WebSocket, WebSocketServer } from 'ws';
 import yazl from 'yazl';
 import { z } from 'zod';
+import { TrustedBridgeEndpoint } from './bridge-target-security.js';
 
 config();
 
@@ -683,9 +684,12 @@ export async function createWorkspaceServer(
     throw new Error('WORKSPACE_TOKEN must contain at least 24 characters');
   }
 
-  const bridgeUrl = (options.bridgeUrl ?? process.env.OPENBROWSER_BRIDGE_URL ?? DEFAULT_BRIDGE_URL)
-    .replace(/\/$/, '');
-  const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;
+  const bridgeToken = String(options.bridgeToken ?? process.env.BRIDGE_TOKEN ?? '').trim() || undefined;
+  const bridgeEndpoint = new TrustedBridgeEndpoint(
+    options.bridgeUrl ?? process.env.OPENBROWSER_BRIDGE_URL ?? DEFAULT_BRIDGE_URL,
+    bridgeToken ?? '',
+  );
+  const bridgeUrl = bridgeEndpoint.origin;
   const databasePath = path.resolve(
     options.databasePath
       ?? process.env.WORKSPACE_DB_PATH
@@ -754,15 +758,29 @@ export async function createWorkspaceServer(
     if (!bridgeToken) {
       throw new WorkspaceHttpError('BRIDGE_TOKEN is required for main-bridge operations', 503);
     }
-    const response = await fetch(`${bridgeUrl}${route}`, {
+    try {
+      await bridgeEndpoint.verifyIdentity();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new WorkspaceHttpError(`Bridge identity verification failed: ${detail}`, 502);
+    }
+    const target = bridgeEndpoint.resolveRoute(route);
+    const response = await fetch(target, {
       method,
       headers: {
         Authorization: `Bearer ${bridgeToken}`,
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
+      redirect: 'manual',
       signal: AbortSignal.timeout(60_000),
     });
+    try {
+      bridgeEndpoint.assertTrustedResponse(response, target);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new WorkspaceHttpError(`Privileged bridge response rejected: ${detail}`, 502);
+    }
     const text = await response.text();
     let payload: unknown = text;
     if (text) {

@@ -21,8 +21,24 @@ export interface BridgeSecurityPolicy {
   allowedExtensionOrigins(): string[];
 }
 
+export const BRIDGE_IDENTITY_PRODUCT = 'openbrowser-bridge';
+export const BRIDGE_IDENTITY_PROTOCOL_VERSION = 1;
+export const BRIDGE_IDENTITY_CONTEXT = 'openbrowser-bridge-identity-v1';
+
 const MIN_TOKEN_CHARACTERS = 32;
 const EXTENSION_ORIGIN_PATTERN = /^(?:chrome|moz)-extension:\/\/[A-Za-z0-9_-]+$/u;
+
+export function createBridgeIdentityProof(
+  controlToken: string,
+  nonce: string,
+  instanceId: string,
+): string {
+  return crypto.createHmac('sha256', controlToken)
+    .update(
+      `${BRIDGE_IDENTITY_CONTEXT}\n${BRIDGE_IDENTITY_PROTOCOL_VERSION}\n${nonce}\n${instanceId}`,
+    )
+    .digest('hex');
+}
 
 export function createBridgeSecurityPolicy(
   options: BridgeSecurityPolicyOptions,
@@ -129,7 +145,7 @@ export function createBridgeSecurityPolicy(
 
 export function resolveBridgeRouteScope(method: string, rawUrl: string): BridgeRouteScope {
   const url = rawUrl.split('?')[0] ?? rawUrl;
-  if (method.toUpperCase() === 'OPTIONS' || url === '/health') {
+  if (method.toUpperCase() === 'OPTIONS' || url === '/health' || url === '/identity') {
     return 'public';
   }
   if (url === '/workspace/runs' || url.startsWith('/workspace/runs/')) {

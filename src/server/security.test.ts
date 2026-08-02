@@ -1,6 +1,10 @@
+import crypto from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  BRIDGE_IDENTITY_PRODUCT,
+  BRIDGE_IDENTITY_PROTOCOL_VERSION,
+  createBridgeIdentityProof,
   createBridgeSecurityPolicy,
   resolveBridgeRouteScope,
 } from './security.ts';
@@ -27,6 +31,7 @@ test('security policy requires distinct strong control and browser tokens by def
 
 test('route scopes separate browser lifecycle from privileged control endpoints', () => {
   assert.equal(resolveBridgeRouteScope('GET', '/health'), 'public');
+  assert.equal(resolveBridgeRouteScope('GET', '/identity?nonce=test'), 'public');
   assert.equal(resolveBridgeRouteScope('POST', '/browser/claim'), 'browser');
   assert.equal(resolveBridgeRouteScope('GET', '/browser/events?cursor=1'), 'browser');
   assert.equal(resolveBridgeRouteScope('POST', '/operations/preview'), 'control');
@@ -130,4 +135,22 @@ test('explicit insecure development mode does not silently authorize privileged 
   assert.equal(policy.authorize({ scope: 'control' }), true);
   assert.equal(policy.authorize({ scope: 'browser', origin: EXTENSION_A }), true);
   assert.equal(policy.authorize({ scope: 'browser', origin: 'https://malicious.example' }), false);
+});
+
+
+test('bridge identity proof is nonce- and instance-bound', () => {
+  const nonce = 'a'.repeat(64);
+  const instanceId = '123e4567-e89b-42d3-a456-426614174000';
+  const proof = createBridgeIdentityProof(CONTROL_TOKEN, nonce, instanceId);
+  assert.match(proof, /^[a-f0-9]{64}$/u);
+  assert.equal(BRIDGE_IDENTITY_PRODUCT, 'openbrowser-bridge');
+  assert.equal(BRIDGE_IDENTITY_PROTOCOL_VERSION, 1);
+  assert.notEqual(
+    proof,
+    createBridgeIdentityProof(CONTROL_TOKEN, 'b'.repeat(64), instanceId),
+  );
+  assert.notEqual(
+    proof,
+    createBridgeIdentityProof(CONTROL_TOKEN, nonce, crypto.randomUUID()),
+  );
 });
