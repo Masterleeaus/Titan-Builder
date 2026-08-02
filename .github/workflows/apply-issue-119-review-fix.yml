@@ -1,0 +1,139 @@
+name: Apply issue 119 review fixes
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-issue-119-review-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-verify-publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact final branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: fix/issue-119-repository-identity-approvals-final
+          fetch-depth: 0
+
+      - name: Confirm expected final head
+        env:
+          EXPECTED_HEAD: 6a3a1c96197085320d52d864d66ca7739012c2d3
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Apply review readability and typing fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('src/server/index.ts')
+          source = source_path.read_text()
+
+          import_before = '''import {
+            assertRepositoryApprovalPolicy,
+            captureRepositoryIdentity,
+            normalizeProtectedBranches,
+            sameRepositoryIdentity,
+          } from '../security/repository-identity.js';'''
+          import_after = '''import {
+            assertRepositoryApprovalPolicy,
+            captureRepositoryIdentity,
+            normalizeProtectedBranches,
+            sameRepositoryIdentity,
+            type RepositoryIdentity,
+          } from '../security/repository-identity.js';'''
+          if source.count(import_before) != 1:
+              raise SystemExit('repository identity import block was not found exactly once')
+          source = source.replace(import_before, import_after, 1)
+
+          approvals_before = "import { createOperationApprovalStore } from './operation-approvals.js';"
+          approvals_after = "import {\n  createOperationApprovalStore,\n  type OperationApprovalInspection,\n} from './operation-approvals.js';"
+          if source.count(approvals_before) != 1:
+              raise SystemExit('operation approval import was not found exactly once')
+          source = source.replace(approvals_before, approvals_after, 1)
+
+          setup_before = '''  const projectRoot = await canonicalizeProjectRoot(options.projectRoot ?? process.cwd());
+
+          const protectedBranches = normalizeProtectedBranches(
+            options.protectedBranches ?? process.env.OPENBROWSER_PROTECTED_BRANCHES,
+          );
+            const insecureDevelopment = options.allowInsecureDev ?? process.env.OPENBROWSER_INSECURE_DEV === '1';'''
+          setup_after = '''  const projectRoot = await canonicalizeProjectRoot(options.projectRoot ?? process.cwd());
+          const protectedBranches = normalizeProtectedBranches(
+            options.protectedBranches ?? process.env.OPENBROWSER_PROTECTED_BRANCHES,
+          );
+          const insecureDevelopment = options.allowInsecureDev ?? process.env.OPENBROWSER_INSECURE_DEV === '1';'''
+          if source.count(setup_before) != 1:
+              raise SystemExit('protected branch setup block was not found exactly once')
+          source = source.replace(setup_before, setup_after, 1)
+
+          policy_before = '''  try {
+            assertRepositoryApprovalPolicy(identityAfterPlan, protectedBranches);
+          } catch (error) {
+            return reply.code(403).send({
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+
+            return {'''
+          policy_after = '''    try {
+              assertRepositoryApprovalPolicy(identityAfterPlan, protectedBranches);
+            } catch (error) {
+              return reply.code(403).send({
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+
+            return {'''
+          if source.count(policy_before) != 1:
+              raise SystemExit('preview policy block was not found exactly once')
+          source = source.replace(policy_before, policy_after, 1)
+
+          replacements = {
+              '    let identityBeforeInspect;': '    let identityBeforeInspect: RepositoryIdentity;',
+              '    let inspection;': '    let inspection: OperationApprovalInspection;',
+              '    let identityBeforeConsume;': '    let identityBeforeConsume: RepositoryIdentity;',
+          }
+          for before, after in replacements.items():
+              if source.count(before) != 1:
+                  raise SystemExit(f'{before!r} was not found exactly once')
+              source = source.replace(before, after, 1)
+
+          source_path.write_text(source)
+          PY
+          git diff --check
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+          pnpm install --frozen-lockfile
+
+      - name: Verify review fixes
+        run: |
+          pnpm run typecheck
+          pnpm exec tsx --test src/security/repository-identity.test.ts src/security/repository-policy.test.ts src/server/operation-approvals.test.ts src/server/workflow.integration.ts src/server/protected-branch.integration.test.ts src/workflows/agent-application.test.ts src/workflows/agent-protected-branch.integration.test.ts
+          pnpm run build
+
+      - name: Publish verified review fixes
+        env:
+          EXPECTED_OLD_HEAD: 6a3a1c96197085320d52d864d66ca7739012c2d3
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/server/index.ts
+          git commit -m "style(security): address repository identity review feedback (#119)"
+          git push \
+            --force-with-lease=refs/heads/fix/issue-119-repository-identity-approvals-final:${EXPECTED_OLD_HEAD} \
+            origin HEAD:fix/issue-119-repository-identity-approvals-final
