@@ -165,6 +165,14 @@ export async function openProjectInternalState(
     }
   }
 
+  async function readText(relativePath: string): Promise<string> {
+    return (await readBuffer(relativePath)).toString('utf8');
+  }
+
+  async function readJson<T>(relativePath: string): Promise<T> {
+    return JSON.parse(await readText(relativePath)) as T;
+  }
+
   async function writeBuffer(relativePath: string, content: Uint8Array): Promise<void> {
     await assertAuthority();
     let target = await resolveFile(relativePath, {
@@ -221,6 +229,33 @@ export async function openProjectInternalState(
     }
   }
 
+  async function writeText(relativePath: string, content: string): Promise<void> {
+    await writeBuffer(relativePath, Buffer.from(content, 'utf8'));
+  }
+
+  async function writeJson(relativePath: string, value: unknown): Promise<void> {
+    await writeText(relativePath, `${JSON.stringify(value, null, 2)}\n`);
+  }
+
+  async function ensureJson(relativePath: string, value: unknown): Promise<void> {
+    if (!(await fileExists(relativePath))) {
+      await writeJson(relativePath, value);
+    }
+  }
+
+  async function copyFromFile(relativePath: string, sourcePath: string): Promise<void> {
+    const source = await open(sourcePath, fsConstants.O_RDONLY | NO_FOLLOW);
+    try {
+      const metadata = await source.stat();
+      if (!metadata.isFile() || metadata.isSymbolicLink()) {
+        throw new Error(`Rollback source is not a regular file: ${sourcePath}`);
+      }
+      await writeBuffer(relativePath, await source.readFile());
+    } finally {
+      await source.close();
+    }
+  }
+
   async function removeTree(relativePath: string): Promise<void> {
     const segments = normalizeRelativePath(relativePath, false);
     const normalized = segments.join(path.sep);
@@ -237,36 +272,13 @@ export async function openProjectInternalState(
     ensureDirectory,
     fileExists,
     readBuffer,
-    async readText(relativePath) {
-      return (await readBuffer(relativePath)).toString('utf8');
-    },
-    async readJson<T>(relativePath: string): Promise<T> {
-      return JSON.parse((await readBuffer(relativePath)).toString('utf8')) as T;
-    },
+    readText,
+    readJson,
     writeBuffer,
-    async writeText(relativePath, content) {
-      await writeBuffer(relativePath, Buffer.from(content, 'utf8'));
-    },
-    async writeJson(relativePath, value) {
-      await writeBuffer(relativePath, Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8'));
-    },
-    async ensureJson(relativePath, value) {
-      if (!(await fileExists(relativePath))) {
-        await this.writeJson(relativePath, value);
-      }
-    },
-    async copyFromFile(relativePath, sourcePath) {
-      const source = await open(sourcePath, fsConstants.O_RDONLY | NO_FOLLOW);
-      try {
-        const metadata = await source.stat();
-        if (!metadata.isFile() || metadata.isSymbolicLink()) {
-          throw new Error(`Rollback source is not a regular file: ${sourcePath}`);
-        }
-        await writeBuffer(relativePath, await source.readFile());
-      } finally {
-        await source.close();
-      }
-    },
+    writeText,
+    writeJson,
+    ensureJson,
+    copyFromFile,
     removeTree,
   };
 }
