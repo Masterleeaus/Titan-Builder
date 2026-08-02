@@ -57,8 +57,8 @@ test('npm, pnpm, direct tools, and legacy commands receive sanitized environment
     name: 'child-environment-fixture',
     private: true,
     scripts: {
-      test: 'node inspect-env.mjs',
-      build: 'node inspect-env.mjs',
+      'test:env': 'node inspect-env.mjs',
+      'build:env': 'node inspect-env.mjs',
     },
   }, null, 2), 'utf8');
 
@@ -78,7 +78,7 @@ test('npm, pnpm, direct tools, and legacy commands receive sanitized environment
       {
         action: 'RUN_TOOL',
         tool: 'npm.run',
-        args: ['test'],
+        args: ['test:env'],
         env: ['CUSTOM_BUILD_FLAG'],
       },
     ], projectRoot);
@@ -86,7 +86,7 @@ test('npm, pnpm, direct tools, and legacy commands receive sanitized environment
       {
         action: 'RUN_TOOL',
         tool: 'pnpm.run',
-        args: ['build'],
+        args: ['build:env'],
       },
     ], projectRoot);
     await executeOperations([
