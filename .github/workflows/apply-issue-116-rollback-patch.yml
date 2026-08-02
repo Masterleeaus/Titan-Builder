@@ -1,0 +1,36 @@
+name: Apply issue 116 rollback patch
+
+on:
+  push:
+    branches:
+      - fix/issue-116-rollback-path-containment
+    paths:
+      - .github/workflows/apply-issue-116-rollback-patch.yml
+      - scripts/apply-issue-116-rollback-patch.mjs
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/issue-116-rollback-path-containment
+          fetch-depth: 0
+
+      - name: Apply guarded transaction patch
+        run: node scripts/apply-issue-116-rollback-patch.mjs
+
+      - name: Remove temporary patch machinery
+        run: rm scripts/apply-issue-116-rollback-patch.mjs .github/workflows/apply-issue-116-rollback-patch.yml
+
+      - name: Commit patched transaction engine
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(security): revalidate rollback mutations"
+          git push origin HEAD:fix/issue-116-rollback-path-containment
