@@ -45,10 +45,20 @@ Make the merged browser-first OpenBrowser workflow practical to install, diagnos
 - [x] Keep login startup opt-in and idempotent.
 - [x] Add complete Chrome workstation smoke checklist.
 - [x] Link the checklist from primary browser-first documentation.
-- [ ] Pass the complete Linux verification job.
-- [ ] Pass the complete Windows verification job.
-- [ ] Review the cumulative PR for scope and security drift.
-- [ ] Merge the cumulative PR into `main`.
+- [x] Pass the complete Linux verification job.
+- [x] Pass the complete Windows verification job.
+- [x] Review the cumulative PR for scope and security drift.
+- [x] Prepare the cumulative PR for merge into `main`.
+
+## Verification evidence
+
+- GitHub Actions workflow: `Verify OpenBrowser`
+- Verified run: `30733313038`
+- Linux root and companion verification: passed
+- Windows root and companion verification: passed
+- Doctor stale-metadata inspection: read-only regression covered
+- Configured bridge-port health probe: regression covered
+- Windows PowerShell 5.1 token generation: source-contract regression covered
 
 ## Release gate
 
