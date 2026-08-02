@@ -30,6 +30,7 @@ import {
   captureRepositoryIdentity,
   normalizeProtectedBranches,
   sameRepositoryIdentity,
+  type RepositoryIdentity,
 } from '../security/repository-identity.js';
 import { logger } from '../shared/index.js';
 import {
@@ -51,7 +52,10 @@ import {
   SMALL_BODY_LIMIT_BYTES,
 } from './body-limits.js';
 import { registerBrowserWorkflowRoutes } from './browser-workflow-routes.js';
-import { createOperationApprovalStore } from './operation-approvals.js';
+import {
+  createOperationApprovalStore,
+  type OperationApprovalInspection,
+} from './operation-approvals.js';
 import {
   createBridgeSecurityPolicy,
   parseAllowedExtensionOrigins,
@@ -308,6 +312,7 @@ const protectedBranches = normalizeProtectedBranches(
         error: 'Operation preview is stale because repository identity changed during planning',
       });
     }
+
   try {
     assertRepositoryApprovalPolicy(identityAfterPlan, protectedBranches);
   } catch (error) {
@@ -332,7 +337,7 @@ const protectedBranches = normalizeProtectedBranches(
       return reply.code(400).send({ error: 'approvalToken is required' });
     }
 
-    let identityBeforeInspect;
+    let identityBeforeInspect: RepositoryIdentity;
     try {
       identityBeforeInspect = await captureRepositoryIdentity(projectRoot);
     } catch (error) {
@@ -341,7 +346,7 @@ const protectedBranches = normalizeProtectedBranches(
       });
     }
 
-    let inspection;
+    let inspection: OperationApprovalInspection;
     try {
       inspection = operationApprovals.inspect(body.approvalToken, {
         projectRoot: identityBeforeInspect.projectRoot,
@@ -356,7 +361,7 @@ const protectedBranches = normalizeProtectedBranches(
       return reply.code(403).send({ error: message });
     }
 
-    let identityBeforeConsume;
+    let identityBeforeConsume: RepositoryIdentity;
     try {
       identityBeforeConsume = await captureRepositoryIdentity(identityBeforeInspect.projectRoot);
     } catch (error) {
