@@ -27,6 +27,13 @@ test('installer links the CLI, runs the doctor, and prints the canonical extensi
   assert.match(script, /Load unpacked:\s+\$CompanionRoot/iu);
 });
 
+test('token generation remains compatible with Windows PowerShell 5.1', () => {
+  assert.match(script, /RandomNumberGenerator\]::Create\(\)/iu);
+  assert.match(script, /\.GetBytes\(\$tokenBytes\)/iu);
+  assert.match(script, /\.GetBytes\(\$browserTokenBytes\)/iu);
+  assert.doesNotMatch(script, /RandomNumberGenerator\]::Fill/iu);
+});
+
 test('background startup remains explicit and opt in', () => {
   assert.match(script, /param\([\s\S]*\[switch\]\$EnableBackgroundService[\s\S]*\)/iu);
   assert.match(script, /if\s*\(\$EnableBackgroundService\)\s*\{/iu);
