@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "1",
+  "id": "titan.guidance.systematic-debugging",
+  "name": "Systematic Debugging",
+  "version": "1.0.0",
+  "status": "stable",
+  "kind": "guidance",
+  "category": "debugging",
+  "description": "Trace evidence and isolate the root cause before changing implementation code.",
+  "owner": "Titan Builder",
+  "runtimeTargets": [
+    "extension-background",
+    "extension-sidepanel"
+  ],
+  "instructions": "Reproduce or trace the defect, identify the root cause, then make the smallest coherent fix and verify it with focused tests.",
+  "inputs": {
+    "type": "object",
+    "properties": {
+      "task": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "task"
+    ],
+    "additionalProperties": false
+  },
+  "outputs": {
+    "type": "object",
+    "properties": {
+      "promptBlock": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "promptBlock"
+    ],
+    "additionalProperties": false
+  },
+  "dependencies": [],
+  "capabilities": [],
+  "risk": "READ",
+  "approval": "none",
+  "tags": [
+    "debugging",
+    "root-cause"
+  ],
+  "aliases": [
+    "debugging"
+  ],
+  "compatibility": {
+    "minTitanVersion": "0.5.0",
+    "platforms": [
+      "browser"
+    ]
+  }
+}
