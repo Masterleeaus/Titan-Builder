@@ -6,6 +6,8 @@
 - Base branch: `main`
 - Active batch branch: `feature/prompt-library-batch-04-06`
 - Batch base commit: `dce29ffd304718a8ce0092b4f0a0f7f1dfbcf144`
+- Current observed `main`: `80bd8640750897cf7d8bb061f0d208f6789c1fc4`
+- Batch branch drift: five commits behind current `main`; reconciliation required before the Pass 06 pull request
 - Batch passes: Pass 04, Pass 05, and Pass 06
 - Batch merge policy: open one pull request and merge only after Pass 06
 - Last merged prompt pass branch: `feature/prompt-library-pass-03`
@@ -345,12 +347,14 @@ A future migration pass must create a deterministic loader before the Markdown l
 - [x] Preserve developer-agent platform scope and exclude live business operations.
 - [x] Add Titan Zero, field-service, and cleaning-vertical platform-development roadmap categories.
 - [x] Update the pass and merge policy to three or four prompts per pass and one merge every three passes.
-- [ ] Complete final parser-aware structural verification for all four prompts.
-- [ ] Review the exact Pass 04 branch delta.
+- [x] Complete parser-aware structural verification for all four prompts: required sections, IDs, paths, versions, variables, Change Logs, placeholder scan, and score arithmetic.
+- [x] Review the exact Pass 04 branch delta: four prompts, one design, one plan, and one roadmap update; Markdown only.
+- [x] Inspect five intervening `main` commits and confirm they do not modify the prompt library or its roadmap.
 - [x] Deliberately do not open a pull request or merge after Pass 04.
 
 ## Active batch continuation
 
 - Pass 05 must continue from `feature/prompt-library-batch-04-06`.
 - Pass 06 must continue from the same branch.
+- Before the Pass 06 pull request, reconcile the branch with current `main`, including the skill-registry/runtime changes merged after the batch base.
 - The batch pull request and merge occur only after Pass 06 and successful full verification.
