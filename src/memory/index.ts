@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { lstat, realpath } from 'node:fs/promises';
 import fs from 'fs-extra';
+import { serializedReadModifyWrite } from './write-serializer.js';
 
 export const OPENBROWSER_DIR = '.openbrowser';
 
@@ -77,9 +78,14 @@ export async function appendHistory(
 ): Promise<void> {
   await ensureMemory(projectRoot);
   const historyFile = memoryPath(projectRoot, MEMORY_FILES.history);
-  const history = (await fs.readJson(historyFile)) as HistoryEntry[];
-  history.push(entry);
-  await fs.writeJson(historyFile, history, { spaces: 2 });
+  await serializedReadModifyWrite(projectRoot, {
+    filePath: historyFile,
+    transform: async (currentContent: string | null): Promise<string> => {
+      const history = currentContent ? (JSON.parse(currentContent) as HistoryEntry[]) : [];
+      history.push(entry);
+      return `${JSON.stringify(history, null, 2)}\n`;
+    },
+  });
 }
 
 export async function listHistory(projectRoot: string): Promise<HistoryEntry[]> {

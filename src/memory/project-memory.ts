@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
+import { serializedWrite } from './write-serializer.js';
 
 export interface ProjectMemoryEntry {
   id: string;
@@ -91,9 +92,8 @@ async function writeMemory(projectRoot: string, entries: ProjectMemoryEntry[]): 
   const ordered = [...entries].sort(
     (left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
   );
-  const tempPath = `${filePath}.${process.pid}.tmp`;
-  await writeFile(tempPath, `${JSON.stringify(ordered, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  await rename(tempPath, filePath);
+  const content = `${JSON.stringify(ordered, null, 2)}\n`;
+  await serializedWrite(projectRoot, { filePath, content });
 }
 
 function memoryFilePath(projectRoot: string): string {
