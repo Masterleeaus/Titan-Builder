@@ -826,10 +826,16 @@ export async function createWorkspaceServer(
     if (error instanceof WorkspaceHttpError) {
       return reply.code(error.statusCode).send({ error: error.message });
     }
-    const normalized = normalizeWorkspaceError(error);
-    return reply.code(normalized.statusCode).send({
-      error: normalized.statusCode >= 500 ? 'Workspace operation failed' : normalized.message,
-      detail: normalized.statusCode >= 500 ? normalized.message : undefined,
+    const errorRecord = typeof error === 'object' && error !== null
+      ? error as Record<string, unknown>
+      : {};
+    const statusCode = typeof errorRecord.statusCode === 'number'
+      ? errorRecord.statusCode
+      : 500;
+    const message = error instanceof Error ? error.message : String(error);
+    return reply.code(statusCode).send({
+      error: statusCode >= 500 ? 'Workspace operation failed' : message,
+      detail: statusCode >= 500 ? message : undefined,
     });
   });
 
