@@ -115,12 +115,9 @@ export interface ServerOptions {
 }
 
 export async function createBridgeServer(options: ServerOptions = {}): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false, bodyLimit: SMALL_BODY_LIMIT_BYTES });
-  app.setErrorHandler((error, request, reply) => {
-    if (isPayloadTooLargeError(error)) {
-      return reply.code(413).send(createPayloadTooLargeResponse(request));
-    }
-    return reply.send(error);
+  const app = Fastify({
+    logger: false,
+    bodyLimit: 4_194_304,
   });
   const projectRoot = await canonicalizeProjectRoot(options.projectRoot ?? process.cwd());
   const protectedBranches = normalizeProtectedBranches(
