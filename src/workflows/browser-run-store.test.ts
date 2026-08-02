@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createBrowserRunStore } from './browser-run-store.js';
+import { createBrowserRunStore } from './browser-run-store.ts';
 
 test('agent run cannot skip from waiting_for_model to applying', async () => {
   const store = createBrowserRunStore({ persistence: 'memory' });
