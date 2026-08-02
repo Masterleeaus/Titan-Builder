@@ -1,4 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { TOOL_MANIFEST_SCHEMA_VERSION } from '../tools/manifest.js';
+import { createToolKnowledgeRecords } from '../tools/knowledge.js';
+import { listToolManifests } from '../tools/registry.js';
 import { AgentApplicationError } from '../workflows/agent-application.js';
 import type { BrowserRunCoordinator } from '../workflows/browser-run-coordinator.js';
 import type {
@@ -18,6 +21,12 @@ export async function registerBrowserWorkflowRoutes(
   dependencies: BrowserWorkflowRouteDependencies,
 ): Promise<void> {
   const { coordinator } = dependencies;
+
+  app.get('/tools', async () => ({
+    schemaVersion: TOOL_MANIFEST_SCHEMA_VERSION,
+    tools: listToolManifests(),
+    knowledge: createToolKnowledgeRecords(),
+  }));
 
   app.post('/workspace/runs', async (request, reply) => {
     const body = request.body as {
