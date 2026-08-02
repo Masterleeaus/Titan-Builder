@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { GitConfiguredHelperError } from '../git/hardened-read.ts';
 import { readProjectStatus } from './status.ts';
 
 function createRepository(): string {
@@ -42,38 +43,38 @@ test('reads branch and dirty state from a git project', async () => {
   assert.equal(clean.branch.length > 0, true);
   assert.equal(clean.dirty, false);
   assert.equal(clean.changedFiles, 0);
-  assert.equal(clean.workingTreeReason, undefined);
   assert.equal(clean.packageManager, 'npm');
 
   writeFileSync(path.join(root, 'README.md'), '# changed\n');
   const dirty = await readProjectStatus(root);
   assert.equal(dirty.dirty, true);
   assert.equal(dirty.changedFiles, 1);
-  assert.equal(dirty.workingTreeReason, undefined);
 });
 
-test('automatic project status does not execute configured content filters', async () => {
+test('automatic project status refuses configured content filters before execution', async () => {
   const root = createRepository();
   const { command, sentinel } = createHelper(root);
   writeFileSync(path.join(root, '.gitattributes'), 'package.json filter=evil\n');
   execFileSync('git', ['config', 'filter.evil.clean', command], { cwd: root });
   writeFileSync(path.join(root, 'package.json'), '{"name":"changed"}\n');
 
-  const status = await readProjectStatus(root, {
-    env: {
-      ...process.env,
-      OPENBROWSER_TEST_SENTINEL: sentinel,
+  await assert.rejects(
+    readProjectStatus(root, {
+      env: {
+        ...process.env,
+        OPENBROWSER_TEST_SENTINEL: sentinel,
+      },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof GitConfiguredHelperError);
+      assert.ok(error.configKeys.includes('filter.evil.clean'));
+      return true;
     },
-  });
-
-  assert.equal(status.isGitRepository, true);
-  assert.equal(status.dirty, null);
-  assert.equal(status.changedFiles, null);
-  assert.match(status.workingTreeReason ?? '', /configured Git helpers require explicit approval/i);
+  );
   assert.equal(existsSync(sentinel), false);
 });
 
-test('automatic project status ignores user, system, and command-scope Git helper injection', async () => {
+test('automatic project status ignores user, system, and inherited command-scope helper injection', async () => {
   const root = createRepository();
   const { command, sentinel } = createHelper(root);
   const maliciousConfig = path.join(root, 'malicious.gitconfig');
@@ -99,6 +100,5 @@ test('automatic project status ignores user, system, and command-scope Git helpe
 
   assert.equal(status.dirty, true);
   assert.equal(status.changedFiles, 3);
-  assert.equal(status.workingTreeReason, undefined);
   assert.equal(existsSync(sentinel), false);
 });
