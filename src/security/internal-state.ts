@@ -69,7 +69,7 @@ export async function resolveOpenBrowserStateFile(
     const metadata = await lstat(candidate);
     assertSafeStateFile(candidate, metadata, authority.stateIdentity.device);
     const canonical = await realpath(candidate);
-    if (canonical !== candidate) {
+    if (!sameCanonicalPath(canonical, candidate)) {
       throw unsafeStateError(candidate, 'resolves through a symbolic link, junction, or redirect');
     }
   } catch (error) {
@@ -195,7 +195,7 @@ async function ensurePrivateRealDirectory(
   const metadata = await lstat(directoryPath);
   assertRealDirectory(directoryPath, metadata, expectedDevice, label);
   const canonical = await realpath(directoryPath);
-  if (canonical !== directoryPath) {
+  if (!sameCanonicalPath(canonical, directoryPath)) {
     throw unsafeStateError(label, 'is a symbolic link, junction, reparse point, or redirect');
   }
   if (process.platform !== 'win32') await chmod(directoryPath, PRIVATE_DIRECTORY_MODE);
@@ -269,11 +269,16 @@ function normalizeStatePath(value: string, allowEmpty: boolean): string[] {
     throw new Error(`OpenBrowser state path must be relative: ${raw}`);
   }
 
-  const normalized = path.normalize(raw || '.');
+  const portable = raw.replaceAll('\\', '/');
+  const normalized = path.posix.normalize(portable || '.');
   const segments = normalized === '.'
     ? []
-    : normalized.split(path.sep).filter(Boolean);
-  if (segments.some((segment) => segment === '..' || segment === '.')) {
+    : normalized.split('/').filter(Boolean);
+  if (
+    normalized === '..'
+    || normalized.startsWith('../')
+    || segments.some((segment) => segment === '..' || segment === '.')
+  ) {
     throw new Error(`OpenBrowser state path escapes the trusted state root: ${raw}`);
   }
   if (!allowEmpty && segments.length === 0) {
@@ -297,6 +302,15 @@ function identityOf(metadata: Awaited<ReturnType<typeof lstat>>): FilesystemIden
 
 function sameIdentity(left: FilesystemIdentity, right: FilesystemIdentity): boolean {
   return left.device === right.device && left.inode === right.inode;
+}
+
+function sameCanonicalPath(left: string, right: string): boolean {
+  const normalizedLeft = path.resolve(left);
+  const normalizedRight = path.resolve(right);
+  if (process.platform === 'win32') {
+    return normalizedLeft.toLocaleLowerCase('en-US') === normalizedRight.toLocaleLowerCase('en-US');
+  }
+  return normalizedLeft === normalizedRight;
 }
 
 function unsafeStateError(target: string, reason: string): Error {
