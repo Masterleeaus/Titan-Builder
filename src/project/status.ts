@@ -1,9 +1,6 @@
 import { access } from 'node:fs/promises';
 import path from 'node:path';
-import {
-  GitConfiguredHelperError,
-  runHardenedGit,
-} from '../git/hardened-read.js';
+import { runHardenedGit } from '../git/hardened-read.js';
 
 export interface ProjectStatus {
   projectRoot: string;
@@ -11,9 +8,8 @@ export interface ProjectStatus {
   isGitRepository: boolean;
   repositoryRoot?: string;
   branch: string;
-  dirty: boolean | null;
-  changedFiles: number | null;
-  workingTreeReason?: string;
+  dirty: boolean;
+  changedFiles: number;
   remote?: string;
   packageManager: 'pnpm' | 'npm' | 'yarn' | 'bun' | 'unknown';
 }
@@ -50,29 +46,15 @@ export async function readProjectStatus(
     runMetadataGit(root, ['remote', 'get-url', 'origin'], environment),
   ]);
   const repositoryRoot = repositoryRootValue || root;
-
-  let dirty: boolean | null = null;
-  let changedFiles: number | null = null;
-  let workingTreeReason: string | undefined;
-
-  try {
-    const status = await runHardenedGit(repositoryRoot, ['status', '--porcelain'], {
-      env: environment,
-      rejectConfiguredHelpers: true,
-    });
-    changedFiles = status.stdout
-      .split(/\r?\n/u)
-      .map((line) => line.trimEnd())
-      .filter(Boolean)
-      .length;
-    dirty = changedFiles > 0;
-  } catch (error) {
-    if (error instanceof GitConfiguredHelperError) {
-      workingTreeReason = 'Not inspected: configured Git helpers require explicit approval.';
-    } else {
-      workingTreeReason = 'Not inspected: hardened Git status failed.';
-    }
-  }
+  const status = await runHardenedGit(repositoryRoot, ['status', '--porcelain'], {
+    env: environment,
+    rejectConfiguredHelpers: true,
+  });
+  const changedFiles = status.stdout
+    .split(/\r?\n/u)
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .length;
 
   return {
     ...base,
@@ -80,9 +62,8 @@ export async function readProjectStatus(
     repositoryRoot,
     projectName: path.basename(repositoryRoot),
     branch: branch || 'unknown',
-    dirty,
+    dirty: changedFiles > 0,
     changedFiles,
-    workingTreeReason,
     remote: remote || undefined,
   };
 }
