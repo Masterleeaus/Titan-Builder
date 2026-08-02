@@ -3,7 +3,7 @@ name: Apply issue 116 rollback hardening
 on:
   push:
     branches:
-      - fix/issue-116-safe-rollback-revalidation-v2
+      - fix/issue-116-safe-rollback-revalidation-v3
     paths:
       - .github/scripts/apply-issue-116.mjs
       - .github/workflows/apply-issue-116.yml
@@ -25,7 +25,7 @@ jobs:
       - name: Check out working branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: fix/issue-116-safe-rollback-revalidation-v2
+          ref: fix/issue-116-safe-rollback-revalidation-v3
           fetch-depth: 0
 
       - name: Set up Node.js
@@ -86,4 +86,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/operations/index.ts src/operations/transaction.integration.test.ts .github/scripts/apply-issue-116.mjs .github/workflows/apply-issue-116.yml
           git commit -m "fix(security): revalidate rollback paths before mutation (#116)"
-          git push origin HEAD:fix/issue-116-safe-rollback-revalidation-v2
+          git push origin HEAD:fix/issue-116-safe-rollback-revalidation-v3
