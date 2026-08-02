@@ -32,9 +32,6 @@ export function validateResolvedToolInvocation(
   if (!Array.isArray(candidate.args)) {
     throw new Error(`Tool ${manifest.runtimeId} arguments must be an array`);
   }
-  if (!candidate.env || typeof candidate.env !== 'object' || Array.isArray(candidate.env)) {
-    throw new Error(`Tool ${manifest.runtimeId} environment must be an object`);
-  }
 
   const args = candidate.args.map((argument, index) => {
     if (typeof argument !== 'string' || argument.length > 300 || CONTROL_CHARACTERS.test(argument)) {
@@ -44,25 +41,10 @@ export function validateResolvedToolInvocation(
   });
   Object.freeze(args);
 
-  const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(candidate.env)) {
-    if (!key || key.includes('=') || key.includes('\0')) {
-      throw new Error(`Tool ${manifest.runtimeId} environment key is invalid`);
-    }
-    if (value !== undefined && typeof value !== 'string') {
-      throw new Error(`Tool ${manifest.runtimeId} environment value for ${key} is invalid`);
-    }
-    if (value !== undefined) {
-      env[key] = value;
-    }
-  }
-  Object.freeze(env);
-
   return Object.freeze({
     toolId: candidate.toolId,
     executable: candidate.executable,
     args,
-    env,
     cwd: candidate.cwd,
     risk: candidate.risk,
     displayCommand: candidate.displayCommand,
