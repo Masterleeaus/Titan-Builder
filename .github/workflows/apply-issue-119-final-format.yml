@@ -1,0 +1,112 @@
+name: Apply issue 119 final formatting corrections
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-issue-119-final-format.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-verify-publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact issue branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: fix/issue-119-repository-identity-approvals-final
+          fetch-depth: 0
+
+      - name: Confirm expected issue head
+        env:
+          EXPECTED_HEAD: 9b123d675bff3b9414871a75ae1a1a8637b1fe0c
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Correct the two reviewed indentation blocks
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('src/server/index.ts')
+          source = source_path.read_text()
+
+          setup_before = (
+              "  const projectRoot = await canonicalizeProjectRoot(options.projectRoot ?? process.cwd());\n"
+              "\n"
+              "const protectedBranches = normalizeProtectedBranches(\n"
+              "  options.protectedBranches ?? process.env.OPENBROWSER_PROTECTED_BRANCHES,\n"
+              ");\n"
+              "  const insecureDevelopment = options.allowInsecureDev ?? process.env.OPENBROWSER_INSECURE_DEV === '1';"
+          )
+          setup_after = (
+              "  const projectRoot = await canonicalizeProjectRoot(options.projectRoot ?? process.cwd());\n"
+              "  const protectedBranches = normalizeProtectedBranches(\n"
+              "    options.protectedBranches ?? process.env.OPENBROWSER_PROTECTED_BRANCHES,\n"
+              "  );\n"
+              "  const insecureDevelopment = options.allowInsecureDev ?? process.env.OPENBROWSER_INSECURE_DEV === '1';"
+          )
+          if source.count(setup_before) != 1:
+              raise SystemExit('protectedBranches setup block was not found exactly once')
+          source = source.replace(setup_before, setup_after, 1)
+
+          policy_before = (
+              "\n  try {\n"
+              "    assertRepositoryApprovalPolicy(identityAfterPlan, protectedBranches);\n"
+              "  } catch (error) {\n"
+              "    return reply.code(403).send({\n"
+              "      error: error instanceof Error ? error.message : String(error),\n"
+              "    });\n"
+              "  }\n"
+              "\n"
+              "    return {"
+          )
+          policy_after = (
+              "\n    try {\n"
+              "      assertRepositoryApprovalPolicy(identityAfterPlan, protectedBranches);\n"
+              "    } catch (error) {\n"
+              "      return reply.code(403).send({\n"
+              "        error: error instanceof Error ? error.message : String(error),\n"
+              "      });\n"
+              "    }\n"
+              "\n"
+              "    return {"
+          )
+          if source.count(policy_before) != 1:
+              raise SystemExit('preview policy block was not found exactly once')
+          source_path.write_text(source.replace(policy_before, policy_after, 1))
+          PY
+          git diff --check
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+          pnpm install --frozen-lockfile
+
+      - name: Verify corrected source
+        run: |
+          pnpm run typecheck
+          pnpm exec tsx --test src/security/repository-identity.test.ts src/security/repository-policy.test.ts src/server/operation-approvals.test.ts src/server/workflow.integration.ts src/server/protected-branch.integration.test.ts src/workflows/agent-application.test.ts src/workflows/agent-protected-branch.integration.test.ts
+          pnpm run build
+
+      - name: Publish verified correction
+        env:
+          EXPECTED_OLD_HEAD: 9b123d675bff3b9414871a75ae1a1a8637b1fe0c
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/server/index.ts
+          git commit -m "style(security): align repository approval control flow (#119)"
+          git push \
+            --force-with-lease=refs/heads/fix/issue-119-repository-identity-approvals-final:${EXPECTED_OLD_HEAD} \
+            origin HEAD:fix/issue-119-repository-identity-approvals-final
