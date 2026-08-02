@@ -219,7 +219,19 @@ function hashApprovalBinding(
 ): string {
   return crypto
     .createHash('sha256')
-    .update(stableSerialize({ version: 2, ...record }))
+    .update(
+      stableSerialize({
+        version: 2,
+        runId: record.runId,
+        projectRoot: record.projectRoot,
+        conversationId: record.conversationId,
+        previewRevision: record.previewRevision,
+        selectedOperationIds: record.selectedOperationIds,
+        selectedPreviewRevision: record.selectedPreviewRevision,
+        plans: record.plans,
+        expiresAt: record.expiresAt,
+      }),
+    )
     .digest('hex');
 }
 
