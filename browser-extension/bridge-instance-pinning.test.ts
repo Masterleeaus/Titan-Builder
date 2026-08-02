@@ -1,104 +1,113 @@
 import crypto from 'node:crypto';
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createWorkspaceServer } from './bridge-server.js';
+import http from 'node:http';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
+import { afterEach, describe, expect, it } from 'vitest';
+import { requestAuthenticatedBridge } from './bridge-connection-transport.js';
+import { parseTrustedBridgeEndpoint } from './bridge-trust.js';
 
-const WORKSPACE_TOKEN = 'workspace-test-token-1234567890';
 const BRIDGE_TOKEN = 'bridge-test-token-12345678901234567890';
-const BRIDGE_PORT = 51234;
 const INSTANCE_A = '12345678-1234-4234-8234-123456789abc';
 const INSTANCE_B = '87654321-4321-4321-8321-cba987654321';
-const temporaryDirectories: string[] = [];
+const servers: http.Server[] = [];
 
-async function temporaryDirectory(prefix: string): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  temporaryDirectories.push(directory);
-  return directory;
+function signedIdentity(input: {
+  nonce: string;
+  instanceId: string;
+  address: string;
+  port: number;
+}) {
+  const unsigned = {
+    protocol: 'openbrowser-bridge' as const,
+    version: '1' as const,
+    instanceId: input.instanceId,
+    nonce: input.nonce,
+    address: input.address,
+    port: input.port,
+  };
+  return {
+    ...unsigned,
+    mac: crypto
+      .createHmac('sha256', BRIDGE_TOKEN)
+      .update(JSON.stringify([
+        unsigned.protocol,
+        unsigned.version,
+        unsigned.instanceId,
+        unsigned.nonce,
+        unsigned.address,
+        unsigned.port,
+      ]))
+      .digest('hex'),
+  };
 }
 
-function signedIdentity(nonce: string, instanceId: string): Response {
-  const unsigned = {
-    protocol: 'openbrowser-bridge',
-    version: '1',
-    instanceId,
-    nonce,
-    address: '127.0.0.1',
-    port: BRIDGE_PORT,
-  };
-  const mac = crypto
-    .createHmac('sha256', BRIDGE_TOKEN)
-    .update(JSON.stringify([
-      unsigned.protocol,
-      unsigned.version,
-      unsigned.instanceId,
-      unsigned.nonce,
-      unsigned.address,
-      unsigned.port,
-    ]))
-    .digest('hex');
-  return new Response(JSON.stringify({ ...unsigned, mac }), { status: 200 });
+async function listen(server: http.Server): Promise<{ url: string; port: number }> {
+  servers.push(server);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address() as AddressInfo;
+  return { url: `http://127.0.0.1:${address.port}`, port: address.port };
 }
 
 afterEach(async () => {
-  await Promise.all(temporaryDirectories.splice(0).map((directory) =>
-    fs.rm(directory, { recursive: true, force: true })));
+  await Promise.all(servers.splice(0).map(async (server) => {
+    if (!server.listening) return;
+    server.closeAllConnections?.();
+    server.close();
+    await once(server, 'close');
+  }));
 });
 
 describe('bridge instance pinning', () => {
-  it('refuses to send the control token after the authenticated bridge instance changes', async () => {
-    const databaseDirectory = await temporaryDirectory('workspace-pinning-db-');
+  it('refuses bearer delivery after the authenticated bridge instance changes', async () => {
     let identityChecks = 0;
     let privilegedRequests = 0;
-
-    const bridgeFetch = vi.fn<typeof fetch>(async (input, init) => {
-      const url = new URL(String(input));
+    const authorizations: Array<string | undefined> = [];
+    const server = http.createServer((request, response) => {
+      authorizations.push(request.headers.authorization);
+      const url = new URL(request.url ?? '/', 'http://127.0.0.1');
       if (url.pathname === '/bridge/identity') {
-        expect(init?.headers).toBeUndefined();
-        const nonce = url.searchParams.get('nonce') ?? '';
         identityChecks += 1;
-        return signedIdentity(nonce, identityChecks === 1 ? INSTANCE_A : INSTANCE_B);
+        const nonce = url.searchParams.get('nonce') ?? '';
+        response.setHeader('Content-Type', 'application/json');
+        response.setHeader('Connection', 'keep-alive');
+        response.end(JSON.stringify(signedIdentity({
+          nonce,
+          instanceId: identityChecks === 1 ? INSTANCE_A : INSTANCE_B,
+          address: request.socket.localAddress ?? '127.0.0.1',
+          port: request.socket.localPort ?? 0,
+        })));
+        return;
       }
 
       privilegedRequests += 1;
-      expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${BRIDGE_TOKEN}`);
-      return new Response(JSON.stringify({ entries: [] }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ entries: [] }));
     });
+    const listening = await listen(server);
+    const endpoint = parseTrustedBridgeEndpoint(listening.url, [listening.port]);
 
-    const app = await createWorkspaceServer({
-      workspaceToken: WORKSPACE_TOKEN,
-      databasePath: path.join(databaseDirectory, 'workspace.db'),
-      bridgeToken: BRIDGE_TOKEN,
-      bridgeUrl: `http://127.0.0.1:${BRIDGE_PORT}`,
-      bridgeAllowedPorts: [BRIDGE_PORT],
-      bridgeFetch,
+    const first = await requestAuthenticatedBridge({
+      endpoint,
+      controlToken: BRIDGE_TOKEN,
+      method: 'GET',
+      route: '/project/memory',
     });
+    expect(first.status).toBe(200);
 
-    try {
-      const first = await app.inject({
-        method: 'GET',
-        url: '/project/memory',
-        headers: { authorization: `Bearer ${WORKSPACE_TOKEN}` },
-      });
-      expect(first.statusCode).toBe(200);
+    await expect(requestAuthenticatedBridge({
+      endpoint,
+      controlToken: BRIDGE_TOKEN,
+      method: 'GET',
+      route: '/project/memory',
+    })).rejects.toThrow(/instance.*changed/i);
 
-      const second = await app.inject({
-        method: 'GET',
-        url: '/project/memory',
-        headers: { authorization: `Bearer ${WORKSPACE_TOKEN}` },
-      });
-      expect(second.statusCode).toBe(503);
-      expect(second.json()).toMatchObject({
-        detail: expect.stringMatching(/instance.*changed/i),
-      });
-      expect(identityChecks).toBe(2);
-      expect(privilegedRequests).toBe(1);
-    } finally {
-      await app.close();
-    }
+    expect(identityChecks).toBe(2);
+    expect(privilegedRequests).toBe(1);
+    expect(authorizations).toEqual([
+      undefined,
+      `Bearer ${BRIDGE_TOKEN}`,
+      undefined,
+    ]);
   });
 });

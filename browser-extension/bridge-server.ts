@@ -12,10 +12,10 @@ import { WebSocket, WebSocketServer } from 'ws';
 import yazl from 'yazl';
 import { z } from 'zod';
 import {
-  assertSameTrustedOrigin,
-  parseTrustedBridgeEndpoint,
-  verifyBridgeIdentity,
-} from './bridge-trust.js';
+  BridgeConnectionError,
+  requestAuthenticatedBridge,
+} from './bridge-connection-transport.js';
+import { parseTrustedBridgeEndpoint } from './bridge-trust.js';
 
 config();
 
@@ -72,7 +72,7 @@ export interface WorkspaceServerOptions {
   bridgeToken?: string;
   bridgeUrl?: string;
   bridgeAllowedPorts?: number[];
-  bridgeFetch?: typeof fetch;
+  bridgeRequest?: typeof requestAuthenticatedBridge;
 }
 
 class WorkspaceHttpError extends Error {
@@ -720,7 +720,7 @@ export async function createWorkspaceServer(
   );
   const bridgeUrl = bridgeEndpoint.origin;
   const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;
-  const bridgeFetch = options.bridgeFetch ?? fetch;
+  const authenticatedBridgeRequest = options.bridgeRequest ?? requestAuthenticatedBridge;
   const databasePath = path.resolve(
     options.databasePath
       ?? process.env.WORKSPACE_DB_PATH
@@ -789,18 +789,23 @@ export async function createWorkspaceServer(
     if (!bridgeToken) {
       throw new WorkspaceHttpError('BRIDGE_TOKEN is required for main-bridge operations', 503);
     }
-    await verifyBridgeIdentity(bridgeEndpoint, bridgeToken, bridgeFetch);
-    const response = await bridgeFetch(new URL(route, bridgeEndpoint.origin), {
-      method,
-      redirect: 'manual',
-      headers: {
-        Authorization: `Bearer ${bridgeToken}`,
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(60_000),
-    });
-    assertSameTrustedOrigin(response, bridgeEndpoint);
+
+    let response: Response;
+    try {
+      response = await authenticatedBridgeRequest({
+        endpoint: bridgeEndpoint,
+        controlToken: bridgeToken,
+        method,
+        route,
+        body,
+      });
+    } catch (error) {
+      if (error instanceof BridgeConnectionError) {
+        throw new WorkspaceHttpError(error.message, error.statusCode);
+      }
+      throw error;
+    }
+
     const text = await response.text();
     let payload: unknown = text;
     if (text) {
