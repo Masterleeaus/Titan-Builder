@@ -14,7 +14,11 @@ import {
   createIntegrityBoundPreparedArtifact,
   verifyIntegrityBoundPreparedArtifact,
 } from './browser-run-integrity.ts';
-import type { BrowserRunRecord } from './browser-run-types.js';
+import type {
+  BrowserRunRecord,
+  BrowserRunStatus,
+  BrowserRunTransitionPatch,
+} from './browser-run-types.js';
 
 export type {
   BrowserPreparedArtifact,
@@ -25,6 +29,13 @@ export type {
 } from './browser-run-store-core.ts';
 export { getBrowserRunDirectory } from './browser-run-store-core.ts';
 
+const TERMINAL_STATUSES = new Set<BrowserRunStatus>([
+  'completed',
+  'rejected',
+  'cancelled',
+  'failed',
+]);
+
 export function createBrowserRunStore(
   options: BrowserRunStoreOptions = {},
 ): BrowserRunStore {
@@ -32,53 +43,96 @@ export function createBrowserRunStore(
   const persistence = options.persistence ?? 'disk';
   const runsDir = getBrowserRunDirectory(options);
   const quarantined = new Set<string>();
+  const preparedBases = new Map<string, BrowserPreparedArtifact>();
+
+  async function setPrepared(
+    runId: string,
+    artifact: BrowserPreparedArtifact,
+  ): Promise<void> {
+    const record = await requireRecord(inner, runId);
+    const events = await readAuditEvents(inner, runId, persistence, runsDir);
+    const baseArtifact = structuredClone(artifact);
+    const envelope = createIntegrityBoundPreparedArtifact(runId, record, baseArtifact, events);
+    preparedBases.set(runId, baseArtifact);
+    quarantined.delete(runId);
+    await inner.setPrepared(runId, envelope as BrowserPreparedArtifact);
+  }
+
+  async function getPrepared(runId: string): Promise<BrowserPreparedArtifact | null> {
+    const record = await requireRecord(inner, runId);
+    if (quarantined.has(runId)) return null;
+
+    let candidate: unknown;
+    try {
+      candidate = persistence === 'disk'
+        ? await readPreparedArtifactFile(runsDir, runId)
+        : await inner.getPrepared(runId);
+    } catch (error) {
+      await quarantinePreparedArtifact(inner, runsDir, runId, persistence, quarantined, error);
+      preparedBases.delete(runId);
+      return null;
+    }
+    if (candidate === null) {
+      if (requiresPreparedArtifact(record)) {
+        await quarantinePreparedArtifact(
+          inner,
+          runsDir,
+          runId,
+          persistence,
+          quarantined,
+          new BrowserRunIntegrityError('Prepared artifact is missing for a recoverable approval run'),
+        );
+      }
+      preparedBases.delete(runId);
+      return null;
+    }
+
+    try {
+      const events = await readAuditEvents(inner, runId, persistence, runsDir);
+      const verified = verifyIntegrityBoundPreparedArtifact(candidate, runId, record, events);
+      preparedBases.set(runId, structuredClone(verified));
+      return verified;
+    } catch (error) {
+      await quarantinePreparedArtifact(inner, runsDir, runId, persistence, quarantined, error);
+      preparedBases.delete(runId);
+      return null;
+    }
+  }
+
+  async function transition(
+    runId: string,
+    status: BrowserRunStatus,
+    patch: BrowserRunTransitionPatch = {},
+  ): Promise<BrowserRunRecord> {
+    const current = await requireRecord(inner, runId);
+    const mustRebindApprovalState = status === 'awaiting_approval'
+      && (current.status === 'validating_response' || current.status === 'applying');
+
+    let prepared: BrowserPreparedArtifact | null = null;
+    if (mustRebindApprovalState) {
+      prepared = preparedBases.get(runId) ?? await getPrepared(runId);
+      if (!prepared) {
+        throw new BrowserRunIntegrityError(
+          'Cannot enter awaiting approval without a verified prepared artifact',
+        );
+      }
+    }
+
+    const updated = await inner.transition(runId, status, patch);
+    if (prepared) {
+      await setPrepared(runId, prepared);
+    }
+    if (TERMINAL_STATUSES.has(status)) {
+      preparedBases.delete(runId);
+    }
+    return updated;
+  }
 
   return {
     ...inner,
-
-    async setPrepared(runId, artifact) {
-      const record = await requireRecord(inner, runId);
-      const events = await readAuditEvents(inner, runId, persistence, runsDir);
-      const envelope = createIntegrityBoundPreparedArtifact(runId, record, artifact, events);
-      quarantined.delete(runId);
-      await inner.setPrepared(runId, envelope as BrowserPreparedArtifact);
-    },
-
-    async getPrepared(runId) {
-      const record = await requireRecord(inner, runId);
-      if (quarantined.has(runId)) return null;
-
-      let candidate: unknown;
-      try {
-        candidate = persistence === 'disk'
-          ? await readPreparedArtifactFile(runsDir, runId)
-          : await inner.getPrepared(runId);
-      } catch (error) {
-        await quarantinePreparedArtifact(inner, runsDir, runId, persistence, quarantined, error);
-        return null;
-      }
-      if (candidate === null) {
-        if (requiresPreparedArtifact(record)) {
-          await quarantinePreparedArtifact(
-            inner,
-            runsDir,
-            runId,
-            persistence,
-            quarantined,
-            new BrowserRunIntegrityError('Prepared artifact is missing for a recoverable approval run'),
-          );
-        }
-        return null;
-      }
-
-      try {
-        const events = await readAuditEvents(inner, runId, persistence, runsDir);
-        return verifyIntegrityBoundPreparedArtifact(candidate, runId, record, events);
-      } catch (error) {
-        await quarantinePreparedArtifact(inner, runsDir, runId, persistence, quarantined, error);
-        return null;
-      }
-    },
+    transition,
+    setPrepared,
+    getPrepared,
   };
 }
 
