@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { openProjectInternalState } from '../security/internal-state.js';
 
 export interface ProjectMemoryEntry {
   id: string;
@@ -13,14 +13,11 @@ export interface ProjectMemoryEntry {
 const MEMORY_FILE = 'memory.json';
 
 export async function listProjectMemory(projectRoot: string): Promise<ProjectMemoryEntry[]> {
-  try {
-    const parsed = JSON.parse(await readFile(memoryFilePath(projectRoot), 'utf8')) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isMemoryEntry).map((entry) => ({ ...entry, tags: [...entry.tags] }));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw error;
-  }
+  const state = await openProjectInternalState(projectRoot);
+  if (!(await state.fileExists(MEMORY_FILE))) return [];
+  const parsed = await state.readJson<unknown>(MEMORY_FILE);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter(isMemoryEntry).map((entry) => ({ ...entry, tags: [...entry.tags] }));
 }
 
 export async function addProjectMemory(
@@ -82,22 +79,15 @@ export function formatProjectMemory(entries: ProjectMemoryEntry[]): string {
 }
 
 export function projectMemoryFilePath(projectRoot: string): string {
-  return memoryFilePath(projectRoot);
+  return path.join(path.resolve(projectRoot), '.openbrowser', MEMORY_FILE);
 }
 
 async function writeMemory(projectRoot: string, entries: ProjectMemoryEntry[]): Promise<void> {
-  const filePath = memoryFilePath(projectRoot);
-  await mkdir(path.dirname(filePath), { recursive: true });
   const ordered = [...entries].sort(
     (left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
   );
-  const tempPath = `${filePath}.${process.pid}.tmp`;
-  await writeFile(tempPath, `${JSON.stringify(ordered, null, 2)}\n`, 'utf8');
-  await rename(tempPath, filePath);
-}
-
-function memoryFilePath(projectRoot: string): string {
-  return path.join(path.resolve(projectRoot), '.openbrowser', MEMORY_FILE);
+  const state = await openProjectInternalState(projectRoot);
+  await state.writeJson(MEMORY_FILE, ordered);
 }
 
 function normalizeMemoryText(value: string): string {
