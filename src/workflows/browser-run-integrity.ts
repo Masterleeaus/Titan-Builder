@@ -171,6 +171,7 @@ export function createRecordRevision(record: BrowserRunRecord): string {
   return digestValue({
     id: record.id,
     mode: record.mode,
+    status: record.status,
     projectId: record.projectId,
     projectName: record.projectName ?? null,
     prompt: record.prompt,
