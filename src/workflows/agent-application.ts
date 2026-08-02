@@ -254,11 +254,7 @@ export async function applyApprovedAgentRun(
   });
 
   const changedPaths = uniqueText(
-    currentPlans.flatMap((item) =>
-      item.affectedPaths.map((affectedPath) =>
-        normalizeRelativePath(projectRoot, affectedPath),
-      ),
-    ),
+    currentPlans.flatMap((item) => operationChangedPaths(item.operation)),
   );
 
   let verification: ProjectVerificationResult | undefined;
@@ -315,9 +311,16 @@ function normalizeSelectedIds(values: readonly string[]): string[] {
   return normalized;
 }
 
-function normalizeRelativePath(projectRoot: string, affectedPath: string): string {
-  const relative = path.relative(path.resolve(projectRoot), path.resolve(affectedPath));
-  return relative || '.';
+function operationChangedPaths(operation: FileOperation): string[] {
+  switch (operation.action) {
+    case 'RUN_TOOL':
+    case 'RUN_COMMAND':
+      return [];
+    case 'RENAME_FILE':
+      return [operation.path, operation.replace];
+    default:
+      return [operation.path];
+  }
 }
 
 function uniqueText(values: readonly string[]): string[] {
