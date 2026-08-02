@@ -1,4 +1,4 @@
-import { exec, spawn } from 'node:child_process';
+import { exec } from 'node:child_process';
 import crypto from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { lstat as lstatPath, open, rename as renamePath, unlink } from 'node:fs/promises';
@@ -12,6 +12,7 @@ import type { HistoryEntry } from '../memory/index.js';
 import { canonicalizeProjectRoot, resolveProjectPath } from '../security/project-path.js';
 import { expandMkdirOperations, looksLikePowerShellCommand } from './mkdir-normalize.js';
 import { preserveOperationOrder } from './operation-order.js';
+import { runContainedProcess } from './process-runner.js';
 import {
   isUnsafeLegacyCommandEnabled,
   resolveToolInvocation,
@@ -1051,64 +1052,22 @@ async function safeWriteFile(filePath: string, content: string): Promise<void> {
 }
 
 async function runTool(invocation: ToolInvocation): Promise<void> {
-  const maxOutputBytes = 2 * 1024 * 1024;
-  const timeoutMs = 120_000;
-
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(invocation.executable, invocation.args, {
-      cwd: invocation.cwd,
-      shell: false,
-      windowsHide: true,
-      env: process.env,
-    });
-
-    let stdout = '';
-    let stderr = '';
-    let outputBytes = 0;
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout>;
-
-    const finish = (error?: Error): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) reject(error);
-      else resolve();
-    };
-
-    const append = (target: 'stdout' | 'stderr', chunk: Buffer): void => {
-      outputBytes += chunk.byteLength;
-      if (outputBytes > maxOutputBytes) {
-        child.kill();
-        finish(new Error(`Tool output exceeded ${maxOutputBytes} bytes`));
-        return;
-      }
-      if (target === 'stdout') stdout += chunk.toString();
-      else stderr += chunk.toString();
-    };
-
-    child.stdout?.on('data', (chunk: Buffer) => append('stdout', chunk));
-    child.stderr?.on('data', (chunk: Buffer) => append('stderr', chunk));
-    child.on('error', (error) => finish(new Error(`Failed to start ${invocation.toolId}: ${error.message}`)));
-    child.on('close', (code, signal) => {
-      if (stdout.trim()) process.stdout.write(`${stdout.trim()}\n`);
-      if (stderr.trim()) process.stderr.write(`${stderr.trim()}\n`);
-      if (code === 0) {
-        finish();
-        return;
-      }
-      finish(
-        new Error(
-          `${invocation.toolId} failed${code === null ? '' : ` with exit code ${code}`}${signal ? ` (${signal})` : ''}`,
-        ),
-      );
-    });
-
-    timer = setTimeout(() => {
-      child.kill();
-      finish(new Error(`${invocation.toolId} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
+  const result = await runContainedProcess({
+    executable: invocation.executable,
+    args: invocation.args,
+    cwd: invocation.cwd,
+    env: process.env,
+    toolId: invocation.toolId,
+    timeoutMs: 120_000,
+    maxOutputBytes: 2 * 1024 * 1024,
   });
+
+  if (result.stdout.trim()) {
+    process.stdout.write(`${result.stdout.trim()}\n`);
+  }
+  if (result.stderr.trim()) {
+    process.stderr.write(`${result.stderr.trim()}\n`);
+  }
 }
 
 async function runShellCommand(command: string, cwd: string): Promise<void> {
