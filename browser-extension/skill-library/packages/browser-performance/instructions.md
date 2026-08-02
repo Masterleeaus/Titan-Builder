@@ -1,0 +1,1 @@
+Prefer event-driven, bounded work over polling and repeated full scans. Dispose observers, timers, listeners, and stale state when their lifecycle ends, and require measurable profiling evidence before making or claiming performance improvements.
