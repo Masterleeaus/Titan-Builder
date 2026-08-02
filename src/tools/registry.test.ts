@@ -74,6 +74,23 @@ test('Windows command shims remain shell-disabled and use the system command pro
   assert.equal(npm.shell, false);
 });
 
+test('Windows command shims quote executable paths containing spaces', () => {
+  if (process.platform !== 'win32') {
+    return;
+  }
+  const npm = resolveToolInvocation('npm.test', [], '/tmp/project');
+  // Verify that executable paths are properly quoted in the cmd.exe /c invocation
+  assert.equal(npm.shell, false);
+  const cFlagIndex = npm.args.indexOf('/c');
+  assert.ok(cFlagIndex >= 0);
+  const executableArg = npm.args[cFlagIndex + 1];
+  assert.ok(executableArg);
+  // If the executable path contains spaces, it should be quoted
+  if (executableArg.includes(' ') && !executableArg.startsWith('"')) {
+    throw new Error(`Executable with spaces must be quoted: ${executableArg}`);
+  }
+});
+
 test('only genuinely low-side-effect risks bypass per-operation approval', () => {
   assert.equal(requiresExplicitApproval('READ'), false);
   assert.equal(requiresExplicitApproval('SAFE_EXECUTION'), false);

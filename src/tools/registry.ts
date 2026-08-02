@@ -224,9 +224,11 @@ function wrapWindowsCommandShim(
   if (process.platform !== 'win32' || !/\.cmd$/iu.test(executable)) {
     return { executable, args: [...args] };
   }
+  // Quote the executable if it contains spaces so cmd.exe parses it correctly
+  const quotedExecutable = executable.includes(' ') ? `"${executable}"` : executable;
   return {
     executable: process.env.COMSPEC ?? 'cmd.exe',
-    args: ['/d', '/s', '/c', executable, ...args],
+    args: ['/d', '/s', '/c', quotedExecutable, ...args],
   };
 }
 
