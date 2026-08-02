@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -11,18 +12,18 @@ import {
   setActiveProject,
 } from './registry.ts';
 
-function fixture() {
+async function fixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), 'openbrowser-projects-'));
   const homeDir = path.join(root, 'home');
   const projectRoot = path.join(root, 'sample-project');
   mkdirSync(homeDir, { recursive: true });
   mkdirSync(projectRoot, { recursive: true });
   writeFileSync(path.join(projectRoot, 'package.json'), '{"name":"Sample App"}\n');
-  return { homeDir, projectRoot, canonicalProjectRoot: realpathSync(projectRoot) };
+  return { homeDir, projectRoot, canonicalProjectRoot: await realpath(projectRoot) };
 }
 
 test('registers and deduplicates projects by canonical root', async () => {
-  const { homeDir, projectRoot, canonicalProjectRoot } = fixture();
+  const { homeDir, projectRoot, canonicalProjectRoot } = await fixture();
   const first = await registerProject(projectRoot, { homeDir });
   const second = await registerProject(path.join(projectRoot, '.'), { homeDir, name: 'Renamed' });
   const projects = await listProjects({ homeDir });
@@ -34,7 +35,7 @@ test('registers and deduplicates projects by canonical root', async () => {
 });
 
 test('persists and resolves an active project', async () => {
-  const { homeDir, projectRoot, canonicalProjectRoot } = fixture();
+  const { homeDir, projectRoot, canonicalProjectRoot } = await fixture();
   const project = await registerProject(projectRoot, { homeDir });
 
   await setActiveProject(project.id, { homeDir });
@@ -45,7 +46,7 @@ test('persists and resolves an active project', async () => {
 });
 
 test('removing the active project clears active state', async () => {
-  const { homeDir, projectRoot } = fixture();
+  const { homeDir, projectRoot } = await fixture();
   const project = await registerProject(projectRoot, { homeDir });
   await setActiveProject(project.id, { homeDir });
 
