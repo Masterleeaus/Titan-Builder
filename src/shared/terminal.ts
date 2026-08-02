@@ -2,6 +2,42 @@ import cfonts from 'cfonts';
 import chalk from 'chalk';
 import gradient from 'gradient-string';
 
+/**
+ * Sanitize untrusted output by removing terminal control sequences
+ * that could spoofhelpfulness in the terminal (cursor movement, clearing, etc.)
+ */
+export function sanitizeTerminalOutput(text: string): string {
+  if (!text) return text;
+
+  let sanitized = text
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
+    .replace(/\x7F/g, '')
+    .replace(/⁦/g, '')
+    .replace(/⁧/g, '')
+    .replace(/⁨/g, '')
+    .replace(/⁩/g, '')
+    .replace(/[؜‎‏]/g, '')
+    .replace(/\x1b\]8;;[^\x07]*\x07/g, '')
+    .replace(/\x1b\]52;;[^\x07]*\x07/g, '')
+    .replace(/\x1b\]0;[^\x07]*\x07/g, '')
+    .replace(/\x1b\]1;[^\x07]*\x07/g, '')
+    .replace(/\x1b\]2;[^\x07]*\x07/g, '')
+    .replace(/\x1b\([^\x00]*?[\x00-\x40]|[\x41-\x7E]/g, '')
+    .replace(/\x1b\)([^\x00]*?)/g, '')
+    .replace(/\x1b\*.*?[\x00-\x40]|[\x41-\x7E]/g, '')
+    .replace(/\x1b\+.*?[\x00-\x40]|[\x41-\x7E]/g, '')
+    .replace(/\x1bP.*?\x1b\\/g, '')
+    .replace(/\x1bX.*?\x1b\\/g, '')
+    .replace(/\x1b\^.*?\x1b\\/g, '')
+    .replace(/\x1b_.*?\x1b\\/g, '')
+    .replace(/\x1b\[[^A-Za-z]*[A-Za-z]/g, '')
+    .replace(/\x1b#[0-9]/g, '')
+    .replace(/\x1b%[@AB]/g, '')
+    .replace(/\x1b@/g, '');
+
+  return sanitized;
+}
+
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
@@ -108,19 +144,23 @@ export function writeAtHint(): void {
 }
 
 export function writeInfo(message: string): void {
-  process.stdout.write(`${GRAY}[${RESET}${ORANGE}openbrowser${RESET}${GRAY}]${RESET} ${message}\n`);
+  const safe = sanitizeTerminalOutput(message);
+  process.stdout.write(`${GRAY}[${RESET}${ORANGE}openbrowser${RESET}${GRAY}]${RESET} ${safe}\n`);
 }
 
 export function writeSuccess(message: string): void {
-  process.stdout.write(`${GREEN}✓${RESET} ${message}\n`);
+  const safe = sanitizeTerminalOutput(message);
+  process.stdout.write(`${GREEN}✓${RESET} ${safe}\n`);
 }
 
 export function writeWarning(message: string): void {
-  process.stdout.write(`${YELLOW}⚠${RESET} ${message}\n`);
+  const safe = sanitizeTerminalOutput(message);
+  process.stdout.write(`${YELLOW}⚠${RESET} ${safe}\n`);
 }
 
 export function writeError(message: string): void {
-  process.stdout.write(`${RED}✗${RESET} ${message}\n`);
+  const safe = sanitizeTerminalOutput(message);
+  process.stdout.write(`${RED}✗${RESET} ${safe}\n`);
 }
 
 export function writeSessionEnd(label = 'session complete'): void {
