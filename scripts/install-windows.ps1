@@ -88,14 +88,20 @@ Write-Step 'Registering the global CLI command'
 
 if ($EnableBackgroundService) {
     Write-Step 'Enabling the opt-in background bridge service'
+    Require-Command 'openbrowser'
     & openbrowser service start
-    $startupDirectory = [Environment]::GetFolderPath('Startup')
-    $startupCommand = Join-Path $startupDirectory 'OpenBrowser-Service.cmd'
-    @(
-        '@echo off'
-        'openbrowser service start >nul 2>&1'
-    ) | Set-Content -Encoding ASCII $startupCommand
-    Write-Host "Created user-login startup command: $startupCommand"
+
+    $taskName = 'OpenBrowser Local Agent'
+    $openBrowserPath = (Get-Command openbrowser -ErrorAction Stop).Source
+    $escapedOpenBrowserPath = $openBrowserPath.Replace("'", "''")
+    $taskArguments = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$escapedOpenBrowserPath' service start`""
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $taskArguments
+    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
+    $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Starts the local OpenBrowser bridge for the current user.' -Force | Out-Null
+    Write-Host "Registered current-user Scheduled Task: $taskName"
 } else {
     Write-Host "Background startup was not enabled. Run this installer with -EnableBackgroundService to opt in."
 }
