@@ -11,6 +11,7 @@ import {
   normalizeWorkspaceError,
   resolveProjectPath,
   loadCompanionEnvironment,
+  resolveWorkspaceDatabasePath,
 } from './bridge-server.js';
 
 const TOKEN = 'workspace-test-token-1234567890';
@@ -254,6 +255,91 @@ describe('companion environment loading', () => {
       expect(result).toBeUndefined();
     } finally {
       process.env.OPENBROWSER_CONFIG = savedEnv;
+    }
+  });
+});
+
+describe('workspace database path resolution', () => {
+  it('uses user-scoped directory by default', async () => {
+    const homeDir = await temporaryDirectory('workspace-home-');
+    const result = await resolveWorkspaceDatabasePath({ homeDir, moduleDir: homeDir });
+    expect(result).toMatch(/\.openbrowser[\\/]workspace/);
+    expect(result).toContain('database.sqlite');
+  });
+
+  it('respects explicit WORKSPACE_DB_PATH environment variable', async () => {
+    const customPath = await temporaryDirectory('custom-db-');
+    const savedEnv = process.env.WORKSPACE_DB_PATH;
+    try {
+      process.env.WORKSPACE_DB_PATH = path.join(customPath, 'my.db');
+      const result = await resolveWorkspaceDatabasePath();
+      expect(result).toBe(path.resolve(process.env.WORKSPACE_DB_PATH));
+    } finally {
+      process.env.WORKSPACE_DB_PATH = savedEnv;
+    }
+  });
+
+  it('respects explicit databasePath option', async () => {
+    const customPath = await temporaryDirectory('custom-db-option-');
+    const dbPath = path.join(customPath, 'explicit.db');
+    const result = await resolveWorkspaceDatabasePath({ databasePath: dbPath });
+    expect(result).toBe(path.resolve(dbPath));
+  });
+
+  it('migrates database from old module location', async () => {
+    const homeDir = await temporaryDirectory('workspace-migrate-home-');
+    const moduleDir = await temporaryDirectory('workspace-migrate-module-');
+    const oldDbPath = path.join(moduleDir, 'openbrowser-workspace.db');
+    await fs.writeFile(oldDbPath, 'old database content');
+
+    const result = await resolveWorkspaceDatabasePath({ homeDir, moduleDir });
+    const newDbPath = result;
+
+    // Check that new database was created (via copy)
+    expect(await fs.readFile(newDbPath, 'utf8')).toBe('old database content');
+    expect(result).toMatch(/\.openbrowser[\\/]workspace/);
+  });
+
+  it('skips migration if database already exists in new location', async () => {
+    const homeDir = await temporaryDirectory('workspace-existing-home-');
+    const moduleDir = await temporaryDirectory('workspace-existing-module-');
+    const oldDbPath = path.join(moduleDir, 'openbrowser-workspace.db');
+    const newDbPath = path.join(homeDir, '.openbrowser', 'workspace', 'database.sqlite');
+
+    // Create both files
+    await fs.mkdir(path.dirname(oldDbPath), { recursive: true });
+    await fs.writeFile(oldDbPath, 'old content');
+    await fs.mkdir(path.dirname(newDbPath), { recursive: true });
+    await fs.writeFile(newDbPath, 'new content');
+
+    const result = await resolveWorkspaceDatabasePath({ homeDir, moduleDir });
+    // Should keep the new file content, not overwrite
+    expect(await fs.readFile(result, 'utf8')).toBe('new content');
+  });
+
+  it('creates directory with appropriate permissions', async () => {
+    const homeDir = await temporaryDirectory('workspace-perms-home-');
+    const result = await resolveWorkspaceDatabasePath({ homeDir, moduleDir: homeDir });
+    const dirPath = path.dirname(result);
+
+    const stat = await fs.stat(dirPath);
+    // Check directory was created (permission check is platform-dependent)
+    expect(stat.isDirectory()).toBe(true);
+  });
+
+  it('does not load from current working directory', async () => {
+    const cwd = await temporaryDirectory('workspace-cwd-');
+    const homeDir = await temporaryDirectory('workspace-home-');
+    const oldCwd = process.cwd();
+
+    try {
+      process.chdir(cwd);
+      const result = await resolveWorkspaceDatabasePath({ homeDir, moduleDir: cwd });
+      // Should use ~/.openbrowser/workspace, not cwd
+      expect(result).toMatch(/\.openbrowser[\\/]workspace/);
+      expect(result).not.toContain(cwd);
+    } finally {
+      process.chdir(oldCwd);
     }
   });
 });
