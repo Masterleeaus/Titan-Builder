@@ -11,9 +11,8 @@ assert.ok(manifest);
 function validInvocation(): ToolInvocation {
   return {
     toolId: 'git.status',
-    executable: 'git',
-    args: ['status', '--short', '--branch'],
-    env: { PATH: process.env.PATH ?? '' },
+    executable: process.execPath,
+    args: ['hardened-runner', 'status', '--short', '--branch'],
     cwd: path.resolve('/tmp/project'),
     risk: 'ARBITRARY_EXECUTION',
     displayCommand: 'git status --short --branch',
@@ -29,7 +28,6 @@ test('normalizes and freezes a resolved invocation that matches its manifest', (
   assert.notEqual(invocation, input);
   assert.equal(Object.isFrozen(invocation), true);
   assert.equal(Object.isFrozen(invocation.args), true);
-  assert.equal(Object.isFrozen(invocation.env), true);
 });
 
 test('rejects resolver output whose tool ID or risk drifts from the manifest', () => {
@@ -43,7 +41,7 @@ test('rejects resolver output whose tool ID or risk drifts from the manifest', (
   );
 });
 
-test('rejects shell execution, relative working directories, malformed commands, and invalid environments', () => {
+test('rejects shell execution, relative working directories, and malformed command data', () => {
   assert.throws(
     () => validateResolvedToolInvocation(manifest, { ...validInvocation(), shell: true } as unknown as ToolInvocation),
     /shell must be false/u,
@@ -53,22 +51,11 @@ test('rejects shell execution, relative working directories, malformed commands,
     /absolute working directory/u,
   );
   assert.throws(
-    () => validateResolvedToolInvocation(manifest, { ...validInvocation(), executable: 'git\nunsafe' }),
+    () => validateResolvedToolInvocation(manifest, { ...validInvocation(), executable: 'node\nunsafe' }),
     /executable/u,
   );
   assert.throws(
-    () => validateResolvedToolInvocation(manifest, { ...validInvocation(), args: ['status', 'bad\narg'] }),
+    () => validateResolvedToolInvocation(manifest, { ...validInvocation(), args: ['runner', 'bad\narg'] }),
     /argument 1/u,
-  );
-  assert.throws(
-    () => validateResolvedToolInvocation(manifest, { ...validInvocation(), env: null } as unknown as ToolInvocation),
-    /environment must be an object/u,
-  );
-  assert.throws(
-    () => validateResolvedToolInvocation(manifest, {
-      ...validInvocation(),
-      env: { 'BAD=KEY': 'value' },
-    }),
-    /environment key is invalid/u,
   );
 });
