@@ -56,6 +56,7 @@ export interface SessionClaim {
 }
 
 export const DEFAULT_CLAIM_LEASE_MS = 120_000;
+export const DEFAULT_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 const sessions = new Map<string, PromptSession>();
 
@@ -187,6 +188,31 @@ export function failSession(
 
 export function clearSessions(): void {
   sessions.clear();
+}
+
+export function pruneSessions(
+  nowMs = Date.now(),
+  retentionMs = DEFAULT_SESSION_RETENTION_MS,
+): { removed: number; remaining: number } {
+  releaseExpiredClaims(nowMs);
+
+  const idsToRemove: string[] = [];
+  for (const [id, session] of sessions.entries()) {
+    if (session.status === 'pending' || session.status === 'claimed') {
+      continue;
+    }
+
+    const completedAtMs = session.completedAt ? Date.parse(session.completedAt) : Date.parse(session.createdAt);
+    if (nowMs - completedAtMs > retentionMs) {
+      idsToRemove.push(id);
+    }
+  }
+
+  for (const id of idsToRemove) {
+    sessions.delete(id);
+  }
+
+  return { removed: idsToRemove.length, remaining: sessions.size };
 }
 
 function claimSession(

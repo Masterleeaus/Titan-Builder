@@ -5,6 +5,9 @@ import { parse as parseJsonc } from 'jsonc-parser';
 import { saveContextSummary } from '../memory/index.js';
 import { CONTEXT_IGNORE } from './file-context.js';
 
+const MAX_FILES_DISCOVERY = 10000;
+const MAX_FILES_DISPLAY = 250;
+
 export interface ProjectContext {
   projectRoot: string;
   files: string[];
@@ -17,21 +20,27 @@ export interface ProjectContext {
   };
   tsconfig?: unknown;
   summary: string;
+  totalFileCount: number;
+  isTruncated: boolean;
 }
 
 export async function scanProject(projectRoot: string): Promise<ProjectContext> {
-  const files = await fg('**/*', {
+  const allFiles = await fg('**/*', {
     cwd: projectRoot,
     dot: true,
     onlyFiles: true,
     ignore: CONTEXT_IGNORE,
   });
 
+  const totalFileCount = allFiles.length;
+  const isTruncated = totalFileCount > MAX_FILES_DISCOVERY;
+  const files = allFiles.slice(0, MAX_FILES_DISCOVERY);
+
   const packageJson = await readJsonIfExists(path.join(projectRoot, 'package.json'));
   const tsconfig = await readJsoncIfExists(path.join(projectRoot, 'tsconfig.json'));
-  const summary = formatSummary(projectRoot, files, packageJson, tsconfig);
+  const summary = formatSummary(files, totalFileCount, isTruncated, packageJson, tsconfig);
 
-  return { projectRoot, files, packageJson, tsconfig, summary };
+  return { projectRoot, files, packageJson, tsconfig, summary, totalFileCount, isTruncated };
 }
 
 export async function generateContext(projectRoot: string): Promise<string> {
@@ -41,12 +50,14 @@ export async function generateContext(projectRoot: string): Promise<string> {
 }
 
 function formatSummary(
-  projectRoot: string,
   files: string[],
+  totalFileCount: number,
+  isTruncated: boolean,
   packageJson: ProjectContext['packageJson'],
   tsconfig: unknown,
 ): string {
-  const tree = files.slice(0, 250).map((file) => `- ${file}`).join('\n');
+  const displayFiles = files.slice(0, MAX_FILES_DISPLAY);
+  const tree = displayFiles.map((file) => `- ${file}`).join('\n');
   const scripts = packageJson?.scripts
     ? Object.keys(packageJson.scripts).join(', ')
     : 'none detected';
@@ -57,15 +68,21 @@ function formatSummary(
     ? Object.keys(packageJson.devDependencies).join(', ')
     : 'none detected';
 
+  const projectLabel = packageJson?.name ? `Project: ${packageJson.name}` : 'Project';
+
+  const fileCountStr = isTruncated
+    ? `${totalFileCount} (first ${MAX_FILES_DISCOVERY} analyzed, first ${MAX_FILES_DISPLAY} shown)`
+    : `${totalFileCount}${totalFileCount > MAX_FILES_DISPLAY ? ` (first ${MAX_FILES_DISPLAY} shown)` : ''}`;
+
   return [
-    `Project root: ${projectRoot}`,
-    `Package: ${packageJson?.name ?? 'unknown'} ${packageJson?.version ?? ''}`.trim(),
+    projectLabel,
+    `Package version: ${packageJson?.version ?? 'unknown'}`.trim(),
     `Scripts: ${scripts}`,
     `Dependencies: ${deps}`,
     `Dev dependencies: ${devDeps}`,
     `TypeScript config: ${tsconfig ? 'present' : 'not detected'}`,
     '',
-    `Files (${files.length}${files.length > 250 ? ', first 250 shown' : ''}):`,
+    `Files (${fileCountStr}):`,
     tree || '- no files detected',
   ].join('\n');
 }
