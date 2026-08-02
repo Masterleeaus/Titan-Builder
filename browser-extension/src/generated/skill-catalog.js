@@ -308,7 +308,7 @@ export const GENERATED_SKILL_CATALOG = Object.freeze([
       "runtimeTargets": [
         "root"
       ],
-      "entrypoint": "src/security/project-path.ts#resolveProjectPath",
+      "entrypoint": "runtime/entrypoint.js#resolveProjectPath",
       "inputs": {
         "type": "object",
         "additionalProperties": false,
