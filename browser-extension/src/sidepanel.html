@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenBrowser Coding Workspace</title>
   <link rel="stylesheet" href="./sidepanel.css" />
+  <link rel="stylesheet" href="./agent-workspace.css" />
 </head>
 <body>
   <header class="app-header">
@@ -27,6 +28,7 @@
   </header>
 
   <nav class="tabs" aria-label="Panel sections">
+    <button class="tab" data-view="work" type="button">Work</button>
     <button class="tab active" data-view="prompts" type="button">Prompts</button>
     <button class="tab" data-view="projects" type="button">Projects</button>
     <button class="tab" data-view="memory" type="button">Memory</button>
@@ -41,6 +43,30 @@
   </nav>
 
   <main>
+    <section id="view-work" class="view">
+      <div class="section-heading"><div><h2>Work</h2><p>Run Ask or Agent workflows through the secure local bridge while ChatGPT stays visible.</p></div><button id="work-refresh" type="button">Refresh</button></div>
+      <div class="work-grid">
+        <form id="work-form" class="editor-card work-form">
+          <label>Registered project<select id="work-project" name="projectId" required><option value="">Choose project</option></select></label>
+          <div class="work-mode" role="group" aria-label="Run mode"><label><input type="radio" name="mode" value="ask" /> Ask</label><label><input type="radio" name="mode" value="agent" checked /> Agent</label></div>
+          <label>Task or question<textarea id="work-prompt" name="prompt" rows="6" required placeholder="Describe the change or ask about the selected project."></textarea></label>
+          <label>Context references<textarea id="work-context-refs" name="contextRefs" rows="3" placeholder="src&#10;README.md"></textarea></label>
+          <div class="two-column"><label>Context budget<input id="work-context-budget" name="contextBudget" type="number" min="1000" max="2000000" value="60000" /></label><label>Provider<select id="work-provider" name="provider"><option value="auto">Auto</option><option value="chatgpt">ChatGPT</option><option value="claude">Claude</option><option value="gemini">Gemini</option><option value="deepseek">DeepSeek</option><option value="perplexity">Perplexity</option><option value="glm">GLM</option><option value="grok">Grok</option></select></label></div>
+          <label>Verification<select id="work-verification" name="verificationProfile"><option value="quick">Quick</option><option value="standard" selected>Standard</option><option value="full">Full</option></select></label>
+          <button id="work-start" class="primary" type="submit">Start run</button>
+        </form>
+        <article class="editor-card">
+          <div class="work-status-row"><div><h2>Run</h2><div id="work-run-status" class="work-run-status">No active run</div></div><button id="work-cancel" type="button" hidden>Cancel</button></div>
+          <div class="work-progress"><span>Context</span><span>Model</span><span>Review</span><span>Apply</span></div>
+          <div id="work-notice" class="work-notice" role="status"></div>
+          <pre id="work-answer" class="work-answer"></pre>
+          <div id="work-operation-list" class="card-list"></div>
+          <div id="work-review-actions" class="work-actions" hidden><button id="work-reject" type="button">Reject</button><button id="work-approve" class="primary" type="button">Approve selected</button></div>
+          <div id="work-apply-actions" class="work-actions" hidden><button id="work-apply" class="primary" type="button">Confirm and apply</button></div>
+        </article>
+      </div>
+    </section>
+
     <section id="view-projects" class="view">
       <div class="section-heading"><div><h2>Projects</h2><p>Register local coding projects and preview exactly what context will be sent.</p></div><button id="refresh-projects" type="button">Refresh</button></div>
       <div class="manage-row"><button id="register-current-project" class="primary" type="button">Register current project</button></div>
@@ -143,7 +169,7 @@
       <form id="settings-form" class="editor-card">
         <h2>Bridge and automation</h2>
         <div class="two-column"><label>Bridge port<input id="bridge-port" type="number" min="1024" max="65535" /></label><label>Provider<select id="settings-provider"><option value="auto">Auto</option><option value="chatgpt">ChatGPT</option><option value="claude">Claude</option><option value="gemini">Gemini</option><option value="deepseek">DeepSeek</option><option value="perplexity">Perplexity</option><option value="glm">GLM</option><option value="grok">Grok</option></select></label></div>
-        <label>Bridge token<input id="bridge-token" type="password" autocomplete="off" /></label>
+        <label>Bridge browser token<input id="bridge-token" type="password" autocomplete="off" /></label>
         <label class="check-row"><input id="superpower-compatibility" type="checkbox" /> Superpower compatibility mode</label>
         <hr />
         <label class="check-row"><input id="auto-continue-enabled" type="checkbox" /> Enable capped auto-continue for OpenBrowser prompts and ask jobs</label>
@@ -167,5 +193,6 @@
   <dialog id="prompt-dialog"><form method="dialog" class="dialog-card"><header><div><h2 id="dialog-title">Use prompt</h2><p id="dialog-description"></p></div><button class="close-button" value="cancel" aria-label="Close">×</button></header><div id="variable-fields" class="variable-fields"></div><label>Preview<textarea id="prompt-preview" rows="14"></textarea></label><div class="dialog-actions"><button id="copy-prompt" type="button">Copy</button><button id="insert-prompt" type="button">Insert only</button><button id="send-prompt" class="primary" type="button">Insert & send</button></div><div id="dialog-result" class="result" role="status"></div></form></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script type="module" src="./sidepanel.js"></script>
+  <script type="module" src="./agent-workspace.js"></script>
 </body>
 </html>
