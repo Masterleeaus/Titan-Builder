@@ -28,6 +28,10 @@ export type {
   ToolRegistry,
 } from './types.js';
 export {
+  createToolKnowledgeRecords,
+} from './knowledge.js';
+export type { ToolKnowledgeRecord } from './knowledge.js';
+export {
   isUnsafeLegacyCommandEnabled,
   listToolManifests,
   resolveToolInvocation,
