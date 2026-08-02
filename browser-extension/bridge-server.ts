@@ -78,6 +78,42 @@ class WorkspaceHttpError extends Error {
   }
 }
 
+export interface NormalizedWorkspaceError {
+  statusCode: number;
+  error: string;
+  detail?: string;
+}
+
+export function normalizeWorkspaceError(error: unknown): NormalizedWorkspaceError {
+  if (!(error instanceof Error)) {
+    return {
+      statusCode: 500,
+      error: 'Workspace operation failed',
+    };
+  }
+
+  const candidateStatus = (error as Error & { statusCode?: unknown }).statusCode;
+  const statusCode = typeof candidateStatus === 'number'
+    && Number.isInteger(candidateStatus)
+    && candidateStatus >= 400
+    && candidateStatus <= 599
+    ? candidateStatus
+    : 500;
+
+  if (statusCode >= 500) {
+    return {
+      statusCode,
+      error: 'Workspace operation failed',
+      detail: error.message,
+    };
+  }
+
+  return {
+    statusCode,
+    error: error.message,
+  };
+}
+
 const RegisterProjectSchema = z.object({
   root: z.string().trim().min(1),
   name: z.string().trim().min(1).max(200).optional(),
@@ -743,10 +779,10 @@ export async function createWorkspaceServer(
     if (error instanceof WorkspaceHttpError) {
       return reply.code(error.statusCode).send({ error: error.message });
     }
-    const statusCode = typeof error.statusCode === 'number' ? error.statusCode : 500;
-    return reply.code(statusCode).send({
-      error: statusCode >= 500 ? 'Workspace operation failed' : error.message,
-      detail: statusCode >= 500 ? error.message : undefined,
+    const normalizedError = normalizeWorkspaceError(error);
+    return reply.code(normalizedError.statusCode).send({
+      error: normalizedError.error,
+      ...(normalizedError.detail === undefined ? {} : { detail: normalizedError.detail }),
     });
   });
 
