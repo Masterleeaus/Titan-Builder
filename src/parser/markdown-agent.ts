@@ -702,11 +702,13 @@ export function mergeFileBlocksIntoOperations<
 export function mergeMarkdownFencesIntoOperations<
   T extends { action: string; path?: string; content?: string },
 >(operations: T[], rawMarkdown: string): T[] {
+  const labeled = extractMarkdownFenceBlocks(rawMarkdown)
+    .filter((block) => block.path);
   const unlabeled = extractMarkdownFenceBlocks(rawMarkdown)
     .filter((block) => !block.path)
     .map((block) => block.content);
 
-  if (unlabeled.length === 0) {
+  if (unlabeled.length === 0 && labeled.length === 0) {
     return operations;
   }
 
@@ -734,8 +736,65 @@ export function mergeMarkdownFencesIntoOperations<
   }
 
   const result = [...operations];
-  const { operation, index } = pendingMd[0]!;
-  result[index] = { ...operation, content: unlabeled[0]! };
+
+  // Check for duplicate labeled paths
+  const seenPaths = new Set<string>();
+  for (const block of labeled) {
+    const normalized = normalizePath(block.path);
+    if (seenPaths.has(normalized)) {
+      throw new Error(`Duplicate Markdown block path: ${block.path}`);
+    }
+    seenPaths.add(normalized);
+  }
+
+  // Match labeled blocks to operations
+  for (const block of labeled) {
+    const normalized = normalizePath(block.path);
+    const index = result.findIndex(
+      (op) =>
+        (op.action === 'CREATE_FILE' || op.action === 'EDIT_FILE') &&
+        normalizePath(op.path ?? '') === normalized,
+    );
+    if (index !== -1) {
+      result[index] = { ...result[index], content: block.content };
+    }
+  }
+
+  // Handle unlabeled fences
+  if (unlabeled.length > 0) {
+    const stillPending = result
+      .map((operation, index) => ({ operation, index }))
+      .filter(
+        ({ operation }) =>
+          (operation.action === 'CREATE_FILE' || operation.action === 'EDIT_FILE') &&
+          isMarkdownPath(operation.path ?? '') &&
+          !operation.content?.trim(),
+      );
+
+    // Multiple unlabeled fences are ambiguous
+    if (unlabeled.length > 1) {
+      const paths = stillPending.map(({ operation }) => operation.path).join(', ');
+      throw new Error(
+        `Multiple unlabeled Markdown fences cannot be assigned unambiguously to ${stillPending.length} operations. ` +
+        `Use labelled blocks (e.g., \`\`\`markdown file:path/to/file.md\n...\`\`\`) for files: ${paths}`,
+      );
+    }
+
+    // One unlabeled fence with multiple pending operations is ambiguous
+    if (stillPending.length > 1) {
+      const paths = stillPending.map(({ operation }) => operation.path).join(', ');
+      throw new Error(
+        `One unlabeled Markdown fence cannot be assigned to ${stillPending.length} operations. ` +
+        `Use labelled blocks (e.g., \`\`\`markdown file:path/to/file.md\n...\`\`\`) for files: ${paths}`,
+      );
+    }
+
+    // One unlabeled fence with exactly one pending operation is OK
+    if (stillPending.length === 1) {
+      const { operation, index } = stillPending[0]!;
+      result[index] = { ...operation, content: unlabeled[0]! };
+    }
+  }
 
   return result;
 }
@@ -743,11 +802,13 @@ export function mergeMarkdownFencesIntoOperations<
 export function mergeYamlFencesIntoOperations<
   T extends { action: string; path?: string; content?: string },
 >(operations: T[], rawMarkdown: string): T[] {
+  const labeled = extractYamlFenceBlocks(rawMarkdown)
+    .filter((block) => block.path);
   const unlabeled = extractYamlFenceBlocks(rawMarkdown)
     .filter((block) => !block.path)
     .map((block) => block.content);
 
-  if (unlabeled.length === 0) {
+  if (unlabeled.length === 0 && labeled.length === 0) {
     return operations;
   }
 
@@ -775,10 +836,65 @@ export function mergeYamlFencesIntoOperations<
   }
 
   const result = [...operations];
-  const { operation, index } = pendingYaml[0]!;
-  result[index] = { ...operation, content: unlabeled[0]! };
 
-  return result;
+  // Check for duplicate labeled paths
+  const seenPaths = new Set<string>();
+  for (const block of labeled) {
+    const normalized = normalizePath(block.path);
+    if (seenPaths.has(normalized)) {
+      throw new Error(`Duplicate YAML block path: ${block.path}`);
+    }
+    seenPaths.add(normalized);
+  }
+
+  // Match labeled blocks to operations
+  for (const block of labeled) {
+    const normalized = normalizePath(block.path);
+    const index = result.findIndex(
+      (op) =>
+        (op.action === 'CREATE_FILE' || op.action === 'EDIT_FILE') &&
+        normalizePath(op.path ?? '') === normalized,
+    );
+    if (index !== -1) {
+      result[index] = { ...result[index], content: block.content };
+    }
+  }
+
+  // Handle unlabeled fences
+  if (unlabeled.length > 0) {
+    const stillPending = result
+      .map((operation, index) => ({ operation, index }))
+      .filter(
+        ({ operation }) =>
+          (operation.action === 'CREATE_FILE' || operation.action === 'EDIT_FILE') &&
+          isYamlPath(operation.path ?? '') &&
+          !operation.content?.trim(),
+      );
+
+    // Multiple unlabeled fences are ambiguous
+    if (unlabeled.length > 1) {
+      const paths = stillPending.map(({ operation }) => operation.path).join(', ');
+      throw new Error(
+        `Multiple unlabeled YAML fences cannot be assigned unambiguously to ${stillPending.length} operations. ` +
+        `Use labelled blocks (e.g., \`\`\`yaml file:path/to/file.yml\n...\`\`\`) for files: ${paths}`,
+      );
+    }
+
+    // One unlabeled fence with multiple pending operations is ambiguous
+    if (stillPending.length > 1) {
+      const paths = stillPending.map(({ operation }) => operation.path).join(', ');
+      throw new Error(
+        `One unlabeled YAML fence cannot be assigned to ${stillPending.length} operations. ` +
+        `Use labelled blocks (e.g., \`\`\`yaml file:path/to/file.yml\n...\`\`\`) for files: ${paths}`,
+      );
+    }
+
+    // One unlabeled fence with exactly one pending operation is OK
+    if (stillPending.length === 1) {
+      const { operation, index } = stillPending[0]!;
+      result[index] = { ...operation, content: unlabeled[0]! };
+    }
+  }
 
   return result;
 }
