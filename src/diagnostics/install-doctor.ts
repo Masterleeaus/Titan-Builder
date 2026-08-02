@@ -4,10 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEnvironmentText } from '../config/environment.js';
 import { listProjects, type ProjectRecord } from '../projects/registry.js';
-import {
-  createServiceManager,
-  type ServiceStatus,
-} from '../service/service-manager.js';
+import type { ServiceStatus } from '../service/service-manager.js';
 
 export type InstallDoctorStatus = 'pass' | 'warn' | 'fail';
 
@@ -33,6 +30,8 @@ export interface InstallDoctorOptions {
   readText?: (filePath: string) => Promise<string>;
   serviceStatus?: () => Promise<ServiceStatus>;
   projects?: () => Promise<ProjectRecord[]>;
+  isProcessRunning?: (pid: number) => boolean;
+  probeBridge?: (port: number) => Promise<boolean>;
   now?: () => Date;
 }
 
@@ -44,8 +43,13 @@ export async function runInstallDoctor(
   const nodeVersion = options.nodeVersion ?? process.versions.node;
   const env = options.env ?? process.env;
   const readText = options.readText ?? ((filePath: string) => readFile(filePath, 'utf8'));
-  const serviceStatus =
-    options.serviceStatus ?? (() => createServiceManager({ homeDir }).status());
+  const serviceStatus = options.serviceStatus ?? (() => inspectServiceStatus({
+    homeDir,
+    port: normalizePort(env.PORT),
+    readText,
+    isProcessRunning: options.isProcessRunning ?? processIsRunning,
+    probeBridge: options.probeBridge ?? probeLocalBridge,
+  }));
   const projects = options.projects ?? (() => listProjects({ homeDir }));
   const now = options.now ?? (() => new Date());
 
@@ -260,7 +264,7 @@ async function checkJsonAsset(input: {
       summary: `The ${input.label} is present and valid.`,
       detail: input.filePath,
     };
-  } catch (error) {
+  } catch {
     return {
       id: input.id,
       status: 'fail',
@@ -325,9 +329,13 @@ async function checkService(
     return {
       id: 'service.bridge',
       status: 'warn',
-      summary: 'The local bridge service is stopped.',
+      summary: status.staleMetadata
+        ? 'The local bridge service is stopped and stale service metadata remains.'
+        : 'The local bridge service is stopped.',
       detail: status.logPath,
-      remediation: 'Run openbrowser service start before using the Chrome Work view.',
+      remediation: status.staleMetadata
+        ? 'Run openbrowser service status to clean stale metadata, then start the service.'
+        : 'Run openbrowser service start before using the Chrome Work view.',
     };
   } catch (error) {
     return {
@@ -338,6 +346,95 @@ async function checkService(
       remediation: 'Run openbrowser service status and inspect the service logs.',
     };
   }
+}
+
+async function inspectServiceStatus(input: {
+  homeDir: string;
+  port: number;
+  readText: (filePath: string) => Promise<string>;
+  isProcessRunning: (pid: number) => boolean;
+  probeBridge: (port: number) => Promise<boolean>;
+}): Promise<ServiceStatus> {
+  const serviceRoot = path.join(input.homeDir, '.openbrowser');
+  const metadataPath = path.join(serviceRoot, 'service.json');
+  const defaultLogPath = path.join(serviceRoot, 'logs', 'service.log');
+
+  try {
+    const parsed = JSON.parse(await input.readText(metadataPath)) as {
+      version?: unknown;
+      pid?: unknown;
+      startedAt?: unknown;
+      logPath?: unknown;
+    };
+    if (
+      parsed.version !== 1 ||
+      !Number.isInteger(parsed.pid) ||
+      Number(parsed.pid) <= 0 ||
+      typeof parsed.startedAt !== 'string' ||
+      typeof parsed.logPath !== 'string'
+    ) {
+      return {
+        status: 'stopped',
+        logPath: defaultLogPath,
+        staleMetadata: true,
+      };
+    }
+
+    const pid = Number(parsed.pid);
+    if (!input.isProcessRunning(pid)) {
+      return {
+        status: 'stopped',
+        logPath: parsed.logPath,
+        staleMetadata: true,
+      };
+    }
+
+    return {
+      status: 'running',
+      pid,
+      startedAt: parsed.startedAt,
+      logPath: parsed.logPath,
+      healthy: await input.probeBridge(input.port),
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { status: 'stopped', logPath: defaultLogPath };
+    }
+    if (error instanceof SyntaxError) {
+      return {
+        status: 'stopped',
+        logPath: defaultLogPath,
+        staleMetadata: true,
+      };
+    }
+    throw error;
+  }
+}
+
+function processIsRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+async function probeLocalBridge(port: number): Promise<boolean> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/health`, {
+      signal: AbortSignal.timeout(1_000),
+      headers: { Accept: 'application/json' },
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function normalizePort(value: string | undefined): number {
+  const parsed = Number(value ?? 5000);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : 5000;
 }
 
 function resolvePackageRoot(): string {
