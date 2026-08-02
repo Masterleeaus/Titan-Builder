@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { readFile, realpath } from 'node:fs/promises';
 import fg from 'fast-glob';
-import { parseSkillManifest, type TitanSkillManifest } from './manifest.ts';
+import { parseSkillManifest, type TitanSkillManifest } from './manifest.js';
 
 export interface LoadedSkillPackage {
   manifest: TitanSkillManifest;
