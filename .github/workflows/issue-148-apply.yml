@@ -1,0 +1,102 @@
+name: Apply issue 148 fix
+
+on:
+  push:
+    branches:
+      - fix/148-loopback-bridge-identity
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: issue-148-loopback-bridge-identity
+  cancel-in-progress: false
+
+jobs:
+  apply-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Activate pnpm 11.2.2
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+          pnpm --version
+
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install companion dependencies
+        run: pnpm --dir browser-extension install --frozen-lockfile
+
+      - name: Materialize issue patch runner
+        shell: bash
+        run: |
+          cat > /tmp/issue-148-apply.mjs.gz.b64 <<'PAYLOAD'
+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
+PAYLOAD
+          base64 --decode /tmp/issue-148-apply.mjs.gz.b64 | gzip --decompress > /tmp/issue-148-apply.mjs
+          node --check /tmp/issue-148-apply.mjs
+
+      - name: Add failing regression tests
+        run: node /tmp/issue-148-apply.mjs tests
+
+      - name: Verify regression tests fail before implementation
+        shell: bash
+        run: |
+          set +e
+          node --experimental-strip-types --test src/server/security.test.ts > /tmp/root-red.log 2>&1
+          root_status=$?
+          pnpm --dir browser-extension exec vitest run bridge-server.test.ts > /tmp/companion-red.log 2>&1
+          companion_status=$?
+          set -e
+          cat /tmp/root-red.log
+          cat /tmp/companion-red.log
+          test "$root_status" -ne 0
+          test "$companion_status" -ne 0
+          grep -Eq "bridge identity proof|bridge health proves" /tmp/root-red.log
+          grep -Eq "verified bridge forwarding|ISSUE_148_NOT_IMPLEMENTED" /tmp/companion-red.log
+
+      - name: Implement verified loopback bridge forwarding
+        run: node /tmp/issue-148-apply.mjs implementation
+
+      - name: Run focused regression tests
+        run: |
+          node --experimental-strip-types --test src/server/security.test.ts
+          pnpm --dir browser-extension exec vitest run bridge-server.test.ts
+
+      - name: Run complete root verification
+        run: pnpm run verify
+
+      - name: Run complete companion verification
+        run: pnpm --dir browser-extension run verify
+
+      - name: Check patch integrity
+        run: git diff --check
+
+      - name: Remove temporary automation and publish verified fix
+        shell: bash
+        run: |
+          node /tmp/issue-148-apply.mjs cleanup
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: secure companion bridge forwarding (#148)"
+          git push origin HEAD:fix/148-loopback-bridge-identity
