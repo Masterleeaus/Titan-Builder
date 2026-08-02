@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { loadSkillRegistry } from './registry.ts';
@@ -27,11 +27,37 @@ const manifest = (id: string, aliases: string[] = [], instructions = 'instructio
   aliases,
 });
 
+const executableManifest = (entrypoint = 'runtime/entrypoint.js#resolveProjectPath') => ({
+  ...manifest('titan.security.project-path-containment'),
+  name: 'Project Path Containment',
+  kind: 'executable',
+  runtimeTargets: ['root'],
+  instructions: undefined,
+  entrypoint,
+  aliases: undefined,
+});
+
 async function writePackage(root: string, folder: string, value: object, instructions = 'Use evidence.') {
   const packageRoot = path.join(root, folder);
   await mkdir(packageRoot, { recursive: true });
   await writeFile(path.join(packageRoot, 'manifest.json'), JSON.stringify(value, null, 2));
   await writeFile(path.join(packageRoot, 'instructions.md'), instructions);
+  return packageRoot;
+}
+
+async function writeExecutablePackage(
+  root: string,
+  folder: string,
+  value = executableManifest(),
+): Promise<string> {
+  const packageRoot = path.join(root, folder);
+  await mkdir(path.join(packageRoot, 'runtime'), { recursive: true });
+  await writeFile(path.join(packageRoot, 'manifest.json'), JSON.stringify(value, null, 2));
+  await writeFile(
+    path.join(packageRoot, 'runtime', 'entrypoint.js'),
+    'export function resolveProjectPath() { throw new Error("Use the closed dispatcher."); }\n',
+  );
+  return packageRoot;
 }
 
 test('discovers packages deterministically and resolves legacy aliases', async () => {
@@ -97,4 +123,61 @@ test('loads the canonical repository skill library and resolves all built-in ali
   assert.equal(registry.canonicalId('architecture'), 'titan.guidance.architecture-review');
   assert.equal(registry.canonicalId('git'), 'titan.guidance.git-discipline');
   assert.equal(registry.canonicalId('performance'), 'titan.guidance.browser-performance');
+});
+
+test('loads a contained regular entrypoint through the closed dispatcher', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'titan-skills-'));
+  try {
+    const packageRoot = await writeExecutablePackage(root, 'project-path');
+    const registry = await loadSkillRegistry(root);
+    const loaded = registry.resolve('titan.security.project-path-containment');
+    assert.equal(loaded?.entrypoint?.absolutePath, path.join(packageRoot, 'runtime', 'entrypoint.js'));
+    assert.equal(typeof loaded?.entrypoint?.handler, 'function');
+    assert.deepEqual(await loaded?.entrypoint?.handler({ projectRoot: root, requestedPath: 'project-path' }), {
+      resolvedPath: path.join(await realpath(root), 'project-path'),
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('rejects entrypoint symlink and junction path components', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'titan-skills-'));
+  try {
+    const packageRoot = path.join(root, 'escaped');
+    const outsideRuntime = path.join(root, 'outside-runtime');
+    await mkdir(packageRoot, { recursive: true });
+    await mkdir(outsideRuntime, { recursive: true });
+    await writeFile(path.join(packageRoot, 'manifest.json'), JSON.stringify(executableManifest(), null, 2));
+    await writeFile(path.join(outsideRuntime, 'entrypoint.js'), 'export const unsafe = true;');
+    await symlink(
+      outsideRuntime,
+      path.join(packageRoot, 'runtime'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    await assert.rejects(
+      () => loadSkillRegistry(root),
+      /symbolic link|junction|package boundary/i,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('rejects an entrypoint export that is absent from the closed dispatcher', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'titan-skills-'));
+  try {
+    await writeExecutablePackage(
+      root,
+      'unapproved',
+      executableManifest('runtime/entrypoint.js#unapprovedExport'),
+    );
+    await assert.rejects(
+      () => loadSkillRegistry(root),
+      /closed runtime dispatcher|not registered/i,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
