@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import { resolveContainedPackageFile } from './package-file.ts';
 
-async function fixture(): Promise<{ packageRoot: string; outside: string }> {
+async function fixture(t: TestContext): Promise<{ packageRoot: string; outside: string }> {
   const base = await mkdtemp(path.join(os.tmpdir(), 'titan-skill-entrypoint-'));
+  t.after(async () => {
+    await rm(base, { recursive: true, force: true });
+  });
+
   const packageRoot = path.join(base, 'package');
   const outside = path.join(base, 'outside');
   await mkdir(path.join(packageRoot, 'runtime'), { recursive: true });
@@ -16,16 +20,16 @@ async function fixture(): Promise<{ packageRoot: string; outside: string }> {
   return { packageRoot, outside };
 }
 
-test('accepts an existing regular file with no linked path components', async () => {
-  const { packageRoot } = await fixture();
+test('accepts an existing regular file with no linked path components', async (t) => {
+  const { packageRoot } = await fixture(t);
   assert.equal(
     await resolveContainedPackageFile(packageRoot, 'runtime/entrypoint.js'),
     await realpath(path.join(packageRoot, 'runtime', 'entrypoint.js')),
   );
 });
 
-test('rejects a package-local symlink even when it resolves inside the package', async () => {
-  const { packageRoot } = await fixture();
+test('rejects a package-local symlink even when it resolves inside the package', async (t) => {
+  const { packageRoot } = await fixture(t);
   await symlink(
     path.join(packageRoot, 'runtime', 'entrypoint.js'),
     path.join(packageRoot, 'runtime', 'alias.js'),
@@ -37,8 +41,8 @@ test('rejects a package-local symlink even when it resolves inside the package',
   );
 });
 
-test('rejects symlink escape, missing files, and directories', async () => {
-  const { packageRoot, outside } = await fixture();
+test('rejects symlink escape, missing files, and directories', async (t) => {
+  const { packageRoot, outside } = await fixture(t);
   await symlink(outside, path.join(packageRoot, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
   await assert.rejects(
     () => resolveContainedPackageFile(packageRoot, 'linked/outside.js'),
