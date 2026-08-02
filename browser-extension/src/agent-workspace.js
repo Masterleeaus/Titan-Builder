@@ -241,7 +241,7 @@ function runtimeRequest(message) {
   });
 }
 
-function parseBridgeError(value) {
+export function parseBridgeError(value) {
   const text = String(value || 'OpenBrowser request failed');
   const error = new Error(text);
   const jsonStart = text.indexOf('{');
@@ -249,6 +249,7 @@ function parseBridgeError(value) {
     try {
       const details = JSON.parse(text.slice(jsonStart));
       error.code = details.error;
+      error.snapshot = details.snapshot;
       error.replacementPreviewRevision = details.replacementPreviewRevision;
       error.replacementOperations = details.replacementOperations || details.replacementPlans;
       error.message = details.message || details.error || text;
