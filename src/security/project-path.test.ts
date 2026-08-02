@@ -68,3 +68,56 @@ test('requires an existing directory for tool working directories', async () => 
     /directory/i,
   );
 });
+
+test('rejects version-control administrative namespaces', async () => {
+  const { project } = await fixture();
+  const paths = [
+    '.git/config',
+    'nested/.git/hooks/pre-commit',
+    '.hg/store/data',
+    '.svn/wc.db',
+    '_darcs/hashed_inventory',
+    '.bzr/branch/format',
+    '.fslckout',
+    '.fossil-settings/ignore-glob',
+    '.jj/repo/store',
+    'CVS/Root',
+  ];
+
+  for (const target of paths) {
+    await assert.rejects(
+      () => resolveProjectPath(project, target),
+      /version-control metadata|reserved/i,
+      target,
+    );
+  }
+});
+
+test('rejects case, separator, Unicode, and trailing-dot aliases for VCS metadata', async () => {
+  const { project } = await fixture();
+  const aliases = [
+    '.GIT/config',
+    'nested\\.git\\config',
+    '.git./config',
+    '.git /config',
+    '．git/config',
+    'nested／.git／hooks／pre-commit',
+  ];
+
+  for (const target of aliases) {
+    await assert.rejects(
+      () => resolveProjectPath(project, target),
+      /version-control metadata|reserved/i,
+      target,
+    );
+  }
+});
+
+test('does not reject ordinary source paths that merely mention VCS names', async () => {
+  const { project, canonicalProject } = await fixture();
+  const targets = ['src/git/client.ts', 'docs/.github/workflows.md', 'src/cvs-parser.ts'];
+
+  for (const target of targets) {
+    assert.equal(await resolveProjectPath(project, target), path.join(canonicalProject, target));
+  }
+});
