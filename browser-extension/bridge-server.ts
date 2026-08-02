@@ -755,10 +755,16 @@ export async function createWorkspaceServer(
     if (error instanceof WorkspaceHttpError) {
       return reply.code(error.statusCode).send({ error: error.message });
     }
-    const statusCode = typeof error.statusCode === 'number' ? error.statusCode : 500;
+    const errorRecord = typeof error === 'object' && error !== null
+      ? error as Record<string, unknown>
+      : {};
+    const statusCode = typeof errorRecord.statusCode === 'number'
+      ? errorRecord.statusCode
+      : 500;
+    const message = error instanceof Error ? error.message : String(error);
     return reply.code(statusCode).send({
-      error: statusCode >= 500 ? 'Workspace operation failed' : error.message,
-      detail: statusCode >= 500 ? error.message : undefined,
+      error: statusCode >= 500 ? 'Workspace operation failed' : message,
+      detail: statusCode >= 500 ? message : undefined,
     });
   });
 
