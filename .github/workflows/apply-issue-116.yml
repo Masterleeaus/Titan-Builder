@@ -1,0 +1,55 @@
+name: Apply issue 116 rollback hardening
+
+on:
+  push:
+    branches:
+      - fix/issue-116-safe-rollback-revalidation
+    paths:
+      - .github/scripts/apply-issue-116.mjs
+      - .github/workflows/apply-issue-116.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out working branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/issue-116-safe-rollback-revalidation
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Apply rollback security patch
+        run: node .github/scripts/apply-issue-116.mjs
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+          pnpm install --frozen-lockfile
+
+      - name: Run targeted verification
+        run: |
+          pnpm run typecheck
+          pnpm exec tsx --test src/operations/transaction.integration.test.ts
+
+      - name: Remove temporary patch machinery
+        run: |
+          rm .github/scripts/apply-issue-116.mjs
+          rm .github/workflows/apply-issue-116.yml
+
+      - name: Commit verified implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/operations/index.ts src/operations/transaction.integration.test.ts .github/scripts/apply-issue-116.mjs .github/workflows/apply-issue-116.yml
+          git commit -m "fix(security): revalidate rollback paths before mutation (#116)"
+          git push origin HEAD:fix/issue-116-safe-rollback-revalidation
