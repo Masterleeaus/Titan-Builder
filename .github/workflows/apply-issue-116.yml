@@ -47,6 +47,23 @@ jobs:
       - name: Apply rollback security patch
         run: node .github/scripts/apply-issue-116.mjs
 
+      - name: Pin generated filesystem Stats type
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const sourcePath = 'src/operations/index.ts';
+          let source = fs.readFileSync(sourcePath, 'utf8');
+          source = source.replace(
+            "import { constants as fsConstants } from 'node:fs';",
+            "import { constants as fsConstants, type Stats } from 'node:fs';",
+          );
+          source = source.replace(
+            'Promise<Awaited<ReturnType<typeof fs.lstat>> | undefined>',
+            'Promise<Stats | undefined>',
+          );
+          fs.writeFileSync(sourcePath, source);
+          NODE
+
       - name: Install dependencies
         run: |
           corepack enable
