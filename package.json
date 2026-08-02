@@ -68,7 +68,7 @@
     "enquirer": "^2.4.1",
     "fast-glob": "^3.3.2",
     "fastify": "^5.11.0",
-    "fs-extra": "^11.2.0",
+    "fs-extra": "^11.4.0",
     "gradient-string": "^3.0.0",
     "jsonc-parser": "^3.3.1",
     "pino": "^10.3.1",
