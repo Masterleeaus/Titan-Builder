@@ -38,6 +38,12 @@ test('rejects absolute, drive-qualified, UNC, and null-byte context references',
   }
 });
 
+test('allows ordinary percent characters while rejecting encoded path syntax', () => {
+  assert.equal(normalizeContextReference('src/100%coverage.ts'), 'src/100%coverage.ts');
+  assert.throws(() => normalizeContextReference('src%2fsecret.ts'), /relative path/i);
+  assert.throws(() => normalizeContextReference('src/%2e%2e/secret.ts'), /relative path/i);
+});
+
 test('resolves an existing regular project file canonically', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'openbrowser-context-path-'));
   try {
