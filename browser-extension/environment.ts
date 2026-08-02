@@ -63,7 +63,10 @@ export function loadWorkspaceEnvironment(
 }
 
 function resolvePackageRoot(): string {
-  return path.dirname(fileURLToPath(import.meta.url));
+  const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+  return path.basename(moduleDirectory) === 'dist'
+    ? path.dirname(moduleDirectory)
+    : moduleDirectory;
 }
 
 function unquote(value: string): string {
