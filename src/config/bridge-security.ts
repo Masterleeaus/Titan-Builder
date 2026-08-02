@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { access, chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, writeFile, lstat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -88,10 +88,10 @@ export async function ensureBridgeSecurityEnvironment(
       await chmod(configPath, 0o600);
     }
   } else {
-    await access(configPath).catch((error) => {
-      console.warn(`Config file not accessible: ${configPath}`, error);
-    });
+    await validateAndRepairCredentialPermissions(configPath);
   }
+
+  await validateAndRepairCredentialPermissions(path.dirname(configPath));
 
   return {
     configPath,
@@ -99,6 +99,41 @@ export async function ensureBridgeSecurityEnvironment(
     generatedBrowserToken,
     insecureDevelopment: false,
   };
+}
+
+async function validateAndRepairCredentialPermissions(filePath: string): Promise<void> {
+  try {
+    const stats = await lstat(filePath);
+
+    if (stats.isSymbolicLink()) {
+      throw new Error('Credential path is a symbolic link, which is not allowed');
+    }
+
+    if (process.platform === 'win32') {
+      return;
+    }
+
+    const mode = stats.mode & 0o777;
+    const isFile = stats.isFile();
+    const isDir = stats.isDirectory();
+
+    if (isFile) {
+      const expectedMode = 0o600;
+      if (mode !== expectedMode) {
+        await chmod(filePath, expectedMode);
+      }
+    } else if (isDir) {
+      const expectedMode = 0o700;
+      if (mode !== expectedMode) {
+        await chmod(filePath, expectedMode);
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
 }
 
 export function generateStrongToken(): string {
