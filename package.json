@@ -1,0 +1,77 @@
+{
+  "name": "openbrowser",
+  "version": "0.5.0",
+  "description": "Browser-powered coding agent with safe local execution, persistent projects, project memory, budgeted context, skills, profiles, and ChatGPT exports.",
+  "keywords": [
+    "ai-agent",
+    "ai-tool",
+    "free-ai-tool",
+    "ai-harness",
+    "coding-agent",
+    "chatgpt",
+    "chatgpt-coding",
+    "claude",
+    "claude-coding",
+    "gemini",
+    "no-api-key",
+    "browser-extension",
+    "ai-subscription",
+    "free-coding",
+    "local-ai-agent",
+    "cli",
+    "llm",
+    "open-source"
+  ],
+  "type": "module",
+  "private": true,
+  "bin": {
+    "openbrowser": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "dev:server": "tsx watch src/server/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm run test:node && pnpm run test:integration",
+    "test:watch": "vitest",
+    "test:node": "node --experimental-strip-types --test src/config/environment.test.ts src/config/bridge-security.test.ts src/client/response-timeout.test.ts src/operations/mkdir-normalize.test.ts src/operations/operation-order.test.ts src/operations/path-security-wiring.test.ts src/tools/registry.test.ts src/project/status.test.ts src/server/security.test.ts src/server/operation-approvals.test.ts src/server/session-store.test.ts src/verification/plan.test.ts src/projects/registry.test.ts src/projects/project-intelligence.integration.test.ts src/memory/project-memory.test.ts src/context/context-budget.test.ts src/security/project-path.test.ts browser-extension/src/attachment-verification.test.mjs browser-extension/src/auto-continue-policy.test.mjs browser-extension/src/bridge-config.test.mjs browser-extension/src/chatgpt-page-tools.test.mjs browser-extension/src/file-exporter.test.mjs browser-extension/src/job-lifecycle.test.mjs browser-extension/src/job-payload.test.mjs browser-extension/src/prompt-library.test.mjs browser-extension/src/prompt-routing.test.mjs browser-extension/src/provider-routing-security.test.mjs browser-extension/src/project-intelligence.test.mjs browser-extension/src/sidepanel-integration.test.mjs browser-extension/src/workspace-integration.test.mjs browser-extension/src/workspace-library.test.mjs scripts/release-config.test.mjs",
+    "check:extension": "node scripts/check-extension.mjs",
+    "smoke:cli": "node dist/index.js --help",
+    "verify:offline": "npm run test:node && npm run check:extension",
+    "verify": "pnpm run typecheck && pnpm run test && pnpm run build && pnpm run smoke:cli && pnpm run check:extension",
+    "ci": "pnpm run verify",
+    "test:integration": "tsx --test src/server/workflow.integration.ts src/operations/transaction.integration.test.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.2.2",
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "cfonts": "^3.3.1",
+    "chalk": "^5.6.2",
+    "chokidar": "^3.6.0",
+    "commander": "^12.1.0",
+    "diff": "^5.2.0",
+    "enquirer": "^2.4.1",
+    "fast-glob": "^3.3.2",
+    "fastify": "^4.28.1",
+    "fs-extra": "^11.2.0",
+    "gradient-string": "^3.0.0",
+    "jsonc-parser": "^3.3.1",
+    "pino": "^9.5.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/diff": "^5.2.3",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

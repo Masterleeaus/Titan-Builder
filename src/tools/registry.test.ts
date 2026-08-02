@@ -1,0 +1,85 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import {
+  isUnsafeLegacyCommandEnabled,
+  requiresExplicitApproval,
+  resolveToolInvocation,
+  toolInputFiles,
+} from './registry.ts';
+
+test('resolves git.status without a shell', () => {
+  const root = path.resolve('/tmp/project');
+  const invocation = resolveToolInvocation('git.status', [], root);
+
+  assert.equal(invocation.executable, 'git');
+  assert.deepEqual(invocation.args, ['status', '--short', '--branch']);
+  assert.equal(invocation.cwd, root);
+  assert.equal(invocation.risk, 'READ');
+  assert.equal(invocation.shell, false);
+});
+
+test('rejects unknown tool identifiers', () => {
+  assert.throws(
+    () => resolveToolInvocation('shell.exec', ['rm', '-rf', '.'], '/tmp/project'),
+    /Unsupported tool/,
+  );
+});
+
+test('restricts npm.run to verification-oriented names without calling them safe', () => {
+  assert.throws(
+    () => resolveToolInvocation('npm.run', ['postinstall'], '/tmp/project'),
+    /not an approved verification script/,
+  );
+
+  for (const [toolId, args] of [
+    ['npm.test', []],
+    ['npm.run', ['test:unit']],
+    ['pnpm.test', []],
+    ['pnpm.run', ['build']],
+  ] as const) {
+    const invocation = resolveToolInvocation(toolId, [...args], '/tmp/project');
+    assert.equal(invocation.risk, 'ARBITRARY_EXECUTION');
+    assert.equal(requiresExplicitApproval(invocation.risk), true);
+    assert.ok(toolInputFiles(invocation).some((input) => input.path === 'package.json' && input.required));
+  }
+});
+
+test('dependency installs disable lifecycle scripts, enforce lockfiles, and require network approval', () => {
+  const npm = resolveToolInvocation('npm.install', [], '/tmp/project');
+  assert.equal(npm.risk, 'NETWORK_WRITE');
+  assert.deepEqual(npm.args, ['ci', '--ignore-scripts']);
+  assert.equal(requiresExplicitApproval(npm.risk), true);
+  assert.ok(toolInputFiles(npm).some((input) => input.path === 'package-lock.json' && input.required));
+
+  const pnpm = resolveToolInvocation('pnpm.install', [], '/tmp/project');
+  assert.equal(pnpm.risk, 'NETWORK_WRITE');
+  assert.deepEqual(pnpm.args, ['install', '--frozen-lockfile', '--ignore-scripts']);
+  assert.equal(requiresExplicitApproval(pnpm.risk), true);
+  assert.ok(toolInputFiles(pnpm).some((input) => input.path === 'pnpm-lock.yaml' && input.required));
+});
+
+test('only genuinely low-side-effect risks bypass per-operation approval', () => {
+  assert.equal(requiresExplicitApproval('READ'), false);
+  assert.equal(requiresExplicitApproval('SAFE_EXECUTION'), false);
+  assert.equal(requiresExplicitApproval('WRITE'), false);
+  assert.equal(requiresExplicitApproval('NETWORK_WRITE'), true);
+  assert.equal(requiresExplicitApproval('ARBITRARY_EXECUTION'), true);
+  assert.equal(requiresExplicitApproval('DESTRUCTIVE'), true);
+  assert.equal(requiresExplicitApproval('PUBLISH'), true);
+});
+
+test('legacy arbitrary commands are disabled by default', () => {
+  const previous = process.env.OPENBROWSER_ALLOW_UNSAFE_COMMANDS;
+  delete process.env.OPENBROWSER_ALLOW_UNSAFE_COMMANDS;
+  assert.equal(isUnsafeLegacyCommandEnabled(), false);
+
+  process.env.OPENBROWSER_ALLOW_UNSAFE_COMMANDS = '1';
+  assert.equal(isUnsafeLegacyCommandEnabled(), true);
+
+  if (previous === undefined) {
+    delete process.env.OPENBROWSER_ALLOW_UNSAFE_COMMANDS;
+  } else {
+    process.env.OPENBROWSER_ALLOW_UNSAFE_COMMANDS = previous;
+  }
+});

@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenBrowser Coding Workspace</title>
+  <link rel="stylesheet" href="./sidepanel.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand-row">
+      <img src="../icons/favicon.png" width="28" height="28" alt="" />
+      <div><h1>OpenBrowser</h1><p>Coding workspace</p></div>
+      <span id="bridge-pill" class="status-pill pending">Checking</span>
+    </div>
+    <div class="toolbar-row">
+      <label class="provider-field"><span>Provider</span>
+        <select id="provider-select">
+          <option value="auto">Auto</option><option value="chatgpt">ChatGPT</option>
+          <option value="claude">Claude</option><option value="gemini">Gemini</option>
+          <option value="deepseek">DeepSeek</option><option value="perplexity">Perplexity</option>
+          <option value="glm">GLM</option><option value="grok">Grok</option>
+        </select>
+      </label>
+      <button id="refresh-status" class="icon-button" type="button" title="Refresh">↻</button>
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="Panel sections">
+    <button class="tab active" data-view="prompts" type="button">Prompts</button>
+    <button class="tab" data-view="projects" type="button">Projects</button>
+    <button class="tab" data-view="memory" type="button">Memory</button>
+    <button class="tab" data-view="custom" type="button">Custom</button>
+    <button class="tab" data-view="skills" type="button">Skills</button>
+    <button class="tab" data-view="agents" type="button">Agents</button>
+    <button class="tab" data-view="plugins" type="button">Apps</button>
+    <button class="tab" data-view="library" type="button">Library</button>
+    <button class="tab" data-view="export" type="button">Export</button>
+    <button class="tab" data-view="settings" type="button">Settings</button>
+    <button class="tab" data-view="status" type="button">Status</button>
+  </nav>
+
+  <main>
+    <section id="view-projects" class="view">
+      <div class="section-heading"><div><h2>Projects</h2><p>Register local coding projects and preview exactly what context will be sent.</p></div><button id="refresh-projects" type="button">Refresh</button></div>
+      <div class="manage-row"><button id="register-current-project" class="primary" type="button">Register current project</button></div>
+      <div id="project-list" class="card-list"></div>
+      <article class="editor-card">
+        <h2>Context budget preview</h2>
+        <label>Files or folders<textarea id="project-context-refs" rows="4">.</textarea></label>
+        <div class="two-column"><label>Total characters<input id="project-context-budget" type="number" min="1000" max="2000000" value="60000" /></label><label>Per file<input id="project-context-per-file" type="number" min="100" max="500000" value="24000" /></label></div>
+        <label>Maximum files<input id="project-context-max-files" type="number" min="1" max="500" value="30" /></label>
+        <button id="preview-project-context" class="primary" type="button">Preview safe context</button>
+        <pre id="project-context-preview" class="context-preview">No preview yet.</pre>
+      </article>
+    </section>
+
+    <section id="view-memory" class="view">
+      <div class="section-heading"><div><h2>Project memory</h2><p>Explicit constraints and decisions included in CLI ask and agent prompts.</p></div><button id="clear-project-memory" type="button">Clear all</button></div>
+      <form id="project-memory-form" class="editor-card">
+        <label>Memory<textarea id="project-memory-text" rows="5" required placeholder="Example: Preserve Chrome and Firefox compatibility."></textarea></label>
+        <label>Tags<input id="project-memory-tags" placeholder="compatibility, security" maxlength="200" /></label>
+        <button class="primary" type="submit">Add memory</button>
+      </form>
+      <div id="project-memory-list" class="card-list"></div>
+    </section>
+
+    <section id="view-prompts" class="view active">
+      <div class="active-context" id="active-context-summary"></div>
+      <div class="filters">
+        <input id="prompt-search" type="search" placeholder="Search coding prompts…" autocomplete="off" />
+        <select id="category-filter"><option value="all">All categories</option></select>
+      </div>
+      <div id="prompt-count" class="section-meta"></div>
+      <div id="prompt-list" class="card-list"></div>
+    </section>
+
+    <section id="view-custom" class="view">
+      <form id="custom-prompt-form" class="editor-card">
+        <input id="custom-id" type="hidden" />
+        <label>Title<input id="custom-title" maxlength="100" required /></label>
+        <label>Description<input id="custom-description" maxlength="180" /></label>
+        <div class="two-column"><label>Category<input id="custom-category" value="Custom" maxlength="40" /></label><label>Tags<input id="custom-tags" placeholder="debug, tests" maxlength="160" /></label></div>
+        <label>Prompt<textarea id="custom-content" rows="9" required placeholder="Use ${variable:default} for editable fields."></textarea></label>
+        <div class="button-row"><button class="primary" type="submit">Save prompt</button><button id="reset-custom" type="button">Clear</button></div>
+      </form>
+      <div class="manage-row"><button id="import-prompts" type="button">Import JSON</button><button id="export-prompts" type="button">Export JSON</button><input id="import-file" type="file" accept="application/json,.json" hidden /></div>
+      <div id="custom-list" class="card-list compact"></div>
+    </section>
+
+    <section id="view-skills" class="view">
+      <div class="section-heading"><div><h2>Skills</h2><p>Active skills are appended to prompts and CLI jobs.</p></div><button id="new-skill" type="button">New</button></div>
+      <div id="skill-list" class="card-list"></div>
+      <form id="skill-form" class="editor-card collapsible" hidden>
+        <input id="skill-id" type="hidden" />
+        <label>Title<input id="skill-title" maxlength="100" required /></label>
+        <label>Description<input id="skill-description" maxlength="180" /></label>
+        <label>Tags<input id="skill-tags" maxlength="160" placeholder="security, tests" /></label>
+        <label>Instructions<textarea id="skill-instructions" rows="8" required></textarea></label>
+        <div class="button-row"><button class="primary" type="submit">Save skill</button><button id="cancel-skill" type="button">Cancel</button></div>
+      </form>
+    </section>
+
+    <section id="view-agents" class="view">
+      <div class="section-heading"><div><h2>Agent profiles</h2><p>Choose one active working style.</p></div><button id="new-agent" type="button">New</button></div>
+      <div id="agent-list" class="card-list"></div>
+      <form id="agent-form" class="editor-card collapsible" hidden>
+        <input id="agent-id" type="hidden" />
+        <label>Name<input id="agent-name" maxlength="100" required /></label>
+        <label>Role<input id="agent-role" maxlength="120" /></label>
+        <label>Skills<select id="agent-skill-ids" multiple size="6"></select></label>
+        <label>Instructions<textarea id="agent-instructions" rows="8" required></textarea></label>
+        <div class="button-row"><button class="primary" type="submit">Save profile</button><button id="cancel-agent" type="button">Cancel</button></div>
+      </form>
+    </section>
+
+    <section id="view-plugins" class="view">
+      <div class="section-heading"><div><h2>ChatGPT Apps / Plugins</h2><p>Scans only what is visible in an open ChatGPT page.</p></div></div>
+      <div class="manage-row"><button id="open-chatgpt-plugins" type="button">Open directory</button><button id="scan-chatgpt-plugins" class="primary" type="button">Scan visible page</button></div>
+      <div id="plugin-scan-meta" class="section-meta"></div>
+      <div id="plugin-list" class="card-list"></div>
+    </section>
+
+    <section id="view-library" class="view">
+      <div class="section-heading"><div><h2>ChatGPT File Library</h2><p>Scans visible file cards, links, and current conversation replies.</p></div></div>
+      <div class="manage-row three"><button id="open-chatgpt-library" type="button">Open Library</button><button id="scan-chatgpt-library" type="button">Scan files</button><button id="scan-conversation-replies" class="primary" type="button">Scan replies</button></div>
+      <div id="library-scan-meta" class="section-meta"></div>
+      <div id="library-list" class="selection-list"></div>
+    </section>
+
+    <section id="view-export" class="view">
+      <div class="section-heading"><div><h2>File exporter</h2><p>Export one, selected, or all scanned files and replies.</p></div></div>
+      <article class="editor-card">
+        <div class="two-column"><label>Scope<select id="export-scope"><option value="selected">Selected</option><option value="all">All scanned</option></select></label><label>Base name<input id="export-name" value="openbrowser-chatgpt-export" maxlength="100" /></label></div>
+        <div id="export-summary" class="section-meta">Nothing selected.</div>
+        <div class="button-row"><button id="export-markdown" type="button">Export .md</button><button id="export-zip" class="primary" type="button">Export .zip</button></div>
+        <p class="fine-print">ZIP export fetches real bytes only from visible downloadable URLs. Unavailable files are represented by Markdown metadata.</p>
+      </article>
+      <div id="export-item-list" class="selection-list"></div>
+    </section>
+
+    <section id="view-settings" class="view">
+      <form id="settings-form" class="editor-card">
+        <h2>Bridge and automation</h2>
+        <div class="two-column"><label>Bridge port<input id="bridge-port" type="number" min="1024" max="65535" /></label><label>Provider<select id="settings-provider"><option value="auto">Auto</option><option value="chatgpt">ChatGPT</option><option value="claude">Claude</option><option value="gemini">Gemini</option><option value="deepseek">DeepSeek</option><option value="perplexity">Perplexity</option><option value="glm">GLM</option><option value="grok">Grok</option></select></label></div>
+        <label>Bridge token<input id="bridge-token" type="password" autocomplete="off" /></label>
+        <label class="check-row"><input id="superpower-compatibility" type="checkbox" /> Superpower compatibility mode</label>
+        <hr />
+        <label class="check-row"><input id="auto-continue-enabled" type="checkbox" /> Enable capped auto-continue for OpenBrowser prompts and ask jobs</label>
+        <label>Maximum continuations<input id="auto-continue-max" type="number" min="1" max="10" /></label>
+        <label class="check-row"><input id="auto-continue-fallback" type="checkbox" /> Allow fallback “continue” prompt when no native button exists</label>
+        <label>Fallback prompt<textarea id="auto-continue-prompt" rows="3"></textarea></label>
+        <button class="primary" type="submit">Save settings</button>
+      </form>
+    </section>
+
+    <section id="view-status" class="view">
+      <div class="status-grid">
+        <article class="status-card"><h2>Local bridge</h2><div id="bridge-status-detail" class="status-detail">Checking…</div></article>
+        <article class="status-card"><h2>Project</h2><div id="project-status-detail" class="status-detail">Start OpenBrowser in a project.</div></article>
+        <article class="status-card"><h2>AI tabs</h2><div id="provider-status-list" class="provider-status-list"></div></article>
+        <article class="status-card"><h2>Workspace</h2><div id="workspace-status-detail" class="status-detail"></div></article>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="prompt-dialog"><form method="dialog" class="dialog-card"><header><div><h2 id="dialog-title">Use prompt</h2><p id="dialog-description"></p></div><button class="close-button" value="cancel" aria-label="Close">×</button></header><div id="variable-fields" class="variable-fields"></div><label>Preview<textarea id="prompt-preview" rows="14"></textarea></label><div class="dialog-actions"><button id="copy-prompt" type="button">Copy</button><button id="insert-prompt" type="button">Insert only</button><button id="send-prompt" class="primary" type="button">Insert & send</button></div><div id="dialog-result" class="result" role="status"></div></form></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="./sidepanel.js"></script>
+</body>
+</html>
