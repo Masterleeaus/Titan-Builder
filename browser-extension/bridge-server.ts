@@ -11,6 +11,11 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { WebSocket, WebSocketServer } from 'ws';
 import yazl from 'yazl';
 import { z } from 'zod';
+import {
+  assertSameTrustedOrigin,
+  parseTrustedBridgeEndpoint,
+  verifyBridgeIdentity,
+} from './bridge-trust.js';
 
 config();
 
@@ -66,6 +71,8 @@ export interface WorkspaceServerOptions {
   workspaceToken?: string;
   bridgeToken?: string;
   bridgeUrl?: string;
+  bridgeAllowedPorts?: number[];
+  bridgeFetch?: typeof fetch;
 }
 
 class WorkspaceHttpError extends Error {
@@ -707,9 +714,13 @@ export async function createWorkspaceServer(
     throw new Error('WORKSPACE_TOKEN must contain at least 24 characters');
   }
 
-  const bridgeUrl = (options.bridgeUrl ?? process.env.OPENBROWSER_BRIDGE_URL ?? DEFAULT_BRIDGE_URL)
-    .replace(/\/$/, '');
+  const bridgeEndpoint = parseTrustedBridgeEndpoint(
+    options.bridgeUrl ?? process.env.OPENBROWSER_BRIDGE_URL ?? DEFAULT_BRIDGE_URL,
+    options.bridgeAllowedPorts,
+  );
+  const bridgeUrl = bridgeEndpoint.origin;
   const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;
+  const bridgeFetch = options.bridgeFetch ?? fetch;
   const databasePath = path.resolve(
     options.databasePath
       ?? process.env.WORKSPACE_DB_PATH
@@ -778,8 +789,10 @@ export async function createWorkspaceServer(
     if (!bridgeToken) {
       throw new WorkspaceHttpError('BRIDGE_TOKEN is required for main-bridge operations', 503);
     }
-    const response = await fetch(`${bridgeUrl}${route}`, {
+    await verifyBridgeIdentity(bridgeEndpoint, bridgeToken, bridgeFetch);
+    const response = await bridgeFetch(new URL(route, bridgeEndpoint.origin), {
       method,
+      redirect: 'manual',
       headers: {
         Authorization: `Bearer ${bridgeToken}`,
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
@@ -787,6 +800,7 @@ export async function createWorkspaceServer(
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(60_000),
     });
+    assertSameTrustedOrigin(response, bridgeEndpoint);
     const text = await response.text();
     let payload: unknown = text;
     if (text) {
