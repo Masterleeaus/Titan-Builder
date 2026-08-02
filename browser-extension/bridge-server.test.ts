@@ -8,6 +8,7 @@ import {
   createZipBuffer,
   normalizeExportName,
   normalizeRelativePath,
+  normalizeWorkspaceError,
   resolveProjectPath,
 } from './bridge-server.js';
 
@@ -50,6 +51,24 @@ describe('path security', () => {
     }
 
     await expect(resolveProjectPath(root, 'linked/secret.txt')).rejects.toThrow(/symbolic-link/i);
+  });
+});
+
+describe('workspace error normalization', () => {
+  it('preserves validated HTTP errors and Error diagnostics', () => {
+    expect(normalizeWorkspaceError(Object.assign(new Error('Conflict'), { statusCode: 409 })))
+      .toEqual({ statusCode: 409, message: 'Conflict' });
+    expect(normalizeWorkspaceError(new Error('Database unavailable')))
+      .toEqual({ statusCode: 500, message: 'Database unavailable' });
+  });
+
+  it('rejects invalid status values and non-Error diagnostics', () => {
+    expect(normalizeWorkspaceError({ statusCode: 200, message: 'not an error' }))
+      .toEqual({ statusCode: 500, message: 'Unknown workspace error' });
+    expect(normalizeWorkspaceError({ statusCode: '404', message: 'wrong type' }))
+      .toEqual({ statusCode: 500, message: 'Unknown workspace error' });
+    expect(normalizeWorkspaceError('raw secret value'))
+      .toEqual({ statusCode: 500, message: 'Unknown workspace error' });
   });
 });
 
