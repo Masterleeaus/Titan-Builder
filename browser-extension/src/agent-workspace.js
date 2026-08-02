@@ -1,4 +1,6 @@
 import { createRunEventMonitor } from './browser-run-events.js';
+import { getRuntimePromptCatalog, resolvePromptBody } from './prompt-catalog.js';
+import { composeRoutedPrompt, routePromptRequest } from './prompt-router.js';
 
 const TERMINAL_STATUSES = new Set(['completed', 'rejected', 'cancelled', 'failed']);
 
@@ -25,6 +27,44 @@ export function buildCreateRunPayload(input = {}) {
       : 'standard';
   }
   return payload;
+}
+
+export async function prepareRoutedWorkPrompt(input = {}, dependencies = {}) {
+  const originalPrompt = String(input.prompt || '').trim();
+  if (!originalPrompt) throw new Error('Enter a task or question.');
+  const mode = input.mode === 'ask' ? 'ask' : 'agent';
+  const catalog = dependencies.catalog || getRuntimePromptCatalog();
+  const route = routePromptRequest(originalPrompt, catalog, {
+    mode,
+    routingMode: input.promptRoutingMode,
+    manualPromptId: input.manualPromptId,
+    minScore: dependencies.minScore,
+    minMargin: dependencies.minMargin,
+    ambiguousFloor: dependencies.ambiguousFloor,
+  });
+
+  if (route.status !== 'selected' || !route.selected) {
+    return {
+      prompt: originalPrompt,
+      originalPrompt,
+      route,
+      selectedPrompt: null,
+    };
+  }
+
+  const loadPromptBody = dependencies.loadPromptBody || resolvePromptBody;
+  const body = await loadPromptBody(route.selected, dependencies.canonicalLoader);
+  return {
+    prompt: composeRoutedPrompt({
+      request: originalPrompt,
+      prompt: route.selected,
+      body,
+      route,
+    }),
+    originalPrompt,
+    route,
+    selectedPrompt: route.selected,
+  };
 }
 
 export function buildOperationSelection(operations = []) {
@@ -58,7 +98,12 @@ export function reduceRunViewState(previous = {}, snapshot = {}) {
   };
 }
 
-export function createAgentWorkspaceController({ bridgeRequest, storage, render }) {
+export function createAgentWorkspaceController({
+  bridgeRequest,
+  storage,
+  render,
+  preparePrompt = prepareRoutedWorkPrompt,
+}) {
   let state = reduceRunViewState();
 
   const publish = () => {
@@ -76,10 +121,14 @@ export function createAgentWorkspaceController({ bridgeRequest, storage, render 
     acceptSnapshot,
 
     async start(input) {
-      const payload = buildCreateRunPayload(input);
+      const prepared = await preparePrompt(input);
+      const payload = buildCreateRunPayload({ ...input, prompt: prepared.prompt });
       const snapshot = await bridgeRequest({ type: 'OPENBROWSER_CREATE_RUN', payload });
       state = reduceRunViewState({}, snapshot);
-      state.notice = '';
+      state.promptRoute = prepared.route;
+      state.selectedPrompt = prepared.selectedPrompt;
+      state.originalPrompt = prepared.originalPrompt;
+      state.notice = routeNotice(prepared.route, prepared.selectedPrompt);
       await storage?.set?.({ openbrowserActiveRunId: snapshot.id });
       return publish();
     },
@@ -172,6 +221,16 @@ export function createAgentWorkspaceController({ bridgeRequest, storage, render 
       return publish();
     },
   };
+}
+
+function routeNotice(route, selectedPrompt) {
+  if (route?.status === 'selected' && selectedPrompt) {
+    return `Prompt selected: ${selectedPrompt.title} (${route.reason}, score ${route.score}).`;
+  }
+  if (route?.status === 'ambiguous') return 'Prompt routing was ambiguous. The original request was sent unchanged.';
+  if (route?.status === 'none') return 'No prompt matched confidently. The original request was sent unchanged.';
+  if (route?.status === 'off') return 'Prompt routing was disabled. The original request was sent unchanged.';
+  return '';
 }
 
 function clampNumber(value, min, max, fallback) {
