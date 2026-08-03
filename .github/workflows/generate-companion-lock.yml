@@ -28,7 +28,7 @@ jobs:
         run: |
           corepack enable
           corepack prepare pnpm@11.2.2 --activate
-      - name: Restore last coherent companion security slice
+      - name: Restore and repair coherent companion security slice
         shell: bash
         run: |
           set -euo pipefail
@@ -42,6 +42,24 @@ jobs:
             browser-extension/bridge-endpoint-policy.ts \
             browser-extension/bridge-forwarding-security.test.ts \
             browser-extension/bridge-identity-verifier.ts
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('browser-extension/bridge-server.ts')
+          text = path.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  "import { existsSync, readFileSync } from 'node:fs';",
+                  "import { existsSync } from 'node:fs';",
+              ),
+              ('response = await authenticatedBridgeRequest({', 'response = await requestAuthenticatedBridge({'),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'Expected one companion repair anchor, found {text.count(old)}: {old!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
       - name: Regenerate and verify companion
         working-directory: browser-extension
         shell: bash
