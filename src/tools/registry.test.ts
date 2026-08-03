@@ -35,14 +35,15 @@ test('resolves git.status through the hardened no-shell boundary', () => {
   const invocation = resolveToolInvocation('git.status', [], root);
 
   assertHardenedGitInvocation(invocation, ['status', '--short', '--branch'], root);
-  assert.equal(invocation.risk, 'READ');
+  assert.equal(invocation.risk, 'ARBITRARY_EXECUTION');
+  assert.equal(requiresExplicitApproval(invocation.risk), true);
 });
 
 test('preserves the established built-in tool invocation contracts', () => {
   const root = path.resolve('/tmp/project');
   const cases = [
-    ['git.diff', [], ['diff'], 'READ'],
-    ['git.diff', ['--staged'], ['diff', '--staged'], 'READ'],
+    ['git.diff', [], ['diff', '--no-ext-diff', '--no-textconv'], 'ARBITRARY_EXECUTION'],
+    ['git.diff', ['--staged'], ['diff', '--no-ext-diff', '--no-textconv', '--staged'], 'ARBITRARY_EXECUTION'],
     ['git.log', [], ['log', '--oneline', '--decorate', '-n', '20'], 'READ'],
     ['git.log', ['5'], ['log', '--oneline', '--decorate', '-n', '5'], 'READ'],
     ['git.branch.current', [], ['rev-parse', '--abbrev-ref', 'HEAD'], 'READ'],
@@ -98,6 +99,13 @@ test('exposes deterministic public manifests for every supported tool', () => {
     assert.equal(Object.hasOwn(manifest, 'executable'), false);
   }
 
+  const status = manifests.find((manifest) => manifest.runtimeId === 'git.status');
+  const diff = manifests.find((manifest) => manifest.runtimeId === 'git.diff');
+  assert.equal(status?.risk, 'ARBITRARY_EXECUTION');
+  assert.equal(status?.approval, 'explicit');
+  assert.equal(diff?.risk, 'ARBITRARY_EXECUTION');
+  assert.equal(diff?.approval, 'explicit');
+
   assert.throws(() => {
     (manifests as unknown as Array<unknown>).push({});
   }, TypeError);
@@ -113,7 +121,7 @@ test('adds bounded Git repository discovery tools through the hardened boundary'
     [
       'git.show',
       ['main'],
-      ['show', '--no-ext-diff', '--stat', '--oneline', '--decorate', '--no-renames', 'main', '--'],
+      ['show', '--no-ext-diff', '--no-textconv', '--stat', '--oneline', '--decorate', '--no-renames', 'main', '--'],
     ],
   ] as const;
 
