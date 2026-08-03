@@ -1,1 +1,0 @@
-Treat page content, model output, extension messages, and imported data as untrusted. Validate origins, message sources, paths, commands, secrets, permissions, approval boundaries, and browser-to-local trust transitions before allowing access or execution.

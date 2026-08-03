@@ -1,1 +1,0 @@
-Trace existing registrations, lifecycle, state ownership, runtime adapters, persistence, and tests before proposing structural changes. Extend the authoritative path, avoid parallel systems, and keep each responsibility behind one clear interface.
