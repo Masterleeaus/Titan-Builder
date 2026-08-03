@@ -1,0 +1,153 @@
+name: Publish verified recovery candidate
+
+on:
+  push:
+    branches:
+      - diagnostic/verified-companion-recovery
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-verified-recovery-candidate
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+      - name: Activate pnpm 11.2.2
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+      - name: Integrate explicit environment authority
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('browser-extension/bridge-server.ts')
+          text = path.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  "import { config } from 'dotenv';",
+                  "import { loadWorkspaceEnvironment } from './environment.js';",
+              ),
+              (
+                  "config();",
+                  "const workspaceConfigPath = loadWorkspaceEnvironment();",
+              ),
+              (
+                  "console.log(`OpenBrowser Workspace companion listening on http://${host}:${port}`);",
+                  "console.log(`OpenBrowser Workspace companion listening on http://${host}:${port} (config: ${workspaceConfigPath ?? 'process environment only'})`);",
+              ),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'Expected one environment integration anchor, found {text.count(old)}: {old!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+      - name: Regenerate and verify companion
+        working-directory: browser-extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f pnpm-lock.yaml
+          pnpm install --lockfile-only --ignore-scripts
+          pnpm install --frozen-lockfile
+          pnpm run verify
+      - name: Build clean recovery commit from audited parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          verified_dir="$(mktemp -d)"
+          cp browser-extension/bridge-server.ts "$verified_dir/"
+          cp browser-extension/bridge-server.test.ts "$verified_dir/"
+          cp browser-extension/bridge-connection-transport.ts "$verified_dir/"
+          cp browser-extension/bridge-connection-transport.test.ts "$verified_dir/"
+          cp browser-extension/bridge-trust.ts "$verified_dir/"
+          cp browser-extension/bridge-trust.test.ts "$verified_dir/"
+          cp browser-extension/bridge-instance-pinning.test.ts "$verified_dir/"
+          cp browser-extension/bridge-token-normalization.test.ts "$verified_dir/"
+          cp browser-extension/environment.ts "$verified_dir/"
+          cp browser-extension/environment.test.ts "$verified_dir/"
+          cp browser-extension/package.json "$verified_dir/"
+          cp browser-extension/tsconfig.json "$verified_dir/"
+          cp browser-extension/pnpm-lock.yaml "$verified_dir/"
+
+          git checkout --detach b94e83d307a9fad830ab5fa17841369f758887e6
+          cp "$verified_dir"/* browser-extension/
+          rm -f \
+            browser-extension/bridge-authenticated-client.test.ts \
+            browser-extension/bridge-authenticated-client.ts \
+            browser-extension/bridge-endpoint-policy.ts \
+            browser-extension/bridge-forwarding-security.test.ts \
+            browser-extension/bridge-identity-verifier.ts
+
+          python - <<'PY'
+          import subprocess
+
+          allowed = {
+              'browser-extension/bridge-server.ts',
+              'browser-extension/bridge-server.test.ts',
+              'browser-extension/bridge-connection-transport.ts',
+              'browser-extension/bridge-connection-transport.test.ts',
+              'browser-extension/bridge-trust.ts',
+              'browser-extension/bridge-trust.test.ts',
+              'browser-extension/bridge-instance-pinning.test.ts',
+              'browser-extension/bridge-token-normalization.test.ts',
+              'browser-extension/environment.ts',
+              'browser-extension/environment.test.ts',
+              'browser-extension/package.json',
+              'browser-extension/tsconfig.json',
+              'browser-extension/pnpm-lock.yaml',
+              'browser-extension/bridge-authenticated-client.test.ts',
+              'browser-extension/bridge-authenticated-client.ts',
+              'browser-extension/bridge-endpoint-policy.ts',
+              'browser-extension/bridge-forwarding-security.test.ts',
+              'browser-extension/bridge-identity-verifier.ts',
+          }
+          changed = set(subprocess.check_output(
+              ['git', 'status', '--short'], text=True
+          ).splitlines())
+          paths = {line[3:] for line in changed if len(line) > 3}
+          unexpected = paths - allowed
+          if unexpected:
+              raise SystemExit(f'Unexpected recovery paths: {sorted(unexpected)}')
+          required = {
+              'browser-extension/bridge-server.ts',
+              'browser-extension/package.json',
+              'browser-extension/pnpm-lock.yaml',
+          }
+          missing = required - paths
+          if missing:
+              raise SystemExit(f'Required recovery paths were unchanged: {sorted(missing)}')
+          PY
+
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add browser-extension
+          git commit -m "fix(ci): restore coherent companion verification"
+      - name: Publish exact recovery head
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git push \
+            --force-with-lease=refs/heads/fix/current-main-recovery-final:82fb1cdba0a5c63bc7451008fb094ccc727b60c0 \
+            "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" \
+            HEAD:refs/heads/fix/current-main-recovery-final
