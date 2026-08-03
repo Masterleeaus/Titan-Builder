@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { PromptDelivery } from '../shared/prompt-delivery.js';
@@ -280,14 +280,19 @@ async function saveSessionsToDisk(): Promise<void> {
   if (!persistencePath || isLoading || !isDirty || isFlushing) return;
   isFlushing = true;
   isDirty = false;
+  let tempPath: string | null = null;
   try {
     await mkdir(path.dirname(persistencePath), { recursive: true });
     const data = [...sessions.values()];
-    const tempPath = `${persistencePath}.tmp`;
+    tempPath = `${persistencePath}.tmp`;
     await writeFile(tempPath, JSON.stringify(data, null, 2), 'utf8');
     await rename(tempPath, persistencePath);
+    tempPath = null;
   } catch {
     isDirty = true;
+    if (tempPath) {
+      await unlink(tempPath).catch(() => undefined);
+    }
   } finally {
     isFlushing = false;
   }
