@@ -1,0 +1,43 @@
+name: Diagnose source snapshot 33b
+
+on:
+  pull_request:
+    branches:
+      - diagnostic/base-33b
+
+permissions:
+  contents: read
+
+jobs:
+  verify-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out candidate merge
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Activate pnpm 11.2.2
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+      - name: Resolve and verify root source
+        run: |
+          pnpm install --no-frozen-lockfile
+          pnpm run typecheck
+          pnpm run test
+          pnpm run build
+      - name: Resolve and verify companion source
+        working-directory: browser-extension
+        run: |
+          pnpm install --no-frozen-lockfile
+          pnpm run verify
