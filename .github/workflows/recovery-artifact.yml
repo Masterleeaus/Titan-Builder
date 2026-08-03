@@ -122,14 +122,38 @@ jobs:
           pnpm --version
 
       - name: Verify root package
+        shell: bash
         run: |
           pnpm install --frozen-lockfile
-          pnpm run verify
+          set +e
+          pnpm run verify > /tmp/root-verify.log 2>&1
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- concise failure markers ---'
+            grep -nE 'not ok|FAIL|ERR_|AssertionError|error:|# fail|ELIFECYCLE|Process completed' /tmp/root-verify.log | tail -n 240 || true
+            echo '--- final root verification output ---'
+            tail -n 360 /tmp/root-verify.log
+            exit "$status"
+          fi
+          cat /tmp/root-verify.log
 
       - name: Verify companion package
+        shell: bash
         run: |
           pnpm --dir browser-extension install --frozen-lockfile
-          pnpm --dir browser-extension run verify
+          set +e
+          pnpm --dir browser-extension run verify > /tmp/companion-verify.log 2>&1
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- concise companion failure markers ---'
+            grep -nE 'not ok|FAIL|ERR_|AssertionError|error:|# fail|ELIFECYCLE|Process completed' /tmp/companion-verify.log | tail -n 240 || true
+            echo '--- final companion verification output ---'
+            tail -n 360 /tmp/companion-verify.log
+            exit "$status"
+          fi
+          cat /tmp/companion-verify.log
 
       - name: Build production-only recovery patch
         shell: bash
