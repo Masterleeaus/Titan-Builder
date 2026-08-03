@@ -107,7 +107,7 @@ const app = express();
 app.use('/users', userRoutes);
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(\`Server on \${PORT}\`));
+app.listen(PORT);
 ${OB_FILE_END}`;
 
 const EDIT_EXISTING_EXAMPLE = `{
