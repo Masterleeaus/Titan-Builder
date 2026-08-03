@@ -29,7 +29,10 @@ export interface ActivationResult {
 }
 
 function compareVersions(current: string, required: string): boolean {
-  const parse = (v: string) => v.split('.').map((x) => parseInt(x, 10));
+  const parse = (v: string) => {
+    const base = v.split('+')[0]?.split('-')[0] ?? '';
+    return base.split('.').map((x) => parseInt(x, 10));
+  };
   const curr = parse(current);
   const req = parse(required);
   for (let i = 0; i < Math.max(curr.length, req.length); i++) {
