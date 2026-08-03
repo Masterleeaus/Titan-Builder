@@ -47,7 +47,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "dev:server": "tsx watch src/server/index.ts",
-    "build": "tsc",
+    "build": "tsc && node scripts/verify-binary.mjs",
     "start": "node dist/launcher.js",
     "service:start": "node dist/service/service-entry.js",
     "typecheck": "tsc --noEmit",
