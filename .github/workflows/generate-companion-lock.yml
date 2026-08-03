@@ -1,4 +1,4 @@
-name: Generate companion lock artifact
+name: Generate verified companion recovery artifacts
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ permissions:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Check out candidate head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -28,18 +28,74 @@ jobs:
         run: |
           corepack enable
           corepack prepare pnpm@11.2.2 --activate
-      - name: Regenerate and freeze-check companion lock
+      - name: Repair collided companion source
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('browser-extension/bridge-server.ts')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = [
+              (
+                  "import { existsSync, readFileSync } from 'node:fs';",
+                  "import { existsSync } from 'node:fs';",
+              ),
+              (
+                  "  bridgeAllowedPorts?: number[];\n  bridgeRequest?: typeof requestAuthenticatedBridge;\n",
+                  "  bridgeAllowedPorts?: number[];\n",
+              ),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'Expected one repair anchor, found {text.count(old)}: {old!r}')
+              text = text.replace(old, new, 1)
+
+          collided = """  const bridgeEndpoint = parseLoopbackBridgeUrl(
+            options.bridgeUrl ?? process.env.OPENBROWSER_BRIDGE_URL ?? DEFAULT_BRIDGE_URL,
+          );
+          const bridgeUrl = bridgeEndpoint.origin;
+          const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;
+          const bridgeClient = bridgeToken
+            ? createAuthenticatedBridgeClient({ bridgeUrl, controlToken: bridgeToken })
+            : undefined;
+          const databasePath = path.resolve(
+            options.databasePath
+              ?? process.env.WORKSPACE_DB_PATH
+              ?? path.join(moduleDirectory, 'openbrowser-workspace.db'),
+          );
+          const bridgeUrl = bridgeEndpoint.origin;
+          const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;
+          const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });
+          """
+          repaired = """  const bridgeEndpoint = parseLoopbackBridgeUrl(
+            options.bridgeUrl ?? process.env.OPENBROWSER_BRIDGE_URL ?? DEFAULT_BRIDGE_URL,
+          );
+          const bridgeUrl = bridgeEndpoint.origin;
+          const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;
+          const bridgeClient = bridgeToken
+            ? createAuthenticatedBridgeClient({ bridgeUrl, controlToken: bridgeToken })
+            : undefined;
+          const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });
+          """
+          if text.count(collided) != 1:
+              raise SystemExit(f'Expected one duplicated initialization block, found {text.count(collided)}')
+          path.write_text(text.replace(collided, repaired, 1), encoding='utf-8')
+      - name: Regenerate and verify companion
         working-directory: browser-extension
         shell: bash
         run: |
           set -euo pipefail
           rm -f pnpm-lock.yaml
           pnpm install --lockfile-only --ignore-scripts
-          pnpm install --frozen-lockfile --ignore-scripts
-      - name: Upload generated lock
+          pnpm install --frozen-lockfile
+          pnpm run verify
+      - name: Upload verified companion files
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: companion-pnpm-lock
-          path: browser-extension/pnpm-lock.yaml
+          name: verified-companion-recovery
+          path: |
+            browser-extension/bridge-server.ts
+            browser-extension/pnpm-lock.yaml
           if-no-files-found: error
           retention-days: 1
