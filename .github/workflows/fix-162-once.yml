@@ -13,14 +13,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
-          cache: pnpm
 
       - name: Enable pnpm
         run: |
@@ -82,7 +81,7 @@ jobs:
             exit 1
           fi
 
-      - name: Apply observable error-handling fix
+      - name: Apply observable error-handling and lockfile fixes
         shell: bash
         run: |
           python <<'PY'
@@ -95,6 +94,20 @@ jobs:
               if count != 1:
                   raise SystemExit(f"Expected exactly one match in {path}, found {count}: {old[:80]!r}")
               file_path.write_text(text.replace(old, new, 1))
+
+          duplicate_braces = """  braces@3.0.3:
+            resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
+            engines: {node: '>=8'}
+
+            braces@3.0.3:
+            resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
+            engines: {node: '>=8'}
+          """
+          single_braces = """  braces@3.0.3:
+            resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
+            engines: {node: '>=8'}
+          """
+          replace_once('pnpm-lock.yaml', duplicate_braces, single_braces)
 
           replace_once(
               'src/server/browser-workflow-routes.ts',
@@ -177,13 +190,18 @@ jobs:
           )
           PY
 
-      - name: Install dependencies
+      - name: Install root dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify regression and full suite
+      - name: Verify root regression and full suite
         run: |
           node --experimental-strip-types --test src/shared/silent-catch-policy.test.ts
           pnpm run verify
+
+      - name: Verify browser-extension companion
+        run: |
+          pnpm --dir browser-extension install --frozen-lockfile
+          pnpm --dir browser-extension run verify
 
       - name: Publish verified fix
         shell: bash
@@ -191,7 +209,7 @@ jobs:
           rm .github/workflows/fix-162-once.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/server/browser-workflow-routes.ts src/client/bridge-client.ts src/operations/process-runner.ts src/operations/index.ts src/shared/silent-catch-policy.test.ts package.json .github/workflows/fix-162-once.yml
+          git add pnpm-lock.yaml package.json src/server/browser-workflow-routes.ts src/client/bridge-client.ts src/operations/process-runner.ts src/operations/index.ts src/shared/silent-catch-policy.test.ts .github/workflows/fix-162-once.yml
           git diff --cached --check
           git commit -m "fix: make best-effort failures observable (#162)"
           git push origin HEAD:fix/162-observable-best-effort-errors
