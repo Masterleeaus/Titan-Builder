@@ -1,21 +1,30 @@
 name: Fix issue 162 once
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/162-observable-best-effort-errors
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   fix-and-verify:
+    if: github.head_ref == 'fix/162-observable-best-effort-errors'
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
@@ -95,19 +104,18 @@ jobs:
                   raise SystemExit(f"Expected exactly one match in {path}, found {count}: {old[:80]!r}")
               file_path.write_text(text.replace(old, new, 1))
 
-          duplicate_braces = """  braces@3.0.3:
+          lock_path = Path('pnpm-lock.yaml')
+          lock_text = lock_path.read_text()
+          braces_block = """  braces@3.0.3:
             resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
             engines: {node: '>=8'}
 
-            braces@3.0.3:
-            resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
-            engines: {node: '>=8'}
           """
-          single_braces = """  braces@3.0.3:
-            resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
-            engines: {node: '>=8'}
-          """
-          replace_once('pnpm-lock.yaml', duplicate_braces, single_braces)
+          if lock_text.count(braces_block) != 2:
+              raise SystemExit(f"Expected two duplicated braces lockfile blocks, found {lock_text.count(braces_block)}")
+          first = lock_text.find(braces_block)
+          second = lock_text.find(braces_block, first + len(braces_block))
+          lock_path.write_text(lock_text[:second] + lock_text[second + len(braces_block):])
 
           replace_once(
               'src/server/browser-workflow-routes.ts',
@@ -205,6 +213,10 @@ jobs:
 
       - name: Publish verified fix
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           rm .github/workflows/fix-162-once.yml
           git config user.name "github-actions[bot]"
@@ -212,4 +224,4 @@ jobs:
           git add pnpm-lock.yaml package.json src/server/browser-workflow-routes.ts src/client/bridge-client.ts src/operations/process-runner.ts src/operations/index.ts src/shared/silent-catch-policy.test.ts .github/workflows/fix-162-once.yml
           git diff --cached --check
           git commit -m "fix: make best-effort failures observable (#162)"
-          git push origin HEAD:fix/162-observable-best-effort-errors
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" "HEAD:${HEAD_REF}"
