@@ -77,7 +77,7 @@ describe('workspace companion environment authority', () => {
     delete childEnvironment.WORKSPACE_PORT;
     delete childEnvironment.TARGET_PROJECT_ONLY;
 
-    const entrypointUrl = pathToFileURL(path.join(originalCwd, 'bridge-server-entry.ts')).href;
+    const entrypointUrl = pathToFileURL(path.join(originalCwd, 'bridge-server.ts')).href;
     const tsxLoaderUrl = pathToFileURL(moduleRequire.resolve('tsx')).href;
     const probe = [
       `await import(${JSON.stringify(entrypointUrl)});`,

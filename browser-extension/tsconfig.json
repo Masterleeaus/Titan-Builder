@@ -22,9 +22,9 @@
   "include": [
     "bridge-server.ts",
     "bridge-server-entry.ts",
+    "environment.ts",
     "seed-db.ts",
-    "bridge-trust.ts",
-    "environment.ts"
+    "bridge-trust.ts"
   ],
   "exclude": [
     "node_modules",
