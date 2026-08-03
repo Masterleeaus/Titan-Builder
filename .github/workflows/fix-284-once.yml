@@ -1,0 +1,70 @@
+name: Fix issue 284 once
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+
+jobs:
+  restore-and-verify:
+    if: github.head_ref == 'fix/issue-284-restore-ci-baseline'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+
+      - name: Regenerate lockfile from package manifest
+        run: |
+          rm pnpm-lock.yaml
+          pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts
+          pnpm install --frozen-lockfile
+
+      - name: Verify root package
+        run: pnpm run verify
+
+      - name: Verify browser-extension companion
+        run: |
+          pnpm --dir browser-extension install --frozen-lockfile
+          pnpm --dir browser-extension run verify
+
+      - name: Verify workflow policy
+        run: |
+          python -m pip install --disable-pip-version-check --no-input pyyaml
+          python scripts/check_github_workflows.py .
+
+      - name: Publish verified baseline repair
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          rm .github/workflows/fix-284-once.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pnpm-lock.yaml .github/workflows/fix-284-once.yml
+          git diff --cached --check
+          git commit -m "fix: restore repository verification baseline (#284)"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" "HEAD:${HEAD_REF}"
