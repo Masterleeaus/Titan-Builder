@@ -30,4 +30,6 @@ Workflow policy independently rejected three completed issue-controller workflow
 - Removed the three completed write-enabled controller workflows.
 - Removed the one-shot repair controller from its own published result.
 
-The exact final connector-authored head must still pass the standard Linux, Windows, companion, workflow-policy, security, catalog, and dependency matrices before merge.
+## Final verification
+
+The connector-authored final head must pass the standard Linux, Windows, companion, workflow-policy, security, catalog, and dependency matrices before merge. A fresh owner-authored commit was added after the initial runs were held for action approval so those exact final-head checks can execute normally.
