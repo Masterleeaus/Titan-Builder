@@ -44,13 +44,10 @@ import {
 } from '../workflows/browser-run-coordinator.js';
 import { createBrowserRunStore } from '../workflows/browser-run-store.js';
 import type { AgentSubmissionRequest } from '../workflows/agent-preparation.js';
-import { createBridgeIdentityProof } from './bridge-identity.js';
 import {
-  bridgeBodyLimit,
-  createPayloadTooLargeResponse,
-  isPayloadTooLargeError,
-  SMALL_BODY_LIMIT_BYTES,
-} from './body-limits.js';
+  createBridgeIdentityResponse,
+  isValidBridgeIdentityChallenge,
+} from './bridge-identity.js';
 import { registerBrowserWorkflowRoutes } from './browser-workflow-routes.js';
 import {
   createOperationApprovalStore,
@@ -207,50 +204,30 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     }
   });
 
-  app.get('/bridge/identity', async (request, reply) => {
-    if (!controlToken) {
-      return reply.code(503).send({ error: 'Bridge identity is unavailable without a control token' });
-    }
-
-    const { nonce } = request.query as { nonce?: string };
-    const address = request.raw.socket.localAddress;
-    const port = request.raw.socket.localPort;
-    if (!address || !port) {
-      return reply.code(503).send({ error: 'Bridge socket identity is unavailable' });
-    }
-
-    try {
-      return createBridgeIdentityProof(controlToken, String(nonce ?? ''), bridgeInstanceId, {
-        address,
-        port,
-      });
-    } catch (error) {
-      return reply.code(400).send({
-        error: error instanceof Error ? error.message : 'Invalid bridge identity challenge',
+  app.get('/health', async (request, reply) => {
+    const { challenge } = request.query as { challenge?: unknown };
+    if (challenge !== undefined) {
+      if (!isValidBridgeIdentityChallenge(challenge)) {
+        return reply.code(400).send({
+          error: 'A 64-character hexadecimal challenge is required',
+        });
+      }
+      if (!controlToken) {
+        return reply.code(503).send({ error: 'Bridge identity proof is unavailable' });
+      }
+      return createBridgeIdentityResponse({
+        controlToken,
+        challenge,
+        instanceId: bridgeInstanceId,
       });
     }
+
+    return {
+      status: 'ok',
+      authentication: insecureDevelopment ? 'insecure-development' : 'required',
+      extensionOrigins: securityPolicy.allowedExtensionOrigins(),
+    };
   });
-
-  app.get('/health', async () => ({
-    status: 'ok',
-    product: 'OpenBrowser',
-    version: '0.5.0',
-  }));
-
-  app.get('/ready', async () => ({
-    status: 'ready',
-    product: 'OpenBrowser',
-    version: '0.5.0',
-    protocol: 'v1',
-    authentication: insecureDevelopment ? 'insecure-development' : 'required',
-    instance: process.pid,
-    capabilities: {
-      sessions: true,
-      memory: true,
-      skills: true,
-      browser: true,
-    },
-  }));
 
   await registerBrowserWorkflowRoutes(app, { coordinator: browserCoordinator });
 

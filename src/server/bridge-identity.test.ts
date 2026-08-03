@@ -1,59 +1,86 @@
-import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  BRIDGE_IDENTITY_PROTOCOL,
-  BRIDGE_IDENTITY_VERSION,
+  BRIDGE_IDENTITY_PROTOCOL_VERSION,
+  BRIDGE_IDENTITY_SERVICE,
+  BRIDGE_VERSION,
   createBridgeIdentityProof,
-  serializeBridgeIdentity,
+  createBridgeIdentityResponse,
+  isValidBridgeIdentityChallenge,
 } from './bridge-identity.ts';
 
-const TOKEN = 'control-'.padEnd(56, 'a');
-const NONCE = 'ab'.repeat(32);
-const INSTANCE_ID = '12345678-1234-4234-8234-123456789abc';
+const CONTROL_TOKEN = 'control-'.padEnd(56, 'a');
 
-test('creates a nonce, instance, and socket-bound HMAC proof', () => {
-  const proof = createBridgeIdentityProof(TOKEN, NONCE, INSTANCE_ID, {
-    address: '[::1]',
-    port: 5000,
+test('bridge identity response proves possession of the control token', () => {
+  const challenge = crypto.randomBytes(32).toString('hex');
+  const instanceId = crypto.randomUUID();
+  const identity = createBridgeIdentityResponse({
+    controlToken: CONTROL_TOKEN,
+    challenge,
+    instanceId,
   });
 
-  assert.deepEqual(proof, {
-    protocol: BRIDGE_IDENTITY_PROTOCOL,
-    version: BRIDGE_IDENTITY_VERSION,
-    instanceId: INSTANCE_ID,
-    nonce: NONCE,
-    address: '::1',
-    port: 5000,
-    mac: crypto
-      .createHmac('sha256', TOKEN)
-      .update(serializeBridgeIdentity({
-        protocol: BRIDGE_IDENTITY_PROTOCOL,
-        version: BRIDGE_IDENTITY_VERSION,
-        instanceId: INSTANCE_ID,
-        nonce: NONCE,
-        address: '::1',
-        port: 5000,
-      }))
-      .digest('hex'),
-  });
+  assert.equal(identity.service, BRIDGE_IDENTITY_SERVICE);
+  assert.equal(identity.protocolVersion, BRIDGE_IDENTITY_PROTOCOL_VERSION);
+  assert.equal(identity.version, BRIDGE_VERSION);
+  assert.equal(identity.instanceId, instanceId);
+  assert.equal(identity.challenge, challenge);
+  assert.equal(
+    identity.proof,
+    createBridgeIdentityProof({
+      controlToken: CONTROL_TOKEN,
+      challenge,
+      instanceId,
+      version: BRIDGE_VERSION,
+    }),
+  );
 });
 
-test('rejects malformed nonce, instance, socket address, and port fields', () => {
+test('bridge identity proof changes with the challenge, instance, version, and token', () => {
+  const challenge = crypto.randomBytes(32).toString('hex');
+  const base = createBridgeIdentityProof({
+    controlToken: CONTROL_TOKEN,
+    challenge,
+    instanceId: 'instance-a',
+  });
+
+  assert.notEqual(base, createBridgeIdentityProof({
+    controlToken: CONTROL_TOKEN,
+    challenge: crypto.randomBytes(32).toString('hex'),
+    instanceId: 'instance-a',
+  }));
+  assert.notEqual(base, createBridgeIdentityProof({
+    controlToken: CONTROL_TOKEN,
+    challenge,
+    instanceId: 'instance-b',
+  }));
+  assert.notEqual(base, createBridgeIdentityProof({
+    controlToken: CONTROL_TOKEN,
+    challenge,
+    instanceId: 'instance-a',
+    version: '0.5.1',
+  }));
+  assert.notEqual(base, createBridgeIdentityProof({
+    controlToken: `${CONTROL_TOKEN}different`,
+    challenge,
+    instanceId: 'instance-a',
+  }));
+});
+
+test('bridge identity challenge validation rejects missing and malformed input', () => {
+  assert.equal(isValidBridgeIdentityChallenge(undefined), false);
+  assert.equal(isValidBridgeIdentityChallenge('not-random'), false);
+  assert.equal(isValidBridgeIdentityChallenge('a'.repeat(63)), false);
+  assert.equal(isValidBridgeIdentityChallenge('g'.repeat(64)), false);
+  assert.equal(isValidBridgeIdentityChallenge('a'.repeat(64)), true);
+
   assert.throws(
-    () => createBridgeIdentityProof(TOKEN, 'short', INSTANCE_ID, { address: '127.0.0.1', port: 5000 }),
-    /nonce/i,
-  );
-  assert.throws(
-    () => createBridgeIdentityProof(TOKEN, NONCE, 'not-an-instance', { address: '127.0.0.1', port: 5000 }),
-    /instance/i,
-  );
-  assert.throws(
-    () => createBridgeIdentityProof(TOKEN, NONCE, INSTANCE_ID, { address: '', port: 5000 }),
-    /address/i,
-  );
-  assert.throws(
-    () => createBridgeIdentityProof(TOKEN, NONCE, INSTANCE_ID, { address: '127.0.0.1', port: 0 }),
-    /port/i,
+    () => createBridgeIdentityProof({
+      controlToken: CONTROL_TOKEN,
+      challenge: 'not-random',
+      instanceId: 'instance-a',
+    }),
+    /64-character hexadecimal challenge/i,
   );
 });

@@ -1,84 +1,58 @@
 import crypto from 'node:crypto';
 
-export const BRIDGE_IDENTITY_PROTOCOL = 'openbrowser-bridge' as const;
-export const BRIDGE_IDENTITY_VERSION = '1' as const;
+export const BRIDGE_IDENTITY_SERVICE = 'openbrowser-bridge';
+export const BRIDGE_IDENTITY_PROTOCOL_VERSION = 1;
+export const BRIDGE_VERSION = '0.5.0';
 
-const noncePattern = /^[a-f0-9]{64}$/u;
-const instanceIdPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
+const CHALLENGE_PATTERN = /^[0-9a-f]{64}$/iu;
 
-export interface BridgeIdentityBinding {
-  address: string;
-  port: number;
-}
-
-export interface BridgeIdentityProof extends BridgeIdentityBinding {
-  protocol: typeof BRIDGE_IDENTITY_PROTOCOL;
-  version: typeof BRIDGE_IDENTITY_VERSION;
+export interface BridgeIdentityResponse {
+  service: typeof BRIDGE_IDENTITY_SERVICE;
+  protocolVersion: typeof BRIDGE_IDENTITY_PROTOCOL_VERSION;
+  version: string;
   instanceId: string;
-  nonce: string;
-  mac: string;
+  challenge: string;
+  proof: string;
 }
 
-export function createBridgeIdentityProof(
-  controlToken: string,
-  nonce: string,
-  instanceId: string,
-  binding: BridgeIdentityBinding,
-): BridgeIdentityProof {
-  if (!controlToken) {
-    throw new Error('Bridge identity proof requires the control token.');
-  }
-  if (!noncePattern.test(nonce)) {
-    throw new Error('Bridge identity nonce must be 32 random bytes encoded as lowercase hexadecimal.');
-  }
-  if (!instanceIdPattern.test(instanceId)) {
-    throw new Error('Bridge identity instance ID must be a UUID.');
-  }
+export function isValidBridgeIdentityChallenge(value: unknown): value is string {
+  return typeof value === 'string' && CHALLENGE_PATTERN.test(value);
+}
 
-  const address = normalizeSocketAddress(binding.address);
-  const port = normalizePort(binding.port);
-  const unsigned = {
-    protocol: BRIDGE_IDENTITY_PROTOCOL,
-    version: BRIDGE_IDENTITY_VERSION,
-    instanceId,
-    nonce,
-    address,
-    port,
-  } as const;
+export function createBridgeIdentityProof(input: {
+  controlToken: string;
+  challenge: string;
+  instanceId: string;
+  version?: string;
+}): string {
+  const version = input.version ?? BRIDGE_VERSION;
+  if (!input.controlToken) throw new Error('Control token is required for bridge identity');
+  if (!isValidBridgeIdentityChallenge(input.challenge)) {
+    throw new Error('A 64-character hexadecimal challenge is required');
+  }
+  if (!input.instanceId) throw new Error('Bridge instance id is required');
 
+  return crypto
+    .createHmac('sha256', input.controlToken)
+    .update(
+      `${BRIDGE_IDENTITY_SERVICE}\0${version}\0${input.instanceId}\0${input.challenge}`,
+    )
+    .digest('hex');
+}
+
+export function createBridgeIdentityResponse(input: {
+  controlToken: string;
+  challenge: string;
+  instanceId: string;
+  version?: string;
+}): BridgeIdentityResponse {
+  const version = input.version ?? BRIDGE_VERSION;
   return {
-    ...unsigned,
-    mac: crypto
-      .createHmac('sha256', controlToken)
-      .update(serializeBridgeIdentity(unsigned))
-      .digest('hex'),
+    service: BRIDGE_IDENTITY_SERVICE,
+    protocolVersion: BRIDGE_IDENTITY_PROTOCOL_VERSION,
+    version,
+    instanceId: input.instanceId,
+    challenge: input.challenge,
+    proof: createBridgeIdentityProof({ ...input, version }),
   };
-}
-
-export function serializeBridgeIdentity(
-  proof: Omit<BridgeIdentityProof, 'mac'>,
-): string {
-  return JSON.stringify([
-    proof.protocol,
-    proof.version,
-    proof.instanceId,
-    proof.nonce,
-    proof.address,
-    proof.port,
-  ]);
-}
-
-function normalizeSocketAddress(value: string): string {
-  const normalized = String(value || '').trim().toLowerCase().replace(/^\[|\]$/gu, '');
-  if (!normalized || /[\r\n\0]/u.test(normalized)) {
-    throw new Error('Bridge identity requires a valid local socket address.');
-  }
-  return normalized;
-}
-
-function normalizePort(value: number): number {
-  if (!Number.isInteger(value) || value < 1 || value > 65_535) {
-    throw new Error('Bridge identity requires a valid local socket port.');
-  }
-  return value;
 }
