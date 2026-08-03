@@ -6,6 +6,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { createPatch } from 'diff';
 import fs from 'fs-extra';
+import { logger } from '../shared/index.js';
 import type { FileOperation } from '../core/index.js';
 import { normalizeMultilineText } from '../parser/markdown-agent.js';
 import { appendHistory } from '../memory/index.js';
@@ -229,7 +230,9 @@ export async function executePlannedOperations(
     } catch (historyError) {
       transaction.journal.error = `${message}; history write failed: ${formatUnknownError(historyError)}`;
       transaction.journal.updatedAt = new Date().toISOString();
-      await writeTransactionJournal(transaction).catch(() => undefined);
+      await writeTransactionJournal(transaction).catch((journalError) => {
+        logger.warn({ journalError }, 'Failed to write transaction journal during error recovery');
+      });
     }
 
     throw new Error(
@@ -585,7 +588,9 @@ async function rollbackTransaction(
   transaction.journal.status = 'rolling_back';
   transaction.journal.error = errorMessage;
   transaction.journal.updatedAt = new Date().toISOString();
-  await writeTransactionJournal(transaction).catch(() => undefined);
+  await writeTransactionJournal(transaction).catch((journalError) => {
+    logger.warn({ journalError }, 'Failed to write transaction journal during rollback');
+  });
 
   try {
     const targets = transaction.snapshots
@@ -647,7 +652,9 @@ async function rollbackTransaction(
     transaction.journal.rollbackStatus = 'rollback_failed';
     transaction.journal.error = `${errorMessage}; rollback failed: ${formatUnknownError(rollbackError)}`;
     transaction.journal.updatedAt = new Date().toISOString();
-    await writeTransactionJournal(transaction).catch(() => undefined);
+    await writeTransactionJournal(transaction).catch((journalError) => {
+      logger.warn({ journalError }, 'Failed to write transaction journal when rollback failed');
+    });
     return 'rollback_failed';
   }
 }
@@ -807,7 +814,9 @@ async function safeWriteFile(filePath: string, content: string): Promise<void> {
     }
     await renamePath(temporaryPath, filePath);
   } catch (error) {
-    await fs.remove(temporaryPath).catch(() => undefined);
+    await fs.remove(temporaryPath).catch((cleanupError) => {
+      logger.warn({ cleanupError, temporaryPath }, 'Failed to clean up temporary file after write error');
+    });
     throw error;
   }
 }

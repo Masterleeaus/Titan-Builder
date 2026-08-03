@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { logger } from '../shared/index.js';
 import { AgentApplicationError } from '../workflows/agent-application.js';
 import type { BrowserRunCoordinator } from '../workflows/browser-run-coordinator.js';
 import type {
@@ -96,7 +97,9 @@ export async function registerBrowserWorkflowRoutes(
           clearInterval(heartbeat);
           reply.raw.end();
         }
-      }).catch(() => undefined);
+      }).catch((error) => {
+        logger.warn({ runId, error }, 'Failed to fetch browser run snapshot');
+      });
     }, 1000);
     const heartbeat = setInterval(() => reply.raw.write(': heartbeat\n\n'), 15_000);
     request.raw.on('close', () => {

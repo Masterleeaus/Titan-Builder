@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { access, chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -87,8 +87,6 @@ export async function ensureBridgeSecurityEnvironment(
     if (process.platform !== 'win32') {
       await chmod(configPath, 0o600);
     }
-  } else {
-    await access(configPath).catch(() => undefined);
   }
 
   return {
