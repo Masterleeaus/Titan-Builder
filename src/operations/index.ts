@@ -990,8 +990,9 @@ function countOccurrences(text: string, search: string): number {
 }
 
 function validateDiffSize(diff: string, filePath: string): void {
-  if (diff.length > MAX_DIFF_BYTES) {
-    throw new Error(`Diff for ${filePath} is too large (${diff.length} bytes, limit ${MAX_DIFF_BYTES} bytes); cannot generate complete preview`);
+  const bytes = Buffer.byteLength(diff, 'utf8');
+  if (bytes > MAX_DIFF_BYTES) {
+    throw new Error(`Diff for ${filePath} is too large (${bytes} bytes, limit ${MAX_DIFF_BYTES} bytes); cannot generate complete preview`);
   }
 }
 

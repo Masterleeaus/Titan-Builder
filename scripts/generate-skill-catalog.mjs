@@ -1,4 +1,4 @@
-import { readFile, readdir, writeFile, realpath, stat } from 'node:fs/promises';
+import { readFile, readdir, writeFile, realpath, stat, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -41,7 +41,7 @@ async function resolveContainedFile(packageRoot, relativePath) {
 
 async function buildCatalog() {
   // Dynamic import for validation
-  const { validateSkillManifest } = await import(path.join(repositoryRoot, 'src', 'skills', 'manifest.ts'));
+  const { validateSkillManifest } = await import(path.join(repositoryRoot, 'dist', 'src', 'skills', 'manifest.js'));
 
   const records = [];
   const seenIds = new Set();
@@ -112,14 +112,6 @@ if (checkOnly) {
 } else {
   // Write atomically to temporary file first, then replace
   const tempPath = `${outputPath}.tmp`;
-  try {
-    await writeFile(tempPath, expected);
-    await writeFile(outputPath, expected);
-  } finally {
-    try {
-      await import('node:fs/promises').then((fs) => fs.unlink(tempPath).catch(() => {}));
-    } catch {
-      // Ignore cleanup errors
-    }
-  }
+  await writeFile(tempPath, expected);
+  await rename(tempPath, outputPath);
 }

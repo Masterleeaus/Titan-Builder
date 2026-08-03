@@ -20,7 +20,7 @@ export interface ActivationIssue {
 export interface ActivationResult {
   status: ActivationStatus;
   available: boolean;
-  manifest: TitanSkillManifest;
+  manifest: TitanSkillManifest | null;
   issues: ActivationIssue[];
   requiresApproval: boolean;
   capabilities: string[];
@@ -172,7 +172,7 @@ export function validateSkillActivation(
 
 export function createActivationResolver(
   skills: readonly LoadedSkillPackage[],
-  titanVersion?: string,
+  titanVersion: string = '0.5.0',
 ) {
   const skillMap = new Map(skills.map((s) => [s.manifest.id, s]));
 
@@ -186,7 +186,7 @@ export function createActivationResolver(
         return {
           status: 'unavailable' as const,
           available: false,
-          manifest: null as any,
+          manifest: null,
           issues: [{ code: 'not_found', message: `Skill '${idOrAlias}' not found`, severity: 'error' as const }],
           requiresApproval: false,
           capabilities: [],

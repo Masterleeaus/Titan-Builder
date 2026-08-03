@@ -210,6 +210,7 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
       }
       const healthy = await probeBridge();
       if (healthy && metadata.entryPath !== entryPath) {
+        await removeMetadata();
         return {
           status: 'stopped',
           logPath: paths.logPath,

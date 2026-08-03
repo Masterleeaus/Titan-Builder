@@ -779,8 +779,6 @@ export function mergeYamlFencesIntoOperations<
   result[index] = { ...operation, content: unlabeled[0]! };
 
   return result;
-
-  return result;
 }
 
 function mergePathMatchedSegments<T extends { action: string; path?: string; content?: string }>(
