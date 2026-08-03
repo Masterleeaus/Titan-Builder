@@ -30,8 +30,9 @@ export interface ActivationResult {
 
 function compareVersions(current: string, required: string): boolean {
   const parse = (v: string) => {
-    const base = v.split('+')[0]?.split('-')[0] ?? '';
-    return base.split('.').map((x) => parseInt(x, 10));
+    const match = v.match(/^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z0-9.-]+))?(?:\+([a-zA-Z0-9.-]+))?$/);
+    if (!match) return [0, 0, 0];
+    return [parseInt(match[1]!, 10), parseInt(match[2]!, 10), parseInt(match[3]!, 10)];
   };
   const curr = parse(current);
   const req = parse(required);

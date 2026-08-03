@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { readFile, realpath, stat, lstat } from 'node:fs/promises';
 import fg from 'fast-glob';
 import { parseSkillManifest, type TitanSkillManifest } from './manifest.js';
 
@@ -56,7 +56,7 @@ async function resolveEntrypointModule(packageRoot: string, entrypointStr: strin
   }
 
   try {
-    const stats = await stat(canonicalCandidate);
+    const stats = await lstat(canonicalCandidate);
     if (!stats.isFile()) {
       throw new Error(`Entrypoint module must be a regular file, not a directory or symlink.`);
     }

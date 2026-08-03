@@ -267,6 +267,7 @@ async function loadSessionsFromDisk(): Promise<void> {
             sessions.set(session.id, session);
           }
         }
+        pruneExpiredSessions(Date.now());
       }
     }
   } catch {
@@ -282,10 +283,10 @@ async function saveSessionsToDisk(): Promise<void> {
   isDirty = false;
   let tempPath: string | null = null;
   try {
-    await mkdir(path.dirname(persistencePath), { recursive: true });
+    await mkdir(path.dirname(persistencePath), { recursive: true, mode: 0o700 });
     const data = [...sessions.values()];
-    tempPath = `${persistencePath}.tmp`;
-    await writeFile(tempPath, JSON.stringify(data, null, 2), 'utf8');
+    tempPath = `${persistencePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    await writeFile(tempPath, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
     await rename(tempPath, persistencePath);
     tempPath = null;
   } catch {

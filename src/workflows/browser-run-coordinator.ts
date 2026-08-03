@@ -202,7 +202,7 @@ export function createBrowserRunCoordinator(
           });
           verification = {
             profile: result.verification.profile,
-            status: result.verification.status === 'passed' ? 'passed' : 'failed',
+            status: result.verification.status,
             summary: result.verification.error
               ? `${result.verification.summary}: ${result.verification.error}`
               : result.verification.summary,

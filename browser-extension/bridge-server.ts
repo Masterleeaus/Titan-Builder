@@ -30,7 +30,12 @@ export function loadCompanionEnvironment(options: { homeDir?: string; packageRoo
   }
 
   // Parse and load environment variables
-  const content = readFileSync(configPath, 'utf8');
+  let content: string;
+  try {
+    content = readFileSync(configPath, 'utf8');
+  } catch (error) {
+    return undefined;
+  }
   for (const line of content.split(/\r?\n/u)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;

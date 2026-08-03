@@ -118,7 +118,8 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
         Number(parsed.pid) > 0 &&
         typeof parsed.entryPath === 'string' &&
         typeof parsed.startedAt === 'string' &&
-        typeof parsed.logPath === 'string'
+        typeof parsed.logPath === 'string' &&
+        (typeof parsed.nonce === 'string' || parsed.nonce === undefined)
       ) {
         return {
           version: 1,
@@ -126,7 +127,7 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
           entryPath: parsed.entryPath,
           startedAt: parsed.startedAt,
           logPath: parsed.logPath,
-          nonce: parsed.nonce ?? 'legacy',
+          nonce: typeof parsed.nonce === 'string' ? parsed.nonce : 'legacy',
         };
       }
       return null;
