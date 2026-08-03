@@ -72,7 +72,7 @@ export type PreparationEvent =
 
 export interface AgentPreparationDependencies {
   submitAndWait(request: AgentSubmissionRequest): Promise<string>;
-  onEvent?: (event: PreparationEvent) => void | Promise<void>;
+  onEvent?: (event: PreparationEvent) => Promise<void>;
   buildContext?: typeof buildBudgetedContext;
   generateProjectContext?: typeof generateContext;
   readProjectMemory?: typeof listProjectMemory;

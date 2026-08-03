@@ -598,10 +598,10 @@ async function submitBrowserRequest(
   }
 }
 
-function handlePreparationEvent(
+async function handlePreparationEvent(
   event: PreparationEvent,
   tracker: AgentStepTracker,
-): void {
+): Promise<void> {
   if (event.type === 'context_ready') {
     const { summary } = event;
     if (summary.references.length > 0) {

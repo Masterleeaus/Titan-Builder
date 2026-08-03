@@ -9,6 +9,7 @@ import fs from 'fs-extra';
 import type { FileOperation } from '../core/index.js';
 import { normalizeMultilineText } from '../parser/markdown-agent.js';
 import type { HistoryEntry } from '../memory/index.js';
+import { logger } from '../shared/index.js';
 import { canonicalizeProjectRoot, resolveProjectPath } from '../security/project-path.js';
 import { expandMkdirOperations, looksLikePowerShellCommand } from './mkdir-normalize.js';
 import { preserveOperationOrder } from './operation-order.js';
@@ -237,7 +238,7 @@ export async function executePlannedOperations(
       transaction.journal.error = `${message}; history write failed: ${formatUnknownError(historyError)}`;
       transaction.journal.updatedAt = new Date().toISOString();
       await writeTransactionJournal(transaction).catch((journalError) => {
-        logger.error('Failed to write transaction journal during error handling', { journalError });
+        logger.error(`Failed to write transaction journal during error handling: ${formatUnknownError(journalError)}`);
       });
     }
 
@@ -1110,7 +1111,7 @@ async function safeWriteFile(filePath: string, content: string): Promise<void> {
     `.${path.basename(filePath)}.openbrowser-${crypto.randomUUID()}.tmp`,
   );
   const existingMode = await fs.stat(filePath).then((stats) => stats.mode).catch((statError) => {
-    logger.debug('Could not stat existing file; will use default mode', { filePath, statError });
+    logger.debug(`Could not stat existing file ${filePath}; will use default mode: ${formatUnknownError(statError)}`);
     return undefined;
   });
   const handle = await open(temporaryPath, flags, existingMode ?? 0o666);
@@ -1127,7 +1128,7 @@ async function safeWriteFile(filePath: string, content: string): Promise<void> {
     await renamePath(temporaryPath, filePath);
   } catch (error) {
     await fs.remove(temporaryPath).catch((removeError) => {
-      logger.warn('Failed to clean up temporary file during error recovery', { temporaryPath, removeError });
+      logger.warn(`Failed to clean up temporary file ${temporaryPath} during error recovery: ${formatUnknownError(removeError)}`);
     });
     throw error;
   }

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { ProjectRecord } from '../projects/registry.js';
 import { createOperationApprovalStore } from '../server/operation-approvals.js';
+import { logger } from '../shared/index.js';
 import { requiresExplicitApproval } from '../tools/registry.js';
 import {
   AgentApplicationError,
@@ -321,7 +322,8 @@ export function createBrowserRunCoordinator(
         try {
           await failRun(store, runId, error);
         } catch (failError) {
-          logger.error('failed to mark run as failed', { error: failError });
+          const errorMsg = failError instanceof Error ? failError.message : String(failError);
+          logger.error(`failed to mark run as failed: ${errorMsg}`);
         }
       });
     });
