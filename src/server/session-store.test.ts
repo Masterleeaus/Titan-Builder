@@ -1,11 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import {
   clearSessions,
   completeSession,
   createSession,
   failSession,
+  flushSessionsToDisk,
   getSession,
+  initializeSessionStore,
   listDispatchableSessions,
   renewSessionClaim,
   releaseClaim,
@@ -143,4 +148,75 @@ test('a claimed session can be explicitly released and reclaimed', () => {
   assert.ok(reclaimed);
   assert.equal(reclaimed.session.attemptCount, 2);
   assert.equal(getSession(session.id)?.claimantId, 'tab-2');
+});
+
+test('prompt exceeding maximum size is rejected at creation', () => {
+  const oversized = 'x'.repeat(2_000_000);
+  assert.throws(
+    () => createSession({
+      mode: 'ask',
+      prompt: oversized,
+      systemPrompt: 'system',
+      message: 'message',
+      composerMessage: 'message',
+      delivery: 'text',
+      conversationId: 'conversation-1',
+    }),
+    /exceeds maximum/i,
+  );
+});
+
+test('response exceeding maximum size is rejected at completion', () => {
+  const session = createFixture();
+  const claim = tryClaimSession(session.id, { claimantId: 'tab-1', nowMs: 1_000, leaseMs: 5_000 });
+  assert.ok(claim);
+
+  const oversized = 'x'.repeat(10_000_000);
+  assert.throws(
+    () => completeSession(session.id, oversized, claim.claimToken, 1_100),
+    /exceeds maximum/i,
+  );
+});
+
+test('error message exceeding maximum size is rejected', () => {
+  const session = createFixture();
+  const claim = tryClaimSession(session.id, { claimantId: 'tab-1', nowMs: 1_000, leaseMs: 5_000 });
+  assert.ok(claim);
+
+  const oversized = 'x'.repeat(100_000);
+  assert.throws(
+    () => failSession(session.id, oversized, claim.claimToken, 1_100),
+    /exceeds maximum/i,
+  );
+});
+
+test('session size limits are enforced', () => {
+  clearSessions();
+
+  // Verify that we can create and complete normal sessions
+  const session = createFixture();
+  const claim = tryClaimSession(session.id, { claimantId: 'tab-1', nowMs: 1_000, leaseMs: 5_000 });
+  assert.ok(claim);
+
+  const completed = completeSession(session.id, 'normal response', claim.claimToken, 1_100);
+  assert.equal(completed?.status, 'complete');
+  assert.ok(getSession(session.id));
+});
+
+test('persistence can be initialized with custom path', async () => {
+  clearSessions();
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'session-store-test-'));
+  const storePath = path.join(tempDir, 'sessions.json');
+
+  await initializeSessionStore(storePath);
+
+  const session = createFixture();
+  await flushSessionsToDisk();
+
+  // Verify file was created
+  const content = await import('node:fs/promises').then(fs => fs.readFile(storePath, 'utf8'));
+  const parsed = JSON.parse(content);
+  assert.ok(Array.isArray(parsed));
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0]?.id, session.id);
 });

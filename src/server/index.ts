@@ -49,7 +49,9 @@ import {
   completeSession,
   createSession,
   failSession,
+  flushSessionsToDisk,
   getSession,
+  initializeSessionStore,
   listDispatchableSessions,
   releaseClaim,
   renewSessionClaim,
@@ -538,6 +540,9 @@ export async function startServer(options: ServerOptions = {}): Promise<FastifyI
     generatedSecurity = await ensureBridgeSecurityEnvironment();
   }
 
+  await initializeSessionStore();
+  const flushInterval = setInterval(() => { flushSessionsToDisk().catch(() => {}); }, 30_000);
+
   const app = await createBridgeServer(options);
   const port = options.port ?? PORT;
   const host = options.host ?? '127.0.0.1';
@@ -549,6 +554,12 @@ export async function startServer(options: ServerOptions = {}): Promise<FastifyI
     generatedBrowserToken: generatedSecurity?.generatedBrowserToken ?? false,
     securityConfigPath: generatedSecurity?.configPath,
   }, 'Bridge server listening');
+
+  app.addHook('onClose', async () => {
+    clearInterval(flushInterval);
+    await flushSessionsToDisk();
+  });
+
   return app;
 }
 

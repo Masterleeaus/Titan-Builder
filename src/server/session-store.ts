@@ -1,4 +1,7 @@
 import crypto from 'node:crypto';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import type { PromptDelivery } from '../shared/prompt-delivery.js';
 
 export type SessionMode = 'ask' | 'agent';
@@ -57,9 +60,31 @@ export interface SessionClaim {
 
 export const DEFAULT_CLAIM_LEASE_MS = 120_000;
 
+const MAX_PROMPT_SIZE = 1_000_000;
+const MAX_RESPONSE_SIZE = 5_000_000;
+const MAX_ERROR_SIZE = 10_000;
+const MAX_SESSION_SIZE = MAX_RESPONSE_SIZE + MAX_PROMPT_SIZE + MAX_ERROR_SIZE + 100_000;
+const MAX_TOTAL_SESSIONS = 1000;
+const MAX_TOTAL_BYTES = 100_000_000;
+const PENDING_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const COMPLETED_SESSION_TTL_MS = 60 * 60 * 1000;
+
 const sessions = new Map<string, PromptSession>();
+let persistencePath: string | null = null;
+let isLoading = false;
+let isDirty = false;
 
 export function createSession(input: CreateSessionInput): PromptSession {
+  if (Buffer.byteLength(input.prompt, 'utf8') > MAX_PROMPT_SIZE) {
+    throw new Error(`Prompt exceeds maximum size of ${MAX_PROMPT_SIZE} bytes`);
+  }
+  if (Buffer.byteLength(input.systemPrompt, 'utf8') > MAX_PROMPT_SIZE) {
+    throw new Error(`System prompt exceeds maximum size of ${MAX_PROMPT_SIZE} bytes`);
+  }
+
+  pruneExpiredSessions(Date.now());
+  pruneToFitLimits();
+
   const now = new Date().toISOString();
   const session: PromptSession = {
     id: crypto.randomUUID(),
@@ -78,6 +103,7 @@ export function createSession(input: CreateSessionInput): PromptSession {
   };
 
   sessions.set(session.id, session);
+  isDirty = true;
   return session;
 }
 
@@ -124,6 +150,7 @@ export function renewSessionClaim(
   const session = requireClaim(sessionId, claimToken, nowMs);
   session.claimExpiresAt = new Date(nowMs + (input.leaseMs ?? DEFAULT_CLAIM_LEASE_MS)).toISOString();
   session.lastActivityAt = new Date(nowMs).toISOString();
+  isDirty = true;
   return session;
 }
 
@@ -134,6 +161,7 @@ export function releaseClaim(
 ): PromptSession | undefined {
   const session = requireClaim(sessionId, claimToken, nowMs);
   resetClaim(session, nowMs);
+  isDirty = true;
   return session;
 }
 
@@ -147,10 +175,19 @@ export function updateSessionPartial(
   claimToken: string,
   nowMs = Date.now(),
 ): PromptSession | undefined {
+  if (Buffer.byteLength(partialText, 'utf8') > MAX_RESPONSE_SIZE) {
+    throw new Error(`Partial text exceeds maximum size of ${MAX_RESPONSE_SIZE} bytes`);
+  }
+
   const session = requireClaim(sessionId, claimToken, nowMs);
   session.partialText = partialText;
   session.lastActivityAt = new Date(nowMs).toISOString();
+  isDirty = true;
   return session;
+}
+
+export async function flushSessionsToDisk(): Promise<void> {
+  await saveSessionsToDisk();
 }
 
 export function completeSession(
@@ -159,6 +196,10 @@ export function completeSession(
   claimToken: string,
   nowMs = Date.now(),
 ): PromptSession | undefined {
+  if (Buffer.byteLength(response, 'utf8') > MAX_RESPONSE_SIZE) {
+    throw new Error(`Response exceeds maximum size of ${MAX_RESPONSE_SIZE} bytes`);
+  }
+
   const session = requireClaim(sessionId, claimToken, nowMs);
   session.status = 'complete';
   session.response = response;
@@ -166,6 +207,7 @@ export function completeSession(
   session.completedAt = new Date(nowMs).toISOString();
   session.lastActivityAt = session.completedAt;
   clearClaim(session);
+  isDirty = true;
   return session;
 }
 
@@ -175,6 +217,10 @@ export function failSession(
   claimToken: string,
   nowMs = Date.now(),
 ): PromptSession | undefined {
+  if (Buffer.byteLength(error, 'utf8') > MAX_ERROR_SIZE) {
+    throw new Error(`Error message exceeds maximum size of ${MAX_ERROR_SIZE} bytes`);
+  }
+
   const session = requireClaim(sessionId, claimToken, nowMs);
   session.status = 'error';
   session.error = error;
@@ -182,11 +228,128 @@ export function failSession(
   session.completedAt = new Date(nowMs).toISOString();
   session.lastActivityAt = session.completedAt;
   clearClaim(session);
+  isDirty = true;
   return session;
 }
 
 export function clearSessions(): void {
   sessions.clear();
+  isDirty = true;
+}
+
+export async function initializeSessionStore(customPath?: string): Promise<void> {
+  persistencePath = customPath ?? path.join(os.homedir(), '.openbrowser', 'sessions.json');
+  await loadSessionsFromDisk();
+}
+
+async function loadSessionsFromDisk(): Promise<void> {
+  if (!persistencePath || isLoading) return;
+  isLoading = true;
+  try {
+    const content = await readFile(persistencePath, 'utf8').catch(() => null);
+    if (content) {
+      const data = JSON.parse(content);
+      if (Array.isArray(data)) {
+        sessions.clear();
+        for (const session of data) {
+          if (isValidSession(session)) {
+            sessions.set(session.id, session);
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore load errors
+  } finally {
+    isLoading = false;
+  }
+}
+
+async function saveSessionsToDisk(): Promise<void> {
+  if (!persistencePath || isLoading || !isDirty) return;
+  isDirty = false;
+  try {
+    await mkdir(path.dirname(persistencePath), { recursive: true });
+    const data = [...sessions.values()];
+    const tempPath = `${persistencePath}.tmp`;
+    await writeFile(tempPath, JSON.stringify(data, null, 2), 'utf8');
+    await writeFile(persistencePath, JSON.stringify(data, null, 2), 'utf8');
+  } catch {
+    isDirty = true;
+  }
+}
+
+function isValidSession(obj: unknown): obj is PromptSession {
+  return typeof obj === 'object' && obj !== null && 'id' in obj && 'status' in obj;
+}
+
+function calculateSessionSize(session: PromptSession): number {
+  const str = JSON.stringify(session);
+  return Buffer.byteLength(str, 'utf8');
+}
+
+function pruneExpiredSessions(nowMs: number): void {
+  const entriesToDelete: string[] = [];
+
+  for (const [id, session] of sessions.entries()) {
+    if (session.status === 'pending' || session.status === 'claimed') {
+      const createdAtMs = Date.parse(session.createdAt);
+      if (nowMs - createdAtMs > PENDING_SESSION_TTL_MS) {
+        entriesToDelete.push(id);
+      }
+    } else if (session.status === 'complete' || session.status === 'error') {
+      const completedAtMs = session.completedAt ? Date.parse(session.completedAt) : Date.parse(session.createdAt);
+      if (nowMs - completedAtMs > COMPLETED_SESSION_TTL_MS) {
+        entriesToDelete.push(id);
+      }
+    }
+  }
+
+  for (const id of entriesToDelete) {
+    sessions.delete(id);
+    isDirty = true;
+  }
+}
+
+function pruneToFitLimits(): void {
+  if (sessions.size <= MAX_TOTAL_SESSIONS) {
+    let totalBytes = 0;
+    for (const session of sessions.values()) {
+      totalBytes += calculateSessionSize(session);
+    }
+    if (totalBytes <= MAX_TOTAL_BYTES) {
+      return;
+    }
+  }
+
+  const sorted = [...sessions.values()].sort((a, b) => {
+    const aTime = Date.parse(a.lastActivityAt);
+    const bTime = Date.parse(b.lastActivityAt);
+    return aTime - bTime;
+  });
+
+  while (sessions.size > MAX_TOTAL_SESSIONS) {
+    const oldest = sorted.shift();
+    if (oldest) {
+      sessions.delete(oldest.id);
+      isDirty = true;
+    }
+  }
+
+  let totalBytes = 0;
+  for (const session of sessions.values()) {
+    totalBytes += calculateSessionSize(session);
+  }
+
+  while (totalBytes > MAX_TOTAL_BYTES && sessions.size > 1) {
+    const oldest = sorted.shift();
+    if (oldest) {
+      const size = calculateSessionSize(oldest);
+      sessions.delete(oldest.id);
+      totalBytes -= size;
+      isDirty = true;
+    }
+  }
 }
 
 function claimSession(
@@ -221,6 +384,7 @@ function resetClaim(session: PromptSession, nowMs: number): void {
   session.status = 'pending';
   session.lastActivityAt = new Date(nowMs).toISOString();
   clearClaim(session);
+  isDirty = true;
 }
 
 function clearClaim(session: PromptSession): void {
