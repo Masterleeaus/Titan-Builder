@@ -1,9 +1,13 @@
 name: Reconcile issue 146 with current main
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/issue-146-integrity-current-main-v2
+      - main
+
+concurrency:
+  group: issue-146-current-main
+  cancel-in-progress: true
 
 permissions:
   contents: write
