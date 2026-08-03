@@ -143,6 +143,11 @@ def repair_skills() -> None:
         'Skill entrypoint module contains an invalid or traversing path segment.',
         'Skill entrypoint module contains an invalid path traversal segment.',
     )
+    replace_once(
+        'src/skills/manifest.ts',
+        "const entrypoint = /^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))(?:[A-Za-z0-9_-]+\\/)*[A-Za-z0-9_.-]+\\.js#[A-Za-z_$][A-Za-z0-9_$]*$/u;\n",
+        '',
+    )
 
     loader = """import path from 'node:path';
 import { readFile, realpath } from 'node:fs/promises';
