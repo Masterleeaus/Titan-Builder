@@ -1,0 +1,139 @@
+name: Generate issue 150 bounded export patch
+
+on:
+  push:
+    branches:
+      - fix/issue-150-bounded-chatgpt-export-v2
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue-150-bounded-export-patch
+  cancel-in-progress: true
+
+jobs:
+  generate-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out issue branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+
+      - name: Wire bounded downloader into extension runtime
+        shell: python
+        run: |
+          import json
+          import pathlib
+          import re
+
+          background_path = pathlib.Path('browser-extension/src/background.js')
+          background = background_path.read_text(encoding='utf-8')
+          import_anchor = "import { prepareOutboundJob } from './job-payload.js';\n"
+          import_line = "import { fetchChatGPTFileExport } from './chatgpt-file-fetch.js';\n"
+          if import_line not in background:
+              if background.count(import_anchor) != 1:
+                  raise SystemExit('background import anchor was not unique')
+              background = background.replace(import_anchor, import_anchor + import_line, 1)
+          limit_line = "const MAX_CHATGPT_EXPORT_BYTES = 15 * 1024 * 1024;\n"
+          if background.count(limit_line) != 1:
+              raise SystemExit('background legacy limit declaration was not unique')
+          background = background.replace(limit_line, '', 1)
+          background_pattern = re.compile(
+              r"async function fetchChatGPTFile\(rawUrl\) \{.*?\n\}\n(?=\nasync function getWorkspaceInstructions)",
+              re.S,
+          )
+          background, count = background_pattern.subn(
+              "async function fetchChatGPTFile(rawUrl) {\n  return fetchChatGPTFileExport(rawUrl);\n}\n",
+              background,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f'expected one background file handler, found {count}')
+          background_path.write_text(background, encoding='utf-8')
+
+          content_path = pathlib.Path('browser-extension/src/content-script.js')
+          content = content_path.read_text(encoding='utf-8')
+          if content.count(limit_line) != 1:
+              raise SystemExit('content-script legacy limit declaration was not unique')
+          content = content.replace(limit_line, '', 1)
+          content_pattern = re.compile(
+              r"async function handleChatGPTFileFetch\(rawUrl\) \{.*?\n\}\n(?=\nfunction normalizeAutoContinueSettings)",
+              re.S,
+          )
+          replacement = """async function handleChatGPTFileFetch(rawUrl) {
+            if (!/^(?:chatgpt\\.com|chat\\.openai\\.com)$/.test(location.hostname)) {
+              throw new Error('ChatGPT file export is available only from a ChatGPT tab.');
+            }
+            const url = new URL(String(rawUrl ?? ''), location.href);
+            const response = await chrome.runtime.sendMessage({
+              type: 'OPENBROWSER_FETCH_CHATGPT_FILE',
+              url: url.href,
+            });
+            if (!response?.ok) {
+              throw new Error(response?.error || 'The bounded ChatGPT file download failed.');
+            }
+            return {
+              base64: response.base64,
+              filename: response.filename,
+              type: response.type,
+              size: response.size,
+            };
+          }
+          """
+          content, count = content_pattern.subn(replacement, content, count=1)
+          if count != 1:
+              raise SystemExit(f'expected one content-script file handler, found {count}')
+          content_path.write_text(content, encoding='utf-8')
+
+          package_path = pathlib.Path('package.json')
+          package = json.loads(package_path.read_text(encoding='utf-8'))
+          test_command = package['scripts']['test:node']
+          for test_file in [
+              'browser-extension/src/chatgpt-file-fetch.test.mjs',
+              'browser-extension/src/chatgpt-file-routing.test.mjs',
+          ]:
+              if test_file not in test_command:
+                  test_command += f' {test_file}'
+          package['scripts']['test:node'] = test_command
+          package_path.write_text(json.dumps(package, indent=2) + '\n', encoding='utf-8')
+
+      - name: Check generated source diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          node --test browser-extension/src/chatgpt-file-fetch.test.mjs browser-extension/src/chatgpt-file-routing.test.mjs
+
+      - name: Install dependencies from lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+          pnpm install --frozen-lockfile
+
+      - name: Verify complete repository
+        shell: bash
+        run: pnpm run verify
+
+      - name: Emit verified patched files
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf /tmp/issue-150-patched-files.tgz \
+            browser-extension/src/background.js \
+            browser-extension/src/content-script.js \
+            package.json
+          echo 'ISSUE150_PATCH_ARCHIVE_BEGIN'
+          base64 -w 76 /tmp/issue-150-patched-files.tgz
+          echo
+          echo 'ISSUE150_PATCH_ARCHIVE_END'
