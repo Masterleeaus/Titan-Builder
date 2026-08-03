@@ -1,0 +1,94 @@
+name: Export Current Titan Skill Library
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out current verified main
+        uses: actions/checkout@v4
+
+      - name: Build skill archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="Titan-Builder-Skill-Library-Pass-04"
+          rm -rf "$ROOT" "${ROOT}.zip"
+
+          mkdir -p "$ROOT/browser-extension/skill-library/packages"
+          for skill in systematic-debugging project-path-containment test-driven-development extension-security architecture-review git-discipline browser-performance; do
+            cp -R "browser-extension/skill-library/packages/$skill" "$ROOT/browser-extension/skill-library/packages/"
+          done
+          cp browser-extension/skill-library/README.md "$ROOT/browser-extension/skill-library/"
+
+          mkdir -p "$ROOT/browser-extension/src/generated"
+          cp browser-extension/src/generated/skill-catalog.js "$ROOT/browser-extension/src/generated/"
+          cp browser-extension/src/skill-registry.js "$ROOT/browser-extension/src/"
+          cp browser-extension/src/skill-registry.test.mjs "$ROOT/browser-extension/src/"
+          cp browser-extension/src/workspace-library.js "$ROOT/browser-extension/src/"
+          cp browser-extension/src/workspace-skill-activation.test.mjs "$ROOT/browser-extension/src/"
+
+          mkdir -p "$ROOT/src"
+          cp -R src/skills "$ROOT/src/"
+          mkdir -p "$ROOT/src/security"
+          cp src/security/project-path.ts "$ROOT/src/security/"
+          cp src/security/project-path.test.ts "$ROOT/src/security/"
+
+          mkdir -p "$ROOT/scripts"
+          cp scripts/generate-skill-catalog.mjs "$ROOT/scripts/"
+          cp package.json "$ROOT/"
+
+          mkdir -p "$ROOT/docs/superpowers/plans" "$ROOT/docs/superpowers/specs" "$ROOT/.titan/todo/issues"
+          cp docs/superpowers/plans/2026-08-02-skill-registry-loader.md "$ROOT/docs/superpowers/plans/"
+          cp docs/superpowers/plans/2026-08-02-canonical-guidance-skill-migration.md "$ROOT/docs/superpowers/plans/"
+          cp docs/superpowers/plans/2026-08-02-executable-skill-dispatch.md "$ROOT/docs/superpowers/plans/"
+          cp docs/superpowers/specs/2026-08-02-canonical-guidance-skill-migration-design.md "$ROOT/docs/superpowers/specs/"
+          cp docs/superpowers/specs/2026-08-02-executable-skill-dispatch-design.md "$ROOT/docs/superpowers/specs/"
+          cp .titan/todo/issues/skill-library-pass-02.md "$ROOT/.titan/todo/issues/"
+          cp .titan/todo/issues/skill-library-pass-03.md "$ROOT/.titan/todo/issues/"
+          cp .titan/todo/issues/skill-library-pass-04.md "$ROOT/.titan/todo/issues/"
+
+          cat > "$ROOT/EXPORT-MANIFEST.md" <<'EOF'
+          # Titan Builder Skill Library Export
+
+          This archive contains the Titan Builder skills and supporting runtime created in Passes 02–04.
+
+          Included inventory:
+
+          - 7 canonical skill packages
+          - 6 guidance skills
+          - 1 executable skill
+          - manifest schema, loader and deterministic registry
+          - generated browser-extension catalog and legacy alias activation
+          - closed executable dispatcher and static handler bindings
+          - input/output object-contract validation
+          - focused tests and implementation documentation
+
+          Canonical skill IDs:
+
+          - titan.guidance.systematic-debugging
+          - titan.guidance.test-driven-development
+          - titan.guidance.extension-security
+          - titan.guidance.architecture-review
+          - titan.guidance.git-discipline
+          - titan.guidance.browser-performance
+          - titan.security.project-path-containment
+          EOF
+
+          find "$ROOT" -type f | sort > "$ROOT/FILE-LIST.txt"
+          zip -r -9 "${ROOT}.zip" "$ROOT"
+
+      - name: Upload skill archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: Titan-Builder-Skill-Library-Pass-04
+          path: Titan-Builder-Skill-Library-Pass-04.zip
+          if-no-files-found: error
+          retention-days: 7
