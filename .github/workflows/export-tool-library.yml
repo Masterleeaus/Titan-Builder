@@ -1,0 +1,68 @@
+name: Export Tool Library
+
+on:
+  push:
+    branches:
+      - artifact/tool-library-export
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Assemble tool library package
+        shell: bash
+        run: |
+          set -euo pipefail
+          export_root="Titan-Builder-Tool-Library"
+          mkdir -p "$export_root"
+          files=(
+            ".titan/todo/issues/planned-tools.md"
+            ".titan/todo/issues/tool-library-expansion.md"
+            "docs/superpowers/plans/2026-08-02-tool-library-expansion.md"
+            "docs/superpowers/specs/2026-08-02-tool-library-expansion-design.md"
+            "docs/tool-library.md"
+            "package.json"
+            "src/server/browser-workflow-routes.ts"
+            "src/server/security.test.ts"
+            "src/server/security.ts"
+            "src/server/tools.integration.test.ts"
+            "src/tools/catalog.test.ts"
+            "src/tools/catalog.ts"
+            "src/tools/index.ts"
+            "src/tools/invocation.test.ts"
+            "src/tools/knowledge.test.ts"
+            "src/tools/knowledge.ts"
+            "src/tools/manifest.test.ts"
+            "src/tools/manifest.ts"
+            "src/tools/registry.test.ts"
+            "src/tools/registry.ts"
+            "src/tools/types.ts"
+            "src/tools/validation.ts"
+          )
+          for file in "${files[@]}"; do
+            mkdir -p "$export_root/$(dirname "$file")"
+            cp "$file" "$export_root/$file"
+          done
+          cat > "$export_root/README-ARCHIVE.md" <<'EOF'
+          # Titan Builder Tool Library Export
+
+          Source branch: `feature/tool-library-expansion`
+          Pull request: `#18`
+
+          This package contains the complete 22-file Tool Library implementation delta: production source, tests, bridge/security integration, package test wiring, architecture documentation, and canonical `.titan` records.
+          EOF
+          zip -r Titan-Builder-Tool-Library.zip "$export_root"
+
+      - name: Upload tool library archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: Titan-Builder-Tool-Library
+          path: Titan-Builder-Tool-Library.zip
+          if-no-files-found: error
+          retention-days: 7
