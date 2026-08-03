@@ -1,0 +1,27 @@
+name: Diagnose recovery tree
+
+on:
+  pull_request:
+    branches:
+      - diagnostic/recovery-tree-base
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-head:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out recovery head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Print exact head and tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RECOVERY_HEAD_SHA=$(git rev-parse HEAD)"
+          echo "RECOVERY_TREE_SHA=$(git rev-parse 'HEAD^{tree}')"
