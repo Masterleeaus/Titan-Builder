@@ -104,7 +104,6 @@ jobs:
           PY
 
           python scripts/repair_current_main_final.py
-          git show 6398101816f8fb5b59f5c4357923fe584ba2fa85:src/server/session-store.ts > src/server/session-store.ts
 
           python - <<'PY'
           from pathlib import Path
@@ -116,6 +115,13 @@ jobs:
           if source.count(old) != 1:
               raise SystemExit(f'expected one reserved metadata set terminator, found {source.count(old)}')
           path.write_text(source.replace(old, new, 1), encoding='utf-8')
+
+          manifest_path = Path('src/skills/manifest.ts')
+          manifest = manifest_path.read_text(encoding='utf-8')
+          stale_entrypoint = "const entrypoint = /^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))(?:[A-Za-z0-9_-]+\\/)*[A-Za-z0-9_.-]+\\.js#[A-Za-z_$][A-Za-z0-9_$]*$/u;\n"
+          if manifest.count(stale_entrypoint) != 1:
+              raise SystemExit(f'expected one obsolete entrypoint regex, found {manifest.count(stale_entrypoint)}')
+          manifest_path.write_text(manifest.replace(stale_entrypoint, '', 1), encoding='utf-8')
           PY
 
           rm .github/workflows/finalize-companion-recovery.yml
