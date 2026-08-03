@@ -425,7 +425,8 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
   });
 
   app.post('/browser/response', async (request) => {
-    const MAX_RESPONSE_BYTES = 16 * 1024 * 1024; // 16 MiB
+    const MAX_RESPONSE_BYTES = 5_000_000;
+    const MAX_ERROR_BYTES = 10_000;
     const body = request.body as {
       sessionId?: string;
       claimToken?: string;
@@ -437,8 +438,8 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     }
     if (body.error) {
       const errorSize = Buffer.byteLength(body.error, 'utf8');
-      if (errorSize > MAX_RESPONSE_BYTES) {
-        throw new Error(`Browser error message exceeds ${MAX_RESPONSE_BYTES} bytes`);
+      if (errorSize > MAX_ERROR_BYTES) {
+        throw new Error(`Browser error message exceeds ${MAX_ERROR_BYTES} bytes`);
       }
       failSession(body.sessionId, body.error, body.claimToken);
       notifySessionError(body.sessionId, { error: body.error });
