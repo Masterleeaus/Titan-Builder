@@ -28,9 +28,10 @@ Workflow policy independently rejected three completed issue-controller workflow
 - Regenerated `pnpm-lock.yaml` from scratch with pnpm 11.2.2 and lifecycle scripts disabled.
 - Proved the regenerated lock accepts a frozen install before publishing it.
 - Removed the three completed write-enabled controller workflows.
-- Removed the one-shot repair controller from its own published result.
-- Activated a deterministic final recovery pass that must verify root and companion packages before publishing its self-cleaned result.
+- Reconciled the root context, operations, project-path, server, session, Skill Library, and Tool Library contracts.
+- Reconciled the companion environment loader, user-scoped database migration, authenticated bridge forwarding, and error-envelope contracts.
+- Activated a one-shot publisher that verifies root and companion packages and removes its own recovery artifacts before committing.
 
 ## Final verification
 
-The connector-authored final head must pass the standard Linux, Windows, companion, workflow-policy, security, catalog, and dependency matrices before merge. A fresh owner-authored commit was added after the initial runs were held for action approval so those exact final-head checks can execute normally.
+The published final head must pass the standard Linux, Windows, companion, workflow-policy, security, catalog, and dependency matrices before merge. No pre-publication workflow result will be reused as final evidence.
