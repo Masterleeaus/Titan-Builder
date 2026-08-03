@@ -3,7 +3,7 @@ name: Export Titan Skill Library
 on:
   pull_request:
     branches:
-      - feature/skill-library-pass-04
+      - main
 
 permissions:
   contents: read
