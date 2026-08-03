@@ -108,8 +108,7 @@ export async function registerBrowserWorkflowRoutes(
           reply.raw.end();
         }
       }).catch((error) => {
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        logger.warn(`SSE update fetch failed for run ${runId}: ${errorMsg}`);
+        logger.warn({ runId, error }, 'SSE update fetch failed');
       });
     }, 1000);
     const heartbeat = setInterval(() => reply.raw.write(': heartbeat\n\n'), 15_000);
