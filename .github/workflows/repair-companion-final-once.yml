@@ -6,9 +6,10 @@ on:
     branches: [main]
     paths:
       - browser-extension/**
-      - src/skills/**
+      - src/**
       - package.json
       - pnpm-lock.yaml
+      - scripts/repair_current_main_final.py
       - .github/workflows/repair-companion-final-once.yml
 
 permissions:
@@ -34,12 +35,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Restore coherent companion source, manifest, and lock
+      - name: Restore coherent companion and root source
         shell: bash
         run: |
           git show 684a62b8f14dc494de0c8820fd5e11e4689667b7:browser-extension/bridge-server.ts > browser-extension/bridge-server.ts
           git show 9c55d427a71b7a66b29e26db917ebfbd4464e115:browser-extension/package.json > browser-extension/package.json
           git show 9c55d427a71b7a66b29e26db917ebfbd4464e115:browser-extension/pnpm-lock.yaml > browser-extension/pnpm-lock.yaml
+
+          git show 3163e9724cd6640e1b39a913d883f5aad139ba40:src/skills/dispatcher.ts > src/skills/dispatcher.ts
+          git show 3163e9724cd6640e1b39a913d883f5aad139ba40:src/skills/dispatcher.test.ts > src/skills/dispatcher.test.ts
+          git show 3163e9724cd6640e1b39a913d883f5aad139ba40:src/skills/registry.test.ts > src/skills/registry.test.ts
+
           python - <<'PY'
           from pathlib import Path
 
@@ -99,8 +105,24 @@ jobs:
 
           path.write_text(source, encoding='utf-8')
           PY
+
+          python scripts/repair_current_main_final.py
+          git show acfa07cb9d1490deabdefff8e269ed5d2a4c31aa:src/server/session-store.ts > src/server/session-store.ts
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/security/project-path.ts')
+          source = path.read_text(encoding='utf-8')
+          old = "  'cvs',\n]);"
+          new = "  'cvs',\n  '.openbrowser',\n]);"
+          if source.count(old) != 1:
+              raise SystemExit(f'expected one reserved metadata set terminator, found {source.count(old)}')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+
           rm .github/workflows/repair-companion-final-once.yml
-          rm -f scripts/repair_current_main_final.py
+          rm scripts/repair_current_main_final.py
           git diff --check
 
       - name: Set up Node.js 22
