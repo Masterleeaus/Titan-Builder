@@ -1,6 +1,6 @@
 {
   "name": "@titan-builder/openbrowser-workspace",
-  "version": "1.0.0",
+  "version": "0.5.0",
   "description": "Secure local workspace companion for OpenBrowser and Titan Builder",
   "private": true,
   "type": "module",
