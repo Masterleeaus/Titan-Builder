@@ -9,7 +9,7 @@ import {
 } from './registry.ts';
 
 test('resolves git.status without a shell', () => {
-  const root = path.resolve('/tmp/project');
+  const root = path.resolve('/home/user/test-project');
   const invocation = resolveToolInvocation('git.status', [], root);
 
   assert.equal(invocation.executable, 'git');
@@ -21,14 +21,14 @@ test('resolves git.status without a shell', () => {
 
 test('rejects unknown tool identifiers', () => {
   assert.throws(
-    () => resolveToolInvocation('shell.exec', ['rm', '-rf', '.'], '/tmp/project'),
+    () => resolveToolInvocation('shell.exec', ['rm', '-rf', '.'], path.resolve('/home/user/test-project')),
     /Unsupported tool/,
   );
 });
 
 test('restricts npm.run to verification-oriented names without calling them safe', () => {
   assert.throws(
-    () => resolveToolInvocation('npm.run', ['postinstall'], '/tmp/project'),
+    () => resolveToolInvocation('npm.run', ['postinstall'], path.resolve('/home/user/test-project')),
     /not an approved verification script/,
   );
 
@@ -38,7 +38,7 @@ test('restricts npm.run to verification-oriented names without calling them safe
     ['pnpm.test', []],
     ['pnpm.run', ['build']],
   ] as const) {
-    const invocation = resolveToolInvocation(toolId, [...args], '/tmp/project');
+    const invocation = resolveToolInvocation(toolId, [...args], path.resolve('/home/user/test-project'));
     assert.equal(invocation.risk, 'ARBITRARY_EXECUTION');
     assert.equal(requiresExplicitApproval(invocation.risk), true);
     assert.ok(toolInputFiles(invocation).some((input) => input.path === 'package.json' && input.required));
@@ -47,14 +47,14 @@ test('restricts npm.run to verification-oriented names without calling them safe
 });
 
 test('dependency installs disable lifecycle scripts, enforce lockfiles, and require network approval', () => {
-  const npm = resolveToolInvocation('npm.install', [], '/tmp/project');
+  const npm = resolveToolInvocation('npm.install', [], path.resolve('/home/user/test-project'));
   assert.equal(npm.risk, 'NETWORK_WRITE');
   assert.deepEqual(npm.args.slice(-2), ['ci', '--ignore-scripts']);
   assert.match(npm.displayCommand, /npm(?:\.cmd)? ci --ignore-scripts/);
   assert.equal(requiresExplicitApproval(npm.risk), true);
   assert.ok(toolInputFiles(npm).some((input) => input.path === 'package-lock.json' && input.required));
 
-  const pnpm = resolveToolInvocation('pnpm.install', [], '/tmp/project');
+  const pnpm = resolveToolInvocation('pnpm.install', [], path.resolve('/home/user/test-project'));
   assert.equal(pnpm.risk, 'NETWORK_WRITE');
   assert.deepEqual(pnpm.args.slice(-3), ['install', '--frozen-lockfile', '--ignore-scripts']);
   assert.match(pnpm.displayCommand, /pnpm(?:\.cmd)? install --frozen-lockfile --ignore-scripts/);
@@ -63,7 +63,7 @@ test('dependency installs disable lifecycle scripts, enforce lockfiles, and requ
 });
 
 test('Windows command shims remain shell-disabled and use the system command processor explicitly', () => {
-  const npm = resolveToolInvocation('npm.test', [], '/tmp/project');
+  const npm = resolveToolInvocation('npm.test', [], path.resolve('/home/user/test-project'));
   if (process.platform === 'win32') {
     assert.equal(npm.executable.toLowerCase(), (process.env.COMSPEC ?? 'cmd.exe').toLowerCase());
     assert.deepEqual(npm.args.slice(0, 4), ['/d', '/s', '/c', 'npm.cmd']);
@@ -78,7 +78,7 @@ test('Windows command shims quote executable paths containing spaces', () => {
   if (process.platform !== 'win32') {
     return;
   }
-  const npm = resolveToolInvocation('npm.test', [], '/tmp/project');
+  const npm = resolveToolInvocation('npm.test', [], path.resolve('/home/user/test-project'));
   // Verify that executable paths are properly quoted in the cmd.exe /c invocation
   assert.equal(npm.shell, false);
   const cFlagIndex = npm.args.indexOf('/c');
