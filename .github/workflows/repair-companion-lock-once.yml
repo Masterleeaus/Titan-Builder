@@ -1,0 +1,75 @@
+name: Restore verified companion lock once
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [main]
+    paths:
+      - browser-extension/package.json
+      - browser-extension/pnpm-lock.yaml
+      - .github/workflows/repair-companion-lock-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: restore-companion-lock-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  restore-verify-publish:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/current-main-verification-regressions' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact recovery branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/current-main-verification-regressions
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Restore exact independently verified companion lock
+        run: |
+          git show 533dc67465e19cfddf517a96a5f4fa1e21f0c36d:browser-extension/pnpm-lock.yaml > browser-extension/pnpm-lock.yaml
+          rm .github/workflows/repair-companion-lock-once.yml
+          git diff --check
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
+      - name: Verify companion and root repository
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+          cd browser-extension
+          pnpm install --frozen-lockfile
+          pnpm run verify
+          cd ..
+          pnpm install --frozen-lockfile
+          pnpm run verify
+
+      - name: Publish only verified lock restoration
+        env:
+          GH_PUSH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          old_head=$(git rev-parse HEAD)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add browser-extension/pnpm-lock.yaml .github/workflows/repair-companion-lock-once.yml
+          git commit -m "fix(ci): restore verified companion lockfile"
+          auth_header=$(printf 'x-access-token:%s' "$GH_PUSH_TOKEN" | base64 -w0)
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth_header" push \
+            --force-with-lease="refs/heads/${HEAD_REF}:${old_head}" \
+            origin "HEAD:${HEAD_REF}"
