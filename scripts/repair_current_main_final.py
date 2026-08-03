@@ -1,7 +1,27 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+
+SKILL_RUNTIME_REFERENCE = '04545227c23acc9bcb32cc7b84b5460f3f8ecca2'
+SKILL_RUNTIME_FILES = (
+    'browser-extension/skill-library/packages/project-path-containment/manifest.json',
+    'browser-extension/skill-library/packages/project-path-containment/runtime/entrypoint.js',
+    'browser-extension/src/generated/skill-catalog.js',
+    'src/skills/dispatcher.test.ts',
+    'src/skills/dispatcher.ts',
+    'src/skills/entrypoint.test.ts',
+    'src/skills/entrypoint.ts',
+    'src/skills/loader.ts',
+    'src/skills/manifest.test.ts',
+    'src/skills/manifest.ts',
+    'src/skills/package-file.test.ts',
+    'src/skills/package-file.ts',
+    'src/skills/registry.test.ts',
+    'src/skills/schema.test.ts',
+    'src/skills/titan-skill-manifest.schema.json',
+)
 
 
 def replace_once(path: str, old: str, new: str) -> None:
@@ -24,6 +44,13 @@ def replace_between(path: str, start: str, end: str, replacement: str = '') -> N
         source[:start_index] + replacement + source[end_index:],
         encoding='utf-8',
     )
+
+
+def restore_verified_file(path: str) -> None:
+    content = subprocess.check_output(
+        ['git', 'show', f'{SKILL_RUNTIME_REFERENCE}:{path}'],
+    )
+    Path(path).write_bytes(content)
 
 
 def repair_install_doctor() -> None:
@@ -133,70 +160,8 @@ export function setPersistenceStore(store: PersistentSessionStore | undefined): 
 
 
 def repair_skills() -> None:
-    loader = """import path from 'node:path';
-import { readFile, realpath } from 'node:fs/promises';
-import fg from 'fast-glob';
-import { parseSkillEntrypoint } from './entrypoint.js';
-import { parseSkillManifest, type TitanSkillManifest } from './manifest.js';
-import { resolveContainedPackageFile } from './package-file.js';
-
-export interface LoadedSkillPackage {
-  manifest: TitanSkillManifest;
-  packageRoot: string;
-  manifestPath: string;
-  instructions?: string;
-  entrypointPath?: string;
-}
-
-export async function discoverSkillManifestPaths(libraryRoot: string): Promise<string[]> {
-  const canonicalRoot = await realpath(libraryRoot);
-  const matches = await fg('**/manifest.json', {
-    cwd: canonicalRoot,
-    absolute: true,
-    onlyFiles: true,
-    unique: true,
-    followSymbolicLinks: false,
-    ignore: ['fixtures/**', '**/node_modules/**'],
-  });
-  return matches.map((item) => path.resolve(item)).sort((left, right) => left.localeCompare(right));
-}
-
-export async function loadSkillPackage(manifestPath: string): Promise<LoadedSkillPackage> {
-  const canonicalManifest = await realpath(manifestPath);
-  const packageRoot = path.dirname(canonicalManifest);
-  const source = JSON.parse(await readFile(canonicalManifest, 'utf8')) as unknown;
-  const manifest = parseSkillManifest(source);
-  const loaded: LoadedSkillPackage = {
-    manifest,
-    packageRoot,
-    manifestPath: canonicalManifest,
-  };
-
-  if (manifest.instructions) {
-    const instructionsPath = await resolveContainedPackageFile(packageRoot, manifest.instructions);
-    loaded.instructions = (await readFile(instructionsPath, 'utf8')).trim();
-    if (!loaded.instructions) throw new Error(`Skill instructions are empty: ${manifest.instructions}`);
-  }
-  if (manifest.entrypoint) {
-    const { modulePath } = parseSkillEntrypoint(manifest.entrypoint);
-    loaded.entrypointPath = await resolveContainedPackageFile(packageRoot, modulePath);
-  }
-  return loaded;
-}
-
-export async function discoverSkillPackages(libraryRoot: string): Promise<LoadedSkillPackage[]> {
-  const manifests = await discoverSkillManifestPaths(libraryRoot);
-  const packages: LoadedSkillPackage[] = [];
-  for (const manifestPath of manifests) packages.push(await loadSkillPackage(manifestPath));
-  return packages;
-}
-"""
-    Path('src/skills/loader.ts').write_text(loader, encoding='utf-8')
-    replace_once(
-        'src/skills/manifest.ts',
-        "const entrypoint = /^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))(?:[A-Za-z0-9_-]+\\/)*[A-Za-z0-9_.-]+\\.js#[A-Za-z_$][A-Za-z0-9_$]*$/u;\n",
-        '',
-    )
+    for path in SKILL_RUNTIME_FILES:
+        restore_verified_file(path)
 
 
 def main() -> None:
