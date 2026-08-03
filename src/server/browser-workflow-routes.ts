@@ -3,7 +3,6 @@ import { TOOL_MANIFEST_SCHEMA_VERSION } from '../tools/manifest.js';
 import { createToolKnowledgeRecords } from '../tools/knowledge.js';
 import { listToolManifests } from '../tools/registry.js';
 import { bridgeBodyLimit } from './body-limits.js';
-import { logger } from '../shared/index.js';
 import { AgentApplicationError } from '../workflows/agent-application.js';
 import type { BrowserRunCoordinator } from '../workflows/browser-run-coordinator.js';
 import type {
