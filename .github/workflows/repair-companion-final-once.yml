@@ -34,11 +34,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Restore coherent companion source and lock
+      - name: Restore coherent companion source, manifest, and lock
         shell: bash
         run: |
           git show 684a62b8f14dc494de0c8820fd5e11e4689667b7:browser-extension/bridge-server.ts > browser-extension/bridge-server.ts
-          git show 51683d900f5f8958b2845ada252f468bb3aa6f6d:browser-extension/pnpm-lock.yaml > browser-extension/pnpm-lock.yaml
+          git show 9c55d427a71b7a66b29e26db917ebfbd4464e115:browser-extension/package.json > browser-extension/package.json
+          git show 9c55d427a71b7a66b29e26db917ebfbd4464e115:browser-extension/pnpm-lock.yaml > browser-extension/pnpm-lock.yaml
           python - <<'PY'
           from pathlib import Path
 
@@ -55,6 +56,19 @@ jobs:
           replace_once(
               "import {\n  BridgeConnectionError,\n  requestAuthenticatedBridge,\n} from './bridge-connection-transport.js';",
               "import { requestAuthenticatedBridge } from './bridge-connection-transport.js';",
+          )
+          replace_once(
+              "const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:5000';",
+              "const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:5000';\n"
+              "const WORKSPACE_DB_FILENAME = 'database.sqlite';",
+          )
+          replace_once(
+              "  const explicit = options.databasePath ?? process.env.WORKSPACE_DB_PATH;\n"
+              "  if (explicit) {",
+              "  const configuredPath = process.env.WORKSPACE_DB_PATH;\n"
+              "  const explicit = options.databasePath\n"
+              "    ?? (configuredPath && configuredPath !== 'undefined' ? configuredPath : undefined);\n"
+              "  if (explicit) {",
           )
           replace_once(
               "  const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;\n"
