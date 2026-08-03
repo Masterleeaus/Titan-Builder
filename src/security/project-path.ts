@@ -134,10 +134,10 @@ function isNotFound(error: unknown): boolean {
 }
 
 function assertNotReserved(targetPath: string): void {
-  const normalized = targetPath.split(path.sep).filter(Boolean).join(path.sep).toLowerCase();
-  const segments = normalized.split(path.sep);
+  const normalizedPath = path.normalize(targetPath);
+  const firstSegment = normalizedPath.split(path.sep)[0]?.toLowerCase();
 
-  if (segments[0] === '.openbrowser') {
+  if (firstSegment === '.openbrowser') {
     throw new Error(`Path targets reserved Titan Builder metadata: ${targetPath}`);
   }
 }

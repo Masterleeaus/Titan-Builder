@@ -1155,7 +1155,7 @@ function nextContent(operation: FileOperation, before: string): string {
     if (nextIndex !== -1) {
       throw new Error(`Search text appears ${countOccurrences(before, search)} times in ${operation.path}; ambiguous match without explicit occurrence selector`);
     }
-    return before.replace(search, replace);
+    return before.substring(0, searchIndex) + replace + before.substring(searchIndex + search.length);
   }
 
   if (operation.content !== undefined) {
