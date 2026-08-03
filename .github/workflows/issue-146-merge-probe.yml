@@ -1,0 +1,41 @@
+name: Issue 146 merge probe
+
+on:
+  push:
+    branches:
+      - automation/issue-146-merge-probe
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Probe merge conflicts
+        shell: bash
+        run: |
+          set -uo pipefail
+          git config user.name "issue-146-merge-probe"
+          git config user.email "issue-146-merge-probe@users.noreply.github.com"
+          git fetch origin fix/issue-146-integrity-bound-run-artifacts
+          if git merge --no-commit --no-ff origin/fix/issue-146-integrity-bound-run-artifacts; then
+            echo "MERGE_PROBE_RESULT=clean"
+            git diff --stat --cached
+            exit 0
+          fi
+
+          echo "MERGE_PROBE_RESULT=conflicted"
+          echo "UNMERGED_FILES_BEGIN"
+          git diff --name-only --diff-filter=U
+          echo "UNMERGED_FILES_END"
+          for file in $(git diff --name-only --diff-filter=U); do
+            echo "CONFLICT_FILE_BEGIN=$file"
+            grep -n -C 8 -E '^(<<<<<<<|=======|>>>>>>>)' "$file" || true
+            echo "CONFLICT_FILE_END=$file"
+          done
+          exit 1
