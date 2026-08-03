@@ -30,6 +30,7 @@ import {
   resolveProject,
   setActiveProject,
 } from './projects/registry.js';
+import { getEffectiveProjectRoot } from './projects/resolver.js';
 import { executePlannedOperations, planOperations } from './operations/index.js';
 import { requiresExplicitApproval } from './tools/registry.js';
 import { extractMarkdownDraftContent } from './parser/markdown-agent.js';
@@ -129,7 +130,8 @@ program
   .description('Show Git and project status without modifying files')
   .action(async () => {
     printBanner();
-    const status = await readProjectStatus(process.cwd());
+    const projectRoot = await getEffectiveProjectRoot();
+    const status = await readProjectStatus(projectRoot);
     printProjectStatus(status);
   });
 
@@ -180,22 +182,26 @@ memoryCommand
   .argument('<text>', 'decision, constraint, or fact')
   .option('-t, --tag <tags...>', 'memory tags')
   .action(async (text: string, options: { tag?: string[] }) => {
-    const entry = await addProjectMemory(process.cwd(), text, options.tag ?? []);
+    const projectRoot = await getEffectiveProjectRoot();
+    const entry = await addProjectMemory(projectRoot, text, options.tag ?? []);
     writeSuccess(`saved memory ${entry.id}`);
   });
 memoryCommand.command('list').action(async () => {
-  const entries = await listProjectMemory(process.cwd());
+  const projectRoot = await getEffectiveProjectRoot();
+  const entries = await listProjectMemory(projectRoot);
   if (!entries.length) return writeInfo('No project memory saved.');
   output.write(`\n${colors.bold}Project memory${colors.reset}\n`);
   for (const entry of entries) output.write(`${entry.id}  ${entry.text}${entry.tags.length ? ` [${entry.tags.join(', ')}]` : ''}\n`);
 });
 memoryCommand.command('remove').argument('<id>', 'memory id').action(async (id: string) => {
-  const removed = await removeProjectMemory(process.cwd(), id);
+  const projectRoot = await getEffectiveProjectRoot();
+  const removed = await removeProjectMemory(projectRoot, id);
   if (!removed) throw new Error(`Memory not found: ${id}`);
   writeSuccess(`removed ${id}`);
 });
 memoryCommand.command('clear').action(async () => {
-  await clearProjectMemory(process.cwd());
+  const projectRoot = await getEffectiveProjectRoot();
+  await clearProjectMemory(projectRoot);
   writeSuccess('cleared project memory');
 });
 
@@ -207,7 +213,8 @@ contextCommand
   .option('--per-file <characters>', 'per-file character cap', parsePositiveInteger, 32000)
   .option('--max-files <count>', 'maximum files', parsePositiveInteger, 30)
   .action(async (paths: string[], options: { budget: number; perFile: number; maxFiles: number }) => {
-    const result = await buildBudgetedContext(process.cwd(), paths, {
+    const projectRoot = await getEffectiveProjectRoot();
+    const result = await buildBudgetedContext(projectRoot, paths, {
       totalCharacters: options.budget,
       perFileCharacters: options.perFile,
       maxFiles: options.maxFiles,
@@ -222,15 +229,16 @@ contextCommand
   .option('--per-file <characters>', 'per-file character cap', parsePositiveInteger, 32000)
   .option('--max-files <count>', 'maximum files', parsePositiveInteger, 30)
   .action(async (outputPath: string, paths: string[], options: { budget: number; perFile: number; maxFiles: number }) => {
-    const result = await buildBudgetedContext(process.cwd(), paths, {
+    const projectRoot = await getEffectiveProjectRoot();
+    const result = await buildBudgetedContext(projectRoot, paths, {
       totalCharacters: options.budget,
       perFileCharacters: options.perFile,
       maxFiles: options.maxFiles,
     });
-    const resolvedOutput = path.resolve(process.cwd(), outputPath);
-    if (!isPathInside(process.cwd(), resolvedOutput)) throw new Error('Context export must stay inside the current project.');
+    const resolvedOutput = path.resolve(projectRoot, outputPath);
+    if (!isPathInside(projectRoot, resolvedOutput)) throw new Error('Context export must stay inside the current project.');
     await writeFile(resolvedOutput, `${formatContextBudgetPreview(result)}\n\n${formatBudgetedContextMarkdown(result)}\n`, 'utf8');
-    writeSuccess(`exported context to ${path.relative(process.cwd(), resolvedOutput)}`);
+    writeSuccess(`exported context to ${path.relative(projectRoot, resolvedOutput)}`);
   });
 
 program
@@ -246,9 +254,10 @@ if (process.argv.length <= 2) {
   await program.parseAsync();
 }
 
-async function runVerification(rawProfile: string, dryRun: boolean): Promise<void> {
+async function runVerification(rawProfile: string, dryRun: boolean, projectRoot?: string): Promise<void> {
+  const root = projectRoot ?? await getEffectiveProjectRoot();
   const profile = parseVerificationProfile(rawProfile);
-  const detected = await detectVerificationPlan(process.cwd(), profile);
+  const detected = await detectVerificationPlan(root, profile);
   if (detected.operations.length === 0) {
     writeWarning(
       `No approved ${profile} verification scripts were found for ${detected.packageManager}.`,
@@ -256,7 +265,7 @@ async function runVerification(rawProfile: string, dryRun: boolean): Promise<voi
     return;
   }
 
-  const plans = await planOperations(detected.operations, process.cwd());
+  const plans = await planOperations(detected.operations, root);
   output.write(`\n${colors.bold}Verification plan${colors.reset} ${colors.dim}(${profile})${colors.reset}\n`);
   for (const plan of plans) {
     writeDiffBlock(plan.diff);
@@ -267,7 +276,7 @@ async function runVerification(rawProfile: string, dryRun: boolean): Promise<voi
     return;
   }
 
-  await executePlannedOperations(plans, process.cwd(), {
+  await executePlannedOperations(plans, root, {
     onStep: (step, detail) => writeInfo(`${step}${detail ? `: ${detail}` : ''}`),
   });
   writeSuccess(`${profile} verification completed`);
@@ -303,7 +312,8 @@ async function withBridge<T>(callback: () => Promise<T>): Promise<T> {
 async function runInteractive(): Promise<void> {
   printBanner();
 
-  const choices = await listContextChoices(process.cwd());
+  const projectRoot = await getEffectiveProjectRoot();
+  const choices = await listContextChoices(projectRoot);
 
   while (true) {
     const mode = await chooseMode(choices);
@@ -375,14 +385,13 @@ async function waitForBrowserResponse(sessionId: string): Promise<string> {
 
 async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
   const tracker = new AgentStepTracker();
-  const currentProject = await registerProject(process.cwd());
-  await setActiveProject(currentProject.id);
+  const projectRoot = await getEffectiveProjectRoot();
   const conversationId = crypto.randomUUID();
 
   try {
     const result = await runAskWorkflow(
       {
-        projectRoot: process.cwd(),
+        projectRoot,
         prompt,
         contextRefs: options.contextPaths ?? [],
         contextBudget: options.contextBudget,
@@ -428,15 +437,14 @@ async function runAsk(prompt: string, options: RunOptions = {}): Promise<void> {
 
 async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
   const tracker = new AgentStepTracker();
-  const currentProject = await registerProject(process.cwd());
-  await setActiveProject(currentProject.id);
-  tracker.step('reading project', process.cwd());
+  const projectRoot = await getEffectiveProjectRoot();
+  tracker.step('reading project', projectRoot);
   const conversationId = crypto.randomUUID();
 
   try {
     const prepared = await prepareAgentRun(
       {
-        projectRoot: process.cwd(),
+        projectRoot,
         task,
         contextRefs: options.contextPaths ?? [],
         contextBudget: options.contextBudget,
@@ -504,8 +512,8 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
       const executionPlans =
         approvedOperations.length === plans.length
           ? plans
-          : await planOperations(approvedOperations, process.cwd());
-      await executePlannedOperations(executionPlans, process.cwd(), {
+          : await planOperations(approvedOperations, projectRoot);
+      await executePlannedOperations(executionPlans, projectRoot, {
         conversationId: prepared.conversationId,
         onStep: (step, detail) => tracker.step(step as TrackerStep, detail),
       });
@@ -522,7 +530,7 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
 
     if (options.verificationProfile) {
       try {
-        await runVerification(options.verificationProfile, false);
+        await runVerification(options.verificationProfile, false, projectRoot);
       } catch (error) {
         tracker.complete('verification failed');
         writeError(`Post-change verification failed: ${formatError(error)}`);
@@ -533,7 +541,7 @@ async function runAgent(task: string, options: RunOptions = {}): Promise<void> {
       }
     }
 
-    const finalStatus = await readProjectStatus(process.cwd());
+    const finalStatus = await readProjectStatus(projectRoot);
     writeInfo(
       `working tree after pass: ${finalStatus.dirty ? `${finalStatus.changedFiles} changed file(s)` : 'clean'}`,
     );
