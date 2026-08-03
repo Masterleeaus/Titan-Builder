@@ -7,6 +7,7 @@ on:
     paths:
       - browser-extension/package.json
       - browser-extension/pnpm-lock.yaml
+      - browser-extension/bridge-server.ts
       - .github/workflows/repair-companion-lock-once.yml
 
 permissions:
@@ -32,9 +33,45 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Restore exact independently verified companion lock
+      - name: Restore verified lock and repair exact companion merge artifacts
         run: |
           git show 51683d900f5f8958b2845ada252f468bb3aa6f6d:browser-extension/pnpm-lock.yaml > browser-extension/pnpm-lock.yaml
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('browser-extension/bridge-server.ts')
+          text = path.read_text()
+
+          replacements = [
+              (
+                  "import { existsSync, readFileSync } from 'node:fs';",
+                  "import { existsSync } from 'node:fs';",
+              ),
+              (
+                  "  bridgeRequest?: typeof requestAuthenticatedBridge;\n",
+                  "",
+              ),
+              (
+                  "  const databasePath = path.resolve(\n"
+                  "    options.databasePath\n"
+                  "      ?? process.env.WORKSPACE_DB_PATH\n"
+                  "      ?? path.join(moduleDirectory, 'openbrowser-workspace.db'),\n"
+                  "  );\n"
+                  "  const bridgeUrl = bridgeEndpoint.origin;\n"
+                  "  const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;\n"
+                  "  const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });\n",
+                  "  const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });\n",
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one merge artifact, found {count}: {old[:80]!r}')
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
           rm .github/workflows/repair-companion-lock-once.yml
           git diff --check
 
@@ -59,7 +96,7 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm run verify
 
-      - name: Publish only verified lock restoration
+      - name: Publish only verified recovery
         env:
           GH_PUSH_TOKEN: ${{ github.token }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
@@ -67,8 +104,8 @@ jobs:
           old_head=$(git rev-parse HEAD)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add browser-extension/pnpm-lock.yaml .github/workflows/repair-companion-lock-once.yml
-          git commit -m "fix(ci): restore verified companion lockfile"
+          git add browser-extension/pnpm-lock.yaml browser-extension/bridge-server.ts .github/workflows/repair-companion-lock-once.yml
+          git commit -m "fix(ci): restore verified companion runtime"
           auth_header=$(printf 'x-access-token:%s' "$GH_PUSH_TOKEN" | base64 -w0)
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth_header" push \
             --force-with-lease="refs/heads/${HEAD_REF}:${old_head}" \
