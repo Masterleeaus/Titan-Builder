@@ -38,7 +38,7 @@ export interface BrowserOperationPreview {
 
 export interface BrowserVerificationSnapshot {
   profile: VerificationProfile;
-  status: 'pending' | 'running' | 'passed' | 'failed';
+  status: 'pending' | 'running' | 'passed' | 'failed' | 'skipped';
   summary?: string;
 }
 
