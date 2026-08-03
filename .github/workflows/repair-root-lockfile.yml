@@ -1,0 +1,75 @@
+name: Verify root lockfile repair
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/repair-root-lockfile.yml
+      - pnpm-lock.yaml
+      - .github/workflows/apply-issue-119.yml
+      - .github/workflows/apply-issue-24-controller.yml
+      - .github/workflows/retry-issue-119-publish.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-root-lockfile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  repair-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+
+      - name: Repair exactly one duplicated package snapshot
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('pnpm-lock.yaml')
+          text = path.read_text(encoding='utf-8')
+          block = """  braces@3.0.3:
+            resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
+            engines: {node: '>=8'}
+
+          """
+          if text.count(block) != 2:
+              raise SystemExit(f'expected exactly two duplicated braces snapshots, found {text.count(block)}')
+          text = text.replace(block + block, block, 1)
+          if text.count(block) != 1:
+              raise SystemExit('lockfile repair did not leave exactly one braces snapshot')
+          path.write_text(text, encoding='utf-8')
+
+      - name: Install dependencies from repaired lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+          pnpm install --frozen-lockfile
+
+      - name: Verify complete repository
+        shell: bash
+        run: pnpm run verify
+
+      - name: Emit verified lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'ROOT_LOCKFILE_BASE64_BEGIN'
+          base64 -w 76 pnpm-lock.yaml
+          echo
+          echo 'ROOT_LOCKFILE_BASE64_END'
