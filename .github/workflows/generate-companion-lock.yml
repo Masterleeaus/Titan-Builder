@@ -28,42 +28,20 @@ jobs:
         run: |
           corepack enable
           corepack prepare pnpm@11.2.2 --activate
-      - name: Repair collided companion source
-        shell: python
+      - name: Restore last coherent companion security slice
+        shell: bash
         run: |
-          from pathlib import Path
-          import re
-
-          path = Path('browser-extension/bridge-server.ts')
-          text = path.read_text(encoding='utf-8')
-
-          replacements = [
-              (
-                  "import { existsSync, readFileSync } from 'node:fs';",
-                  "import { existsSync } from 'node:fs';",
-              ),
-              (
-                  "  bridgeAllowedPorts?: number[];\n  bridgeRequest?: typeof requestAuthenticatedBridge;\n",
-                  "  bridgeAllowedPorts?: number[];\n",
-              ),
-          ]
-          for old, new in replacements:
-              if text.count(old) != 1:
-                  raise SystemExit(f'Expected one repair anchor, found {text.count(old)}: {old!r}')
-              text = text.replace(old, new, 1)
-
-          pattern = re.compile(
-              r"  const databasePath = path\.resolve\([\s\S]*?"
-              r"  const databasePath = await resolveWorkspaceDatabasePath\(\{ databasePath: options\.databasePath \}\);\n"
-          )
-          replacement = (
-              "  const databasePath = await resolveWorkspaceDatabasePath("
-              "{ databasePath: options.databasePath });\n"
-          )
-          text, count = pattern.subn(replacement, text, count=1)
-          if count != 1:
-              raise SystemExit(f'Expected one collided database initialization region, found {count}')
-          path.write_text(text, encoding='utf-8')
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin 33b828f01858abbb86f4d34010941114577c0f77
+          git checkout 33b828f01858abbb86f4d34010941114577c0f77 -- \
+            browser-extension/bridge-server.ts \
+            browser-extension/package.json
+          rm -f \
+            browser-extension/bridge-authenticated-client.test.ts \
+            browser-extension/bridge-authenticated-client.ts \
+            browser-extension/bridge-endpoint-policy.ts \
+            browser-extension/bridge-forwarding-security.test.ts \
+            browser-extension/bridge-identity-verifier.ts
       - name: Regenerate and verify companion
         working-directory: browser-extension
         shell: bash
@@ -73,12 +51,27 @@ jobs:
           pnpm install --lockfile-only --ignore-scripts
           pnpm install --frozen-lockfile
           pnpm run verify
+      - name: Write recovery manifest
+        shell: bash
+        run: |
+          cat > companion-recovery-manifest.txt <<'EOF'
+          restore browser-extension/bridge-server.ts
+          restore browser-extension/package.json
+          restore browser-extension/pnpm-lock.yaml
+          delete browser-extension/bridge-authenticated-client.test.ts
+          delete browser-extension/bridge-authenticated-client.ts
+          delete browser-extension/bridge-endpoint-policy.ts
+          delete browser-extension/bridge-forwarding-security.test.ts
+          delete browser-extension/bridge-identity-verifier.ts
+          EOF
       - name: Upload verified companion files
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: verified-companion-recovery
           path: |
             browser-extension/bridge-server.ts
+            browser-extension/package.json
             browser-extension/pnpm-lock.yaml
+            companion-recovery-manifest.txt
           if-no-files-found: error
           retention-days: 1
