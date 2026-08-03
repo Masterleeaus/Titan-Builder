@@ -39,3 +39,5 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm run verify
+
+# The paired base-branch diagnostic resolves dependencies ephemerally to test source integrity.
