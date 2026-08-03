@@ -5,9 +5,10 @@ on:
     types: [opened, reopened, synchronize]
     branches: [main]
     paths:
-      - browser-extension/package.json
-      - browser-extension/pnpm-lock.yaml
-      - browser-extension/bridge-server.ts
+      - browser-extension/**
+      - src/skills/**
+      - package.json
+      - pnpm-lock.yaml
       - .github/workflows/repair-companion-final-once.yml
 
 permissions:
@@ -24,7 +25,7 @@ jobs:
       github.event.pull_request.head.ref == 'fix/current-main-verification-regressions' &&
       github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 50
     steps:
       - name: Check out exact recovery branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -33,43 +34,64 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Restore lock and repair exact merge artifacts
+      - name: Restore coherent companion source and lock
+        shell: bash
         run: |
+          git show 684a62b8f14dc494de0c8820fd5e11e4689667b7:browser-extension/bridge-server.ts > browser-extension/bridge-server.ts
           git show 51683d900f5f8958b2845ada252f468bb3aa6f6d:browser-extension/pnpm-lock.yaml > browser-extension/pnpm-lock.yaml
           python - <<'PY'
           from pathlib import Path
 
           path = Path('browser-extension/bridge-server.ts')
-          text = path.read_text()
-          replacements = [
-              (
-                  "import { existsSync, readFileSync } from 'node:fs';",
-                  "import { existsSync } from 'node:fs';",
-              ),
-              (
-                  "  bridgeRequest?: typeof requestAuthenticatedBridge;\n",
-                  "",
-              ),
-              (
-                  "  const databasePath = path.resolve(\n"
-                  "    options.databasePath\n"
-                  "      ?? process.env.WORKSPACE_DB_PATH\n"
-                  "      ?? path.join(moduleDirectory, 'openbrowser-workspace.db'),\n"
-                  "  );\n"
-                  "  const bridgeUrl = bridgeEndpoint.origin;\n"
-                  "  const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;\n"
-                  "  const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });\n",
-                  "  const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });\n",
-              ),
-          ]
-          for old, new in replacements:
-              count = text.count(old)
+          source = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str) -> None:
+              global source
+              count = source.count(old)
               if count != 1:
-                  raise SystemExit(f'expected one merge artifact, found {count}: {old[:100]!r}')
-              text = text.replace(old, new, 1)
-          path.write_text(text)
+                  raise SystemExit(f'expected one companion source block, found {count}: {old[:120]!r}')
+              source = source.replace(old, new, 1)
+
+          replace_once(
+              "import {\n  BridgeConnectionError,\n  requestAuthenticatedBridge,\n} from './bridge-connection-transport.js';",
+              "import { requestAuthenticatedBridge } from './bridge-connection-transport.js';",
+          )
+          replace_once(
+              "  const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;\n"
+              "  const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });",
+              "  const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;\n"
+              "  const authenticatedBridgeRequest = options.bridgeRequest ?? requestAuthenticatedBridge;\n"
+              "  const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });",
+          )
+          replace_once(
+              "    let response: Response;\n"
+              "    try {\n"
+              "      response = await authenticatedBridgeRequest({\n"
+              "        endpoint: bridgeEndpoint,\n"
+              "        controlToken: bridgeToken,\n"
+              "        method,\n"
+              "        route,\n"
+              "        body,\n"
+              "      });\n"
+              "    } catch (error) {\n"
+              "      if (error instanceof BridgeConnectionError) {\n"
+              "        throw new WorkspaceHttpError(error.message, error.statusCode);\n"
+              "      }\n"
+              "      throw error;\n"
+              "    }",
+              "    const response = await authenticatedBridgeRequest({\n"
+              "      endpoint: bridgeEndpoint,\n"
+              "      controlToken: bridgeToken,\n"
+              "      method,\n"
+              "      route,\n"
+              "      body,\n"
+              "    });",
+          )
+
+          path.write_text(source, encoding='utf-8')
           PY
           rm .github/workflows/repair-companion-final-once.yml
+          rm -f scripts/repair_current_main_final.py
           git diff --check
 
       - name: Set up Node.js 22
@@ -82,16 +104,25 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Verify companion and root
+      - name: Activate pnpm
         run: |
           corepack enable
           corepack prepare pnpm@11.2.2 --activate
-          cd browser-extension
+
+      - name: Verify companion package
+        run: |
+          pnpm --dir browser-extension install --frozen-lockfile
+          pnpm --dir browser-extension run verify
+
+      - name: Verify root package
+        run: |
           pnpm install --frozen-lockfile
           pnpm run verify
-          cd ..
-          pnpm install --frozen-lockfile
-          pnpm run verify
+
+      - name: Verify workflow policy
+        run: |
+          python -m pip install --disable-pip-version-check --no-input PyYAML==6.0.2
+          python scripts/check_github_workflows.py .
 
       - name: Publish verified final recovery
         env:
@@ -101,8 +132,8 @@ jobs:
           old_head=$(git rev-parse HEAD)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add browser-extension/pnpm-lock.yaml browser-extension/bridge-server.ts .github/workflows/repair-companion-final-once.yml
-          git commit -m "fix(ci): restore verified companion runtime"
+          git add -A
+          git commit -m "fix(ci): restore verified companion and root runtime"
           auth_header=$(printf 'x-access-token:%s' "$GH_PUSH_TOKEN" | base64 -w0)
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth_header" push \
             --force-with-lease="refs/heads/${HEAD_REF}:${old_head}" \
