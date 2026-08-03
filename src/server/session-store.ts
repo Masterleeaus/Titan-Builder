@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { PromptDelivery } from '../shared/prompt-delivery.js';
@@ -73,6 +73,7 @@ const sessions = new Map<string, PromptSession>();
 let persistencePath: string | null = null;
 let isLoading = false;
 let isDirty = false;
+let isFlushing = false;
 
 export function createSession(input: CreateSessionInput): PromptSession {
   if (Buffer.byteLength(input.prompt, 'utf8') > MAX_PROMPT_SIZE) {
@@ -266,16 +267,19 @@ async function loadSessionsFromDisk(): Promise<void> {
 }
 
 async function saveSessionsToDisk(): Promise<void> {
-  if (!persistencePath || isLoading || !isDirty) return;
+  if (!persistencePath || isLoading || !isDirty || isFlushing) return;
+  isFlushing = true;
   isDirty = false;
   try {
     await mkdir(path.dirname(persistencePath), { recursive: true });
     const data = [...sessions.values()];
     const tempPath = `${persistencePath}.tmp`;
     await writeFile(tempPath, JSON.stringify(data, null, 2), 'utf8');
-    await writeFile(persistencePath, JSON.stringify(data, null, 2), 'utf8');
+    await rename(tempPath, persistencePath);
   } catch {
     isDirty = true;
+  } finally {
+    isFlushing = false;
   }
 }
 

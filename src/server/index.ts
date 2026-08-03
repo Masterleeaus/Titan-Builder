@@ -541,7 +541,11 @@ export async function startServer(options: ServerOptions = {}): Promise<FastifyI
   }
 
   await initializeSessionStore();
-  const flushInterval = setInterval(() => { flushSessionsToDisk().catch(() => {}); }, 30_000);
+  const flushInterval = setInterval(() => {
+    flushSessionsToDisk().catch((error) => {
+      logger.warn({ error }, 'Failed to flush sessions to disk');
+    });
+  }, 30_000);
 
   const app = await createBridgeServer(options);
   const port = options.port ?? PORT;
