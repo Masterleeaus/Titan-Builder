@@ -27,55 +27,71 @@
   "bin": {
     "openbrowser": "./dist/launcher.js"
   },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./server": {
+      "import": "./dist/server/index.js",
+      "types": "./dist/server/index.d.ts"
+    },
+    "./workflows": {
+      "import": "./dist/workflows/index.js",
+      "types": "./dist/workflows/index.d.ts"
+    }
+  },
   "files": [
     "dist"
   ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "dev:server": "tsx watch src/server/index.ts",
-    "build": "tsc",
+    "build": "tsc && node scripts/verify-binary.mjs",
     "start": "node dist/launcher.js",
     "service:start": "node dist/service/service-entry.js",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm run test:node && pnpm run test:skills && pnpm run test:integration",
+    "test": "pnpm run test:node && pnpm run test:tools && pnpm run test:skills && pnpm run test:integration",
     "test:watch": "vitest",
-    "test:node": "node --experimental-strip-types --test src/config/environment.test.ts src/config/bridge-security.test.ts src/client/response-timeout.test.ts src/operations/mkdir-normalize.test.ts src/operations/operation-order.test.ts src/operations/path-security-wiring.test.ts src/tools/registry.test.ts src/project/status.test.ts src/server/security.test.ts src/server/operation-approvals.test.ts src/server/session-store.test.ts src/verification/plan.test.ts src/projects/registry.test.ts src/projects/project-intelligence.integration.test.ts src/memory/project-memory.test.ts src/context/context-budget.test.ts src/security/project-path.test.ts src/workflows/browser-run-store.test.ts browser-extension/src/agent-workspace.test.mjs browser-extension/src/attachment-verification.test.mjs browser-extension/src/auto-continue-policy.test.mjs browser-extension/src/bridge-config.test.mjs browser-extension/src/browser-run-events.test.mjs browser-extension/src/chatgpt-page-tools.test.mjs browser-extension/src/file-exporter.test.mjs browser-extension/src/job-lifecycle.test.mjs browser-extension/src/job-payload.test.mjs browser-extension/src/prompt-library.test.mjs browser-extension/src/prompt-routing.test.mjs browser-extension/src/provider-routing-security.test.mjs browser-extension/src/project-intelligence.test.mjs browser-extension/src/sidepanel-integration.test.mjs browser-extension/src/skill-registry.test.mjs browser-extension/src/workspace-integration.test.mjs browser-extension/src/workspace-library.test.mjs browser-extension/src/workspace-skill-activation.test.mjs scripts/release-config.test.mjs",
-    "test:skills": "tsx --test src/skills/manifest.test.ts src/skills/registry.test.ts src/skills/dispatcher.test.ts",
+    "test:node": "node --experimental-strip-types --test src/config/environment.test.ts src/config/bridge-security.test.ts src/client/response-timeout.test.ts src/operations/mkdir-normalize.test.ts src/operations/operation-order.test.ts src/operations/path-security-wiring.test.ts src/tools/registry.test.ts src/project/status.test.ts src/server/security.test.ts src/server/bridge-identity.test.ts src/server/operation-approvals.test.ts src/server/session-store.test.ts src/verification/plan.test.ts src/projects/registry.test.ts src/projects/project-intelligence.integration.test.ts src/memory/project-memory.test.ts src/context/context-budget.test.ts src/security/project-path.test.ts src/workflows/browser-run-store.test.ts browser-extension/src/agent-workspace.test.mjs browser-extension/src/attachment-verification.test.mjs browser-extension/src/auto-continue-policy.test.mjs browser-extension/src/bridge-config.test.mjs browser-extension/src/browser-run-events.test.mjs browser-extension/src/chat-prompt-routing.test.mjs browser-extension/src/chat-prompt-integration.test.mjs browser-extension/src/chatgpt-page-tools.test.mjs browser-extension/src/file-exporter.test.mjs browser-extension/src/job-lifecycle.test.mjs browser-extension/src/job-payload.test.mjs browser-extension/src/prompt-library.test.mjs browser-extension/src/prompt-routing.test.mjs browser-extension/src/provider-routing-security.test.mjs browser-extension/src/project-intelligence.test.mjs browser-extension/src/sidepanel-integration.test.mjs browser-extension/src/skill-registry.test.mjs browser-extension/src/workspace-integration.test.mjs browser-extension/src/workspace-library.test.mjs browser-extension/src/workspace-skill-activation.test.mjs scripts/install-windows.test.mjs scripts/release-config.test.mjs scripts/prompt-catalog.test.mjs",
+    "test:skills": "tsx --test src/skills/entrypoint.test.ts src/skills/package-file.test.ts src/skills/dispatcher.test.ts src/skills/schema.test.ts src/skills/manifest.test.ts src/skills/registry.test.ts",
     "generate:skills": "node scripts/generate-skill-catalog.mjs",
     "check:skills": "node scripts/generate-skill-catalog.mjs --check",
+    "generate:prompts": "node scripts/generate-prompt-catalog.mjs",
+    "check:prompts": "node scripts/generate-prompt-catalog.mjs --check",
     "check:extension": "node scripts/check-extension.mjs",
-    "smoke:cli": "node dist/launcher.js --help && node dist/launcher.js service --help",
-    "verify:offline": "npm run test:node && npm run test:skills && npm run check:skills && npm run check:extension",
-    "verify": "pnpm run typecheck && pnpm run test && pnpm run build && pnpm run smoke:cli && pnpm run check:skills && pnpm run check:extension",
+    "smoke:cli": "node dist/launcher.js --help && node dist/launcher.js service --help && node dist/launcher.js doctor --help",
+    "verify:offline": "npm run test:node && npm run test:tools && npm run test:skills && npm run check:skills && npm run check:prompts && npm run check:extension",
+    "verify": "pnpm run typecheck && pnpm run test && pnpm run build && pnpm run smoke:cli && pnpm run check:skills && pnpm run check:prompts && pnpm run check:extension",
     "ci": "pnpm run verify",
-    "test:integration": "tsx --test src/server/workflow.integration.ts src/server/browser-workflow.integration.test.ts src/server/browser-workflow.e2e.test.ts src/operations/transaction.integration.test.ts src/service/service-manager.test.ts src/workflows/browser-run-recovery.test.ts src/workflows/agent-preparation.test.ts src/workflows/agent-application.test.ts"
+    "test:integration": "tsx --test src/server/bridge-identity.integration.test.ts src/server/body-limits.test.ts src/server/protected-branch.integration.test.ts src/context/context-path-loaders.test.ts src/diagnostics/install-doctor.test.ts src/diagnostics/doctor-cli.test.ts src/server/workflow.integration.ts src/server/browser-workflow.integration.test.ts src/server/browser-workflow.e2e.test.ts src/server/tools.integration.test.ts src/operations/transaction.integration.test.ts src/operations/rollback-metadata.integration.test.ts src/service/service-manager.test.ts src/workflows/browser-run-coordinator.test.ts src/workflows/browser-run-recovery.test.ts src/workflows/agent-preparation.test.ts src/workflows/agent-application.test.ts src/workflows/agent-protected-branch.integration.test.ts"
   },
   "engines": {
     "node": ">=22"
   },
   "packageManager": "pnpm@11.2.2",
   "dependencies": {
-    "@fastify/cors": "^9.0.1",
+    "@fastify/cors": "^10.1.0",
     "cfonts": "^3.3.1",
-    "chalk": "^5.6.2",
+    "chalk": "^6.0.0",
     "chokidar": "^3.6.0",
     "commander": "^12.1.0",
-    "diff": "^5.2.0",
+    "diff": "^9.0.0",
     "enquirer": "^2.4.1",
     "fast-glob": "^3.3.2",
-    "fastify": "^4.28.1",
-    "fs-extra": "^11.2.0",
+    "fastify": "^5.11.0",
+    "fs-extra": "^11.4.0",
     "gradient-string": "^3.0.0",
     "jsonc-parser": "^3.3.1",
-    "pino": "^9.5.0",
+    "pino": "^10.3.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/diff": "^5.2.3",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^22.10.0",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   }
 }
