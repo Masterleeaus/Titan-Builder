@@ -29,6 +29,7 @@ Workflow policy independently rejected three completed issue-controller workflow
 - Proved the regenerated lock accepts a frozen install before publishing it.
 - Removed the three completed write-enabled controller workflows.
 - Removed the one-shot repair controller from its own published result.
+- Activated a deterministic final recovery pass that must verify root and companion packages before publishing its self-cleaned result.
 
 ## Final verification
 
