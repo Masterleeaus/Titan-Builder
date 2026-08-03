@@ -214,7 +214,8 @@ export function createBrowserRunCoordinator(
           });
         }
         preparedRuns.delete(runId);
-        return await store.transition(runId, 'completed', { verification });
+        const finalStatus = verification?.status === 'failed' ? 'failed' : 'completed';
+        return await store.transition(runId, finalStatus, { verification });
       } catch (error) {
         internal.approval = undefined;
         if (error instanceof AgentApplicationError && error.code === 'STALE_PREVIEW') {
