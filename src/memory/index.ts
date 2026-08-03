@@ -1,4 +1,6 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import fs from 'fs-extra';
 
 export const OPENBROWSER_DIR = '.openbrowser';
@@ -47,17 +49,31 @@ export async function appendHistory(
 ): Promise<void> {
   await ensureMemory(projectRoot);
   const historyFile = memoryPath(projectRoot, MEMORY_FILES.history);
-  const history = (await fs.readJson(historyFile)) as HistoryEntry[];
+  let history: HistoryEntry[] = [];
+  try {
+    const content = await readFile(historyFile, 'utf8');
+    history = JSON.parse(content);
+    if (!Array.isArray(history)) history = [];
+  } catch {
+    history = [];
+  }
   history.push(entry);
-  await fs.writeJson(historyFile, history, { spaces: 2 });
+  const tempPath = `${historyFile}.${crypto.randomUUID()}.tmp`;
+  await writeFile(tempPath, `${JSON.stringify(history, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  await rename(tempPath, historyFile);
 }
 
 export async function listHistory(projectRoot: string): Promise<HistoryEntry[]> {
   await ensureMemory(projectRoot);
-  const history = (await fs.readJson(
-    memoryPath(projectRoot, MEMORY_FILES.history),
-  )) as HistoryEntry[];
-  return structuredClone(history);
+  const historyFile = memoryPath(projectRoot, MEMORY_FILES.history);
+  try {
+    const content = await readFile(historyFile, 'utf8');
+    const history = JSON.parse(content);
+    if (!Array.isArray(history)) return [];
+    return structuredClone(history);
+  } catch {
+    return [];
+  }
 }
 
 export async function saveContextSummary(
