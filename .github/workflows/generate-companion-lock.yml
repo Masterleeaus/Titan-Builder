@@ -1,0 +1,46 @@
+name: Generate companion lock artifact
+
+on:
+  pull_request:
+    branches:
+      - diagnostic/recovery-tree-base
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out candidate head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+      - name: Activate pnpm 11.2.2
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+      - name: Regenerate and verify companion lock
+        working-directory: browser-extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f pnpm-lock.yaml
+          pnpm install --lockfile-only --ignore-scripts
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm run typecheck
+      - name: Upload generated lock
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: companion-pnpm-lock
+          path: browser-extension/pnpm-lock.yaml
+          if-no-files-found: error
+          retention-days: 1
