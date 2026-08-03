@@ -1,7 +1,6 @@
 import crypto from 'node:crypto';
 import type { ProjectRecord } from '../projects/registry.js';
 import { createOperationApprovalStore } from '../server/operation-approvals.js';
-import { logger } from '../shared/index.js';
 import { requiresExplicitApproval } from '../tools/registry.js';
 import {
   AgentApplicationError,
@@ -29,18 +28,10 @@ import type {
   CreateBrowserRunInput,
 } from './browser-run-types.js';
 
-export interface BrowserRunBackgroundError {
-  runId: string;
-  phase: 'preparation_failure_recording';
-  preparationError: unknown;
-  recordingError: unknown;
-}
-
 export interface BrowserRunCoordinatorDependencies {
   store?: BrowserRunStore;
   resolveProject(projectId: string): Promise<ProjectRecord>;
   submitAndWait(request: AgentSubmissionRequest, projectRoot: string): Promise<string>;
-  onBackgroundError?(event: BrowserRunBackgroundError): void | Promise<void>;
 }
 
 export interface BrowserRunApprovalRequest {
@@ -325,40 +316,14 @@ export function createBrowserRunCoordinator(
     run: BrowserRunRecord,
   ): void {
     queueMicrotask(() => {
-      void prepareRun(runId, project, run).catch((preparationError) =>
-        handlePreparationFailure(runId, preparationError));
+      prepareRun(runId, project, run).catch(async (error) => {
+        try {
+          await failRun(store, runId, error);
+        } catch (failError) {
+          logger.error('failed to mark run as failed', { error: failError });
+        }
+      });
     });
-  }
-
-  async function handlePreparationFailure(
-    runId: string,
-    preparationError: unknown,
-  ): Promise<void> {
-    try {
-      await failRun(store, runId, preparationError);
-    } catch (recordingError) {
-      reportBackgroundError({
-        runId,
-        phase: 'preparation_failure_recording',
-        preparationError,
-        recordingError,
-      });
-    }
-  }
-
-  function reportBackgroundError(event: BrowserRunBackgroundError): void {
-    if (!dependencies.onBackgroundError) {
-      logBackgroundError(event);
-      return;
-    }
-
-    try {
-      void Promise.resolve(dependencies.onBackgroundError(event)).catch((reportingError) => {
-        logBackgroundReporterError(event, reportingError);
-      });
-    } catch (reportingError) {
-      logBackgroundReporterError(event, reportingError);
-    }
   }
 
   async function prepareRun(
@@ -505,43 +470,4 @@ async function failRun(
   await store.transition(runId, 'failed', {
     error: error instanceof Error ? error.message : String(error),
   });
-}
-
-function logBackgroundError(event: BrowserRunBackgroundError): void {
-  try {
-    logger.error(
-      {
-        err: event.recordingError,
-        runId: event.runId,
-        phase: event.phase,
-        preparationError: formatUnknownError(event.preparationError),
-      },
-      'Browser run preparation failure could not be recorded',
-    );
-  } catch {
-    // The terminal boundary must never create another rejected background task.
-  }
-}
-
-function logBackgroundReporterError(
-  event: BrowserRunBackgroundError,
-  reportingError: unknown,
-): void {
-  try {
-    logger.error(
-      {
-        err: reportingError,
-        runId: event.runId,
-        phase: event.phase,
-        recordingError: formatUnknownError(event.recordingError),
-      },
-      'Browser run background error reporter failed',
-    );
-  } catch {
-    // Logging is the final fallback and must remain non-throwing.
-  }
-}
-
-function formatUnknownError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
