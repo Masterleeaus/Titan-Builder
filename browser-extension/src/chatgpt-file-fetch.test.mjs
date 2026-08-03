@@ -4,9 +4,10 @@ import { fetchChatGPTFileExport } from './chatgpt-file-fetch.js';
 
 function streamResponse(chunks, init = {}) {
   let cancelled = false;
+  const queue = [...chunks];
   const body = new ReadableStream({
     pull(controller) {
-      const next = chunks.shift();
+      const next = queue.shift();
       if (next === undefined) {
         controller.close();
         return;
@@ -45,12 +46,15 @@ test('rejects an announced oversize before consuming the body', async () => {
   assert.equal(streamed.wasCancelled(), true);
 });
 
-test('streams and cancels a chunked response as soon as it crosses the limit', async () => {
+test('streams and cancels a chunked response as soon as actual bytes cross the limit', async () => {
   const streamed = streamResponse([
     new Uint8Array([1, 2, 3]),
     new Uint8Array([4, 5, 6]),
     new Uint8Array([7, 8, 9]),
-  ], { status: 200 });
+  ], {
+    status: 200,
+    headers: { 'content-length': '2' },
+  });
 
   await assert.rejects(
     fetchChatGPTFileExport('https://files.oaiusercontent.com/file.bin', {
@@ -63,105 +67,118 @@ test('streams and cancels a chunked response as soon as it crosses the limit', a
   assert.equal(streamed.wasCancelled(), true);
 });
 
-test('follows only allowed redirects and drops credentials on the CDN hop', async () => {
-  const calls = [];
-  const fileBytes = new TextEncoder().encode('hello');
+test('allows exactly the byte limit and ignores invalid or understated lengths', async () => {
+  const expected = new Uint8Array([1, 2, 3, 4, 5]);
+  for (const contentLength of ['1', '-1', 'invalid', '']) {
+    const response = new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(expected.subarray(0, 2));
+        controller.enqueue(expected.subarray(2));
+        controller.close();
+      },
+    }), {
+      status: 200,
+      headers: contentLength ? { 'content-length': contentLength } : {},
+    });
 
-  const result = await fetchChatGPTFileExport('https://chatgpt.com/backend-api/files/abc', {
-    fetchImplementation: async (input, init) => {
-      const url = String(input);
-      calls.push({ url, credentials: init.credentials, redirect: init.redirect });
-      if (url.startsWith('https://chatgpt.com/')) {
-        return new Response(null, {
-          status: 302,
-          headers: { location: 'https://files.oaiusercontent.com/file.txt' },
-        });
-      }
-      return new Response(new ReadableStream({
-        start(controller) {
-          controller.enqueue(fileBytes);
-          controller.close();
-        },
-      }), {
-        status: 200,
-        headers: {
-          'content-type': 'text/plain',
-          'content-disposition': 'attachment; filename="result.txt"',
-        },
-      });
-    },
+    const result = await fetchChatGPTFileExport('https://files.oaiusercontent.com/data.bin', {
+      maxBytes: 5,
+      fetchImplementation: async () => response,
+    });
+
+    assert.equal(result.size, 5);
+    assert.deepEqual(Uint8Array.from(Buffer.from(result.base64, 'base64')), expected);
+  }
+});
+
+test('uses credentials only for direct first-party ChatGPT requests and disables redirects', async () => {
+  const calls = [];
+  const fetchImplementation = async (input, init) => {
+    calls.push({
+      url: String(input),
+      credentials: init.credentials,
+      redirect: init.redirect,
+    });
+    return new Response(new Uint8Array([1]), { status: 200 });
+  };
+
+  await fetchChatGPTFileExport('https://chatgpt.com/backend-api/files/abc', {
+    fetchImplementation,
+  });
+  await fetchChatGPTFileExport('https://files.oaiusercontent.com/file.bin', {
+    fetchImplementation,
   });
 
   assert.deepEqual(calls, [
     {
       url: 'https://chatgpt.com/backend-api/files/abc',
       credentials: 'include',
-      redirect: 'manual',
+      redirect: 'error',
     },
     {
-      url: 'https://files.oaiusercontent.com/file.txt',
+      url: 'https://files.oaiusercontent.com/file.bin',
       credentials: 'omit',
-      redirect: 'manual',
+      redirect: 'error',
     },
   ]);
-  assert.equal(result.base64, 'aGVsbG8=');
-  assert.equal(result.filename, 'result.txt');
-  assert.equal(result.type, 'text/plain');
-  assert.equal(result.size, 5);
 });
 
-test('rejects a redirect outside the ChatGPT file allowlist before contacting it', async () => {
+test('rejects every redirect response without contacting a second host', async () => {
   const calls = [];
-  const redirect = streamResponse([], {
+  const redirected = streamResponse([], {
     status: 302,
-    headers: { location: 'https://attacker.example/steal' },
+    headers: { location: 'https://files.oaiusercontent.com/file.txt' },
   });
 
   await assert.rejects(
     fetchChatGPTFileExport('https://chatgpt.com/backend-api/files/abc', {
       fetchImplementation: async (input) => {
         calls.push(String(input));
-        return redirect.response;
+        return redirected.response;
       },
     }),
-    /outside the allowed ChatGPT file hosts/i,
+    /redirects are not permitted/i,
   );
 
   assert.deepEqual(calls, ['https://chatgpt.com/backend-api/files/abc']);
-  assert.equal(redirect.wasCancelled(), true);
+  assert.equal(redirected.wasCancelled(), true);
 });
 
-test('rejects redirect loops and excessive redirect chains', async () => {
-  let loopCalls = 0;
-  await assert.rejects(
-    fetchChatGPTFileExport('https://chatgpt.com/file', {
-      fetchImplementation: async () => {
-        loopCalls += 1;
-        return new Response(null, {
-          status: 302,
-          headers: { location: 'https://chatgpt.com/file' },
-        });
-      },
-    }),
-    /redirect loop/i,
-  );
-  assert.equal(loopCalls, 1);
+test('rejects outside, credentialed, and malformed URLs before network access', async () => {
+  let calls = 0;
+  const fetchImplementation = async () => {
+    calls += 1;
+    return new Response('unexpected', { status: 200 });
+  };
 
-  let chainCalls = 0;
+  for (const url of [
+    'https://attacker.example/file.bin',
+    'http://files.oaiusercontent.com/file.bin',
+    'https://user:pass@chatgpt.com/file.bin',
+    'not a url',
+  ]) {
+    await assert.rejects(
+      fetchChatGPTFileExport(url, { fetchImplementation }),
+      /outside the allowed|invalid/i,
+    );
+  }
+
+  assert.equal(calls, 0);
+});
+
+test('rejects a final response URL that differs from the approved direct request', async () => {
+  const response = new Response(new Uint8Array([1]), { status: 200 });
+  Object.defineProperty(response, 'url', {
+    configurable: true,
+    value: 'https://files.oaiusercontent.com/replaced.bin',
+  });
+
   await assert.rejects(
-    fetchChatGPTFileExport('https://chatgpt.com/start', {
-      maxRedirects: 1,
-      fetchImplementation: async () => {
-        chainCalls += 1;
-        return new Response(null, {
-          status: 302,
-          headers: { location: `https://chatgpt.com/step-${chainCalls}` },
-        });
-      },
+    fetchChatGPTFileExport('https://chatgpt.com/backend-api/files/abc', {
+      fetchImplementation: async () => response,
     }),
-    /too many redirects/i,
+    /changed URL without an approved direct request/i,
   );
-  assert.equal(chainCalls, 2);
 });
 
 test('encodes binary data incrementally without corrupting chunk boundaries', async () => {
@@ -179,8 +196,18 @@ test('encodes binary data incrementally without corrupting chunk boundaries', as
     fetchImplementation: async () => response,
   });
 
-  assert.deepEqual(
-    Uint8Array.from(Buffer.from(result.base64, 'base64')),
-    expected,
+  assert.deepEqual(Uint8Array.from(Buffer.from(result.base64, 'base64')), expected);
+  assert.equal(result.size, expected.byteLength);
+});
+
+test('aborts a stalled download at the configured deadline', async () => {
+  await assert.rejects(
+    fetchChatGPTFileExport('https://files.oaiusercontent.com/stalled.bin', {
+      timeoutMs: 20,
+      fetchImplementation: async (_input, init) => new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+      }),
+    }),
+    /timed out/i,
   );
 });
