@@ -44,13 +44,10 @@ import {
 } from '../workflows/browser-run-coordinator.js';
 import { createBrowserRunStore } from '../workflows/browser-run-store.js';
 import type { AgentSubmissionRequest } from '../workflows/agent-preparation.js';
-import { createBridgeIdentityProof } from './bridge-identity.js';
 import {
-  bridgeBodyLimit,
-  createPayloadTooLargeResponse,
-  isPayloadTooLargeError,
-  SMALL_BODY_LIMIT_BYTES,
-} from './body-limits.js';
+  createBridgeIdentityResponse,
+  isValidBridgeIdentityChallenge,
+} from './bridge-identity.js';
 import { registerBrowserWorkflowRoutes } from './browser-workflow-routes.js';
 import {
   createOperationApprovalStore,
@@ -116,12 +113,9 @@ export interface ServerOptions {
 }
 
 export async function createBridgeServer(options: ServerOptions = {}): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false, bodyLimit: SMALL_BODY_LIMIT_BYTES });
-  app.setErrorHandler((error, request, reply) => {
-    if (isPayloadTooLargeError(error)) {
-      return reply.code(413).send(createPayloadTooLargeResponse(request));
-    }
-    return reply.send(error);
+  const app = Fastify({
+    logger: false,
+    bodyLimit: 4_194_304,
   });
   const projectRoot = await canonicalizeProjectRoot(options.projectRoot ?? process.cwd());
   const protectedBranches = normalizeProtectedBranches(
@@ -313,7 +307,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
 
   app.get('/summary', async () => ({ context: await generateContext(projectRoot) }));
 
-  app.post('/operations/preview', bridgeBodyLimit('/operations/preview'), async (request) => {
+  app.post('/operations/preview', bridgeBodyLimit('/operations/preview'), async (request, reply) => {
     const operations = validateOperations((request.body as { operations?: unknown }).operations);
     const identityBeforePlan = await captureRepositoryIdentity(projectRoot);
     const plans = await planOperations(operations, identityBeforePlan.projectRoot);
@@ -563,7 +557,8 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
     return { accepted: true };
   });
 
-  app.post('/browser/response', bridgeBodyLimit('/browser/response'), async (request) => {
+  app.post('/browser/response', async (request) => {
+    const MAX_RESPONSE_BYTES = 16 * 1024 * 1024; // 16 MiB
     const body = request.body as {
       sessionId?: string;
       claimToken?: string;
