@@ -73,6 +73,11 @@ def repair_operations() -> None:
 def repair_project_path() -> None:
     replace_once(
         'src/security/project-path.ts',
+        "  'cvs',\n]);",
+        "  'cvs',\n  '.openbrowser',\n]);",
+    )
+    replace_once(
+        'src/security/project-path.ts',
         '  assertNotReservedVcsPath(targetPath);',
         '  assertNoReservedVcsMetadata(targetPath);',
     )
@@ -101,7 +106,11 @@ def repair_server() -> None:
         raise SystemExit('src/server/session-store.ts: persistence block already exists unexpectedly')
     persistence = """async function persistSessions(): Promise<void> {
   if (!persistenceStore) return;
-  await persistenceStore.saveSessions(Array.from(sessions.values()));
+  const retained = persistenceStore.pruneByPolicy(Array.from(sessions.values()));
+  if (!persistenceStore.validateTotalSize(retained)) {
+    throw new Error('Session store exceeds maximum total size');
+  }
+  await persistenceStore.saveSessions(retained);
 }
 
 export async function initializeSessionStore(
@@ -121,7 +130,7 @@ export async function initializeSessionStore(
   sessions.clear();
   for (const session of retained) sessions.set(session.id, session);
   await persistSessions();
-  return { recovered: persisted.length };
+  return { recovered: retained.length };
 }
 
 export function setPersistenceStore(store: PersistentSessionStore | undefined): void {
