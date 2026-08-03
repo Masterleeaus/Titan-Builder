@@ -24,3 +24,24 @@ export {
   loadSkillRegistry,
   type SkillRegistry,
 } from './registry.js';
+export {
+  createExecutableSkillHandlerRegistry,
+  type ExecutableSkillHandler,
+  type ExecutableSkillHandlerRegistry,
+} from './handlers.js';
+export {
+  SkillDispatchError,
+  createExecutableSkillDispatcher,
+  type ExecutableSkillDispatchRequest,
+  type ExecutableSkillDispatchResult,
+  type ExecutableSkillDispatcher,
+  type ExecutableSkillDispatcherOptions,
+  type SkillCapability,
+  type SkillDispatchErrorCode,
+  type SkillRuntimeTarget,
+} from './dispatcher.js';
+export {
+  validateObjectSchema,
+  type ObjectSchemaIssue,
+  type ObjectSchemaValidationResult,
+} from './schema-validation.js';

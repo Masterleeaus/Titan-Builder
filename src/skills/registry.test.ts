@@ -167,3 +167,24 @@ test('accepts valid executable entrypoint modules', async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('loads the canonical repository skill library and resolves all built-in aliases', async () => {
+  const libraryRoot = path.resolve('browser-extension/skill-library/packages');
+  const registry = await loadSkillRegistry(libraryRoot);
+
+  assert.deepEqual(registry.list().map((skill) => skill.manifest.id), [
+    'titan.guidance.architecture-review',
+    'titan.guidance.browser-performance',
+    'titan.guidance.extension-security',
+    'titan.guidance.git-discipline',
+    'titan.guidance.systematic-debugging',
+    'titan.guidance.test-driven-development',
+    'titan.security.project-path-containment',
+  ]);
+  assert.equal(registry.canonicalId('debugging'), 'titan.guidance.systematic-debugging');
+  assert.equal(registry.canonicalId('testing'), 'titan.guidance.test-driven-development');
+  assert.equal(registry.canonicalId('security'), 'titan.guidance.extension-security');
+  assert.equal(registry.canonicalId('architecture'), 'titan.guidance.architecture-review');
+  assert.equal(registry.canonicalId('git'), 'titan.guidance.git-discipline');
+  assert.equal(registry.canonicalId('performance'), 'titan.guidance.browser-performance');
+});
