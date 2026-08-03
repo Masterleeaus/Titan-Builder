@@ -105,17 +105,17 @@ jobs:
               file_path.write_text(text.replace(old, new, 1))
 
           lock_path = Path('pnpm-lock.yaml')
-          lock_text = lock_path.read_text()
-          braces_block = """  braces@3.0.3:
-            resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
-            engines: {node: '>=8'}
-
-          """
-          if lock_text.count(braces_block) != 2:
-              raise SystemExit(f"Expected two duplicated braces lockfile blocks, found {lock_text.count(braces_block)}")
-          first = lock_text.find(braces_block)
-          second = lock_text.find(braces_block, first + len(braces_block))
-          lock_path.write_text(lock_text[:second] + lock_text[second + len(braces_block):])
+          lock_lines = lock_path.read_text().splitlines(keepends=True)
+          key = '  braces@3.0.3:\n'
+          indices = [index for index, line in enumerate(lock_lines) if line == key]
+          if len(indices) != 2:
+              raise SystemExit(f"Expected exactly two braces lockfile entries, found {len(indices)}")
+          second = indices[1]
+          end = second + 1
+          while end < len(lock_lines) and (lock_lines[end].startswith('    ') or not lock_lines[end].strip()):
+              end += 1
+          del lock_lines[second:end]
+          lock_path.write_text(''.join(lock_lines))
 
           replace_once(
               'src/server/browser-workflow-routes.ts',
