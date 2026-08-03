@@ -3,9 +3,10 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { existsSync, readFileSync } from 'node:fs';
+import os from 'node:os';
 import Database from 'better-sqlite3';
 import chokidar from 'chokidar';
-import { config } from 'dotenv';
 import fg from 'fast-glob';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -17,7 +18,53 @@ import {
 } from './bridge-connection-transport.js';
 import { parseTrustedBridgeEndpoint } from './bridge-trust.js';
 
-config();
+export function loadCompanionEnvironment(options: { homeDir?: string; packageRoot?: string } = {}): string | undefined {
+  const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+  const packageRoot = options.packageRoot ?? path.resolve(moduleDirectory, '..');
+  const homeDir = options.homeDir ?? os.homedir();
+
+  const candidates = [
+    process.env.OPENBROWSER_CONFIG,
+    path.join(homeDir, '.openbrowser', '.env'),
+    path.join(packageRoot, '.env'),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  const configPath = candidates.find((candidate) => existsSync(candidate));
+  if (!configPath) {
+    return undefined;
+  }
+
+  // Parse and load environment variables
+  const content = readFileSync(configPath, 'utf8');
+  for (const line of content.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const normalized = trimmed.startsWith('export ') ? trimmed.slice(7).trimStart() : trimmed;
+    const separatorIndex = normalized.indexOf('=');
+    if (separatorIndex <= 0) continue;
+
+    const key = normalized.slice(0, separatorIndex).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)) continue;
+
+    // Only set if not already in environment
+    if (process.env[key] === undefined) {
+      let value = normalized.slice(separatorIndex + 1).trim();
+      // Remove quotes if present
+      if (value.length >= 2) {
+        const quote = value[0];
+        if ((quote === '"' || quote === "'") && value.at(-1) === quote) {
+          value = value.slice(1, -1);
+        }
+      }
+      process.env[key] = value;
+    }
+  }
+
+  return configPath;
+}
+
+const configPath = loadCompanionEnvironment();
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_HOST = '127.0.0.1';
@@ -311,6 +358,46 @@ async function detectPackageManager(root: string): Promise<string> {
     }
   }
   return 'unknown';
+}
+
+export async function resolveWorkspaceDatabasePath(
+  options: { databasePath?: string; homeDir?: string; moduleDir?: string } = {},
+): Promise<string> {
+  const explicit = options.databasePath ?? process.env.WORKSPACE_DB_PATH;
+  if (explicit) {
+    return path.resolve(explicit);
+  }
+
+  // Use user-scoped data directory as default
+  const homeDirPath = options.homeDir ?? os.homedir();
+  const moduleDirPath = options.moduleDir ?? moduleDirectory;
+  const userDataDir = path.join(homeDirPath, '.openbrowser', 'workspace');
+  const newDatabasePath = path.join(userDataDir, 'database.sqlite');
+
+  // Check for existing database in old location (module directory)
+  const oldDatabasePath = path.join(moduleDirPath, 'openbrowser-workspace.db');
+  if (existsSync(oldDatabasePath)) {
+    // Ensure the new directory exists
+    await fs.mkdir(userDataDir, { recursive: true, mode: 0o700 });
+
+    // Migrate the old database to the new location
+    const migrationPath = path.join(userDataDir, 'database.sqlite');
+    if (!existsSync(migrationPath)) {
+      try {
+        await fs.copyFile(oldDatabasePath, migrationPath);
+        console.log(`Migrated workspace database from ${oldDatabasePath} to ${migrationPath}`);
+      } catch (error) {
+        console.warn(
+          `Failed to migrate workspace database: ${error instanceof Error ? error.message : error}`,
+        );
+      }
+    }
+  }
+
+  // Ensure directory exists and has proper permissions
+  await fs.mkdir(userDataDir, { recursive: true, mode: 0o700 });
+
+  return newDatabasePath;
 }
 
 function initializeDatabase(databasePath: string): SqliteDatabase {
@@ -720,14 +807,9 @@ export async function createWorkspaceServer(
   );
   const bridgeUrl = bridgeEndpoint.origin;
   const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;
-  const authenticatedBridgeRequest = options.bridgeRequest ?? requestAuthenticatedBridge;
-  const databasePath = path.resolve(
-    options.databasePath
-      ?? process.env.WORKSPACE_DB_PATH
-      ?? path.join(moduleDirectory, 'openbrowser-workspace.db'),
-  );
+  const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });
 
-  await fs.mkdir(path.dirname(databasePath), { recursive: true });
+  await fs.mkdir(path.dirname(databasePath), { recursive: true, mode: 0o700 });
   const database = initializeDatabase(databasePath);
   await applyDatabaseSchema(database, databasePath);
 
@@ -1068,6 +1150,9 @@ export async function startWorkspaceServer(options: WorkspaceServerOptions = {})
   const host = options.host ?? process.env.WORKSPACE_HOST ?? DEFAULT_HOST;
   const port = options.port ?? Number(process.env.WORKSPACE_PORT ?? DEFAULT_PORT);
   await app.listen({ host, port });
+  if (configPath) {
+    console.log(`Loaded configuration from: ${configPath}`);
+  }
   console.log(`OpenBrowser Workspace companion listening on http://${host}:${port}`);
 }
 

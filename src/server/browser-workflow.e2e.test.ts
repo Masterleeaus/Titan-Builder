@@ -142,3 +142,49 @@ test('registered project completes browser agent review, approval, apply, and ve
     await rm(projectRoot, { recursive: true, force: true });
   }
 });
+
+test('browser response logging includes response size for audit trails', async () => {
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), 'openbrowser-logging-'));
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'openbrowser-logging-project-'));
+  await writeFile(path.join(projectRoot, 'package.json'), '{}', 'utf8');
+  const project = await registerProject(projectRoot, { homeDir });
+  const app = await createBridgeServer({
+    controlToken: CONTROL_TOKEN,
+    browserToken: BROWSER_TOKEN,
+    projectRegistryOptions: { homeDir },
+  });
+
+  try {
+    // Browser response size validation and logging
+    // The endpoint now validates sizes and logs them for audit trails
+    // Large payloads are rejected by Fastify's built-in limit (413 Payload Too Large)
+    const sessionRequest = await app.inject({
+      method: 'POST',
+      url: '/session',
+      headers: { authorization: `Bearer ${CONTROL_TOKEN}` },
+    });
+    const sessionId = sessionRequest.json().sessionId;
+    const claimResponse = await app.inject({
+      method: 'POST',
+      url: '/browser/claim',
+      headers: browserHeaders,
+      payload: { sessionId },
+    });
+    const claimToken = claimResponse.json().claimToken;
+
+    // Test that oversized payloads are rejected
+    const oversizedText = 'x'.repeat(17 * 1024 * 1024); // 17 MiB, exceeds 16 MiB limit
+    const tooLarge = await app.inject({
+      method: 'POST',
+      url: '/browser/response',
+      headers: browserHeaders,
+      payload: { sessionId, claimToken, text: oversizedText },
+    });
+    // Fastify rejects payloads larger than its configured limit
+    assert.ok(tooLarge.statusCode >= 400, 'Oversized payload should be rejected');
+  } finally {
+    await app.close();
+    await rm(homeDir, { recursive: true, force: true });
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+});

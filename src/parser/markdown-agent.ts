@@ -613,14 +613,41 @@ function findOperationsJsonBlock(
 }
 
 function extractBalancedJson(text: string, start: number): string | null {
+  if (start >= text.length || text[start] !== '{') {
+    return null;
+  }
+
   let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+
   for (let index = start; index < text.length; index += 1) {
     const char = text[index];
-    if (char === '{') {
+
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escapeNext = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (char === '{' || char === '[') {
       depth += 1;
-    } else if (char === '}') {
+    } else if (char === '}' || char === ']') {
       depth -= 1;
-      if (depth === 0) {
+      if (depth === 0 && char === '}') {
         return text.slice(start, index + 1);
       }
     }
@@ -696,20 +723,19 @@ export function mergeMarkdownFencesIntoOperations<
     return operations;
   }
 
+  if (unlabeled.length > 1) {
+    const unresolvedPaths = pendingMd.map((p) => p.operation.path).join(', ');
+    throw new Error(`Multiple unlabeled Markdown fences without explicit file paths; cannot disambiguate which content maps to which file. Unresolved paths: ${unresolvedPaths}`);
+  }
+
+  if (pendingMd.length > 1) {
+    const unresolvedPaths = pendingMd.map((p) => p.operation.path).join(', ');
+    throw new Error(`One unlabeled Markdown fence but multiple file operations need content; cannot disambiguate. Use path-labelled fences (file:) for each file. Unresolved paths: ${unresolvedPaths}`);
+  }
+
   const result = [...operations];
-  const sortedFences = [...unlabeled].sort((a, b) => b.length - a.length);
-
-  if (sortedFences.length === 1) {
-    for (const { operation, index } of pendingMd) {
-      result[index] = { ...operation, content: sortedFences[0]! };
-    }
-    return result;
-  }
-
-  for (let i = 0; i < pendingMd.length && i < sortedFences.length; i += 1) {
-    const { operation, index } = pendingMd[i]!;
-    result[index] = { ...operation, content: sortedFences[i]! };
-  }
+  const { operation, index } = pendingMd[0]!;
+  result[index] = { ...operation, content: unlabeled[0]! };
 
   return result;
 }
@@ -738,20 +764,21 @@ export function mergeYamlFencesIntoOperations<
     return operations;
   }
 
+  if (unlabeled.length > 1) {
+    const unresolvedPaths = pendingYaml.map((p) => p.operation.path).join(', ');
+    throw new Error(`Multiple unlabeled YAML fences without explicit file paths; cannot disambiguate which content maps to which file. Unresolved paths: ${unresolvedPaths}`);
+  }
+
+  if (pendingYaml.length > 1) {
+    const unresolvedPaths = pendingYaml.map((p) => p.operation.path).join(', ');
+    throw new Error(`One unlabeled YAML fence but multiple file operations need content; cannot disambiguate. Use path-labelled fences (file:) for each file. Unresolved paths: ${unresolvedPaths}`);
+  }
+
   const result = [...operations];
-  const sortedFences = [...unlabeled].sort((a, b) => b.length - a.length);
+  const { operation, index } = pendingYaml[0]!;
+  result[index] = { ...operation, content: unlabeled[0]! };
 
-  if (sortedFences.length === 1) {
-    for (const { operation, index } of pendingYaml) {
-      result[index] = { ...operation, content: sortedFences[0]! };
-    }
-    return result;
-  }
-
-  for (let i = 0; i < pendingYaml.length && i < sortedFences.length; i += 1) {
-    const { operation, index } = pendingYaml[i]!;
-    result[index] = { ...operation, content: sortedFences[i]! };
-  }
+  return result;
 
   return result;
 }

@@ -41,7 +41,7 @@ export async function readBufferedPrompt(
     }
   }
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let buffer = '';
     let bracketedPaste = '';
     let inBracketedPaste = false;
@@ -69,7 +69,13 @@ export async function readBufferedPrompt(
 
     const cleanup = (): void => {
       stdin.removeListener('data', onData);
+      stdin.removeListener('error', onError);
       stdin.setRawMode(wasRaw);
+    };
+
+    const onError = (error: Error): void => {
+      cleanup();
+      reject(error);
     };
 
     const submit = (): void => {
@@ -230,6 +236,7 @@ export async function readBufferedPrompt(
     stdin.setRawMode(true);
     stdin.resume();
     stdin.on('data', onData);
+    stdin.on('error', onError);
     stdout.write(prompt);
     refreshLineCount();
   });

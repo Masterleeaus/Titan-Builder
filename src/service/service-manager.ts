@@ -18,6 +18,7 @@ export interface ServiceMetadata {
   entryPath: string;
   startedAt: string;
   logPath: string;
+  nonce: string;
 }
 
 export interface ServiceStatus {
@@ -105,7 +106,7 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
   const now = options.now ?? (() => new Date());
 
   const ensureDirectories = async (): Promise<void> => {
-    await mkdir(paths.logsDir, { recursive: true });
+    await mkdir(paths.logsDir, { recursive: true, mode: 0o700 });
   };
 
   const readMetadata = async (): Promise<ServiceMetadata | null> => {
@@ -119,7 +120,14 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
         typeof parsed.startedAt === 'string' &&
         typeof parsed.logPath === 'string'
       ) {
-        return parsed as ServiceMetadata;
+        return {
+          version: 1,
+          pid: parsed.pid as number,
+          entryPath: parsed.entryPath,
+          startedAt: parsed.startedAt,
+          logPath: parsed.logPath,
+          nonce: parsed.nonce ?? 'legacy',
+        };
       }
       return null;
     } catch (error) {
@@ -140,7 +148,7 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
   const writeMetadata = async (metadata: ServiceMetadata): Promise<void> => {
     await ensureDirectories();
     const tempPath = `${paths.metadataPath}.${process.pid}.tmp`;
-    await writeFile(tempPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
+    await writeFile(tempPath, `${JSON.stringify(metadata, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     await rename(tempPath, paths.metadataPath);
   };
 
@@ -200,12 +208,20 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
         await removeMetadata();
         return { status: 'stopped', logPath: paths.logPath, staleMetadata: true };
       }
+      const healthy = await probeBridge();
+      if (healthy && metadata.entryPath !== entryPath) {
+        return {
+          status: 'stopped',
+          logPath: paths.logPath,
+          staleMetadata: true,
+        };
+      }
       return {
         status: 'running',
         pid: metadata.pid,
         startedAt: metadata.startedAt,
         logPath: metadata.logPath,
-        healthy: await probeBridge(),
+        healthy,
       };
     },
 
@@ -219,7 +235,7 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
       }
       await ensureDirectories();
       await rotateLogIfNeeded();
-      mkdirSync(paths.logsDir, { recursive: true });
+      mkdirSync(paths.logsDir, { recursive: true, mode: 0o700 });
       const logFd = openSync(paths.logPath, 'a');
       let child: { pid?: number; unref(): void };
       try {
@@ -241,6 +257,7 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
         entryPath,
         startedAt: now().toISOString(),
         logPath: paths.logPath,
+        nonce: crypto.randomUUID(),
       };
       await writeMetadata(metadata);
       if (!(await waitForProbe(true, startupTimeoutMs))) {

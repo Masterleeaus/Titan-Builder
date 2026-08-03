@@ -170,14 +170,14 @@ async function writeRegistry(
   options: ProjectRegistryOptions,
 ): Promise<void> {
   const filePath = getProjectRegistryPath(options);
-  await mkdir(path.dirname(filePath), { recursive: true });
+  await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   const normalized: ProjectRegistryDocument = {
     version: 1,
     activeProjectId: registry.activeProjectId,
     projects: [...registry.projects].sort((left, right) => left.name.localeCompare(right.name)),
   };
   const tempPath = `${filePath}.${process.pid}.tmp`;
-  await writeFile(tempPath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
+  await writeFile(tempPath, `${JSON.stringify(normalized, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   await rename(tempPath, filePath);
 }
 
