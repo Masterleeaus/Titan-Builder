@@ -114,8 +114,9 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
       const parsed = JSON.parse(await readFile(paths.metadataPath, 'utf8')) as Partial<ServiceMetadata>;
       if (
         parsed.version === 1 &&
+        typeof parsed.pid === 'number' &&
         Number.isInteger(parsed.pid) &&
-        Number(parsed.pid) > 0 &&
+        parsed.pid > 0 &&
         typeof parsed.entryPath === 'string' &&
         typeof parsed.startedAt === 'string' &&
         typeof parsed.logPath === 'string' &&
