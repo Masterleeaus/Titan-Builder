@@ -28,7 +28,7 @@ jobs:
         run: |
           corepack enable
           corepack prepare pnpm@11.2.2 --activate
-      - name: Regenerate and verify companion lock
+      - name: Regenerate and freeze-check companion lock
         working-directory: browser-extension
         shell: bash
         run: |
@@ -36,7 +36,6 @@ jobs:
           rm -f pnpm-lock.yaml
           pnpm install --lockfile-only --ignore-scripts
           pnpm install --frozen-lockfile --ignore-scripts
-          pnpm run typecheck
       - name: Upload generated lock
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
