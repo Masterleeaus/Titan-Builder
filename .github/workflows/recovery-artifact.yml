@@ -1,0 +1,177 @@
+name: Build verified recovery artifact
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [main]
+    paths:
+      - src/**
+      - browser-extension/**
+      - package.json
+      - pnpm-lock.yaml
+      - scripts/repair_current_main_final.py
+      - .github/workflows/recovery-artifact.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recovery-artifact-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build-verified-patch:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/current-main-recovery-gpt56'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - name: Check out exact recovery branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/current-main-recovery-gpt56
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Apply deterministic root recovery
+        run: python scripts/repair_current_main_final.py
+
+      - name: Restore verified companion lock and repair exact merge artifacts
+        shell: bash
+        run: |
+          git show 51683d900f5f8958b2845ada252f468bb3aa6f6d:browser-extension/pnpm-lock.yaml > browser-extension/pnpm-lock.yaml
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('browser-extension/bridge-server.ts')
+          text = path.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  "import { existsSync, readFileSync } from 'node:fs';",
+                  "import { existsSync } from 'node:fs';",
+              ),
+              (
+                  "export { parseLoopbackBridgeUrl } from './bridge-endpoint-policy.js';\n",
+                  "export { parseLoopbackBridgeUrl } from './bridge-endpoint-policy.js';\n"
+                  "export { loadWorkspaceEnvironment as loadCompanionEnvironment } from './environment.js';\n",
+              ),
+              (
+                  "const workspaceConfigPath = loadWorkspaceEnvironment();",
+                  "loadWorkspaceEnvironment();",
+              ),
+              (
+                  "  bridgeRequest?: typeof requestAuthenticatedBridge;\n",
+                  "",
+              ),
+              (
+                  "  const explicit = options.databasePath ?? process.env.WORKSPACE_DB_PATH;\n",
+                  "  const configuredPath = process.env.WORKSPACE_DB_PATH?.trim();\n"
+                  "  const explicit = options.databasePath ?? (\n"
+                  "    configuredPath && !['undefined', 'null'].includes(configuredPath.toLowerCase())\n"
+                  "      ? configuredPath\n"
+                  "      : undefined\n"
+                  "  );\n",
+              ),
+              (
+                  "  const databasePath = path.resolve(\n"
+                  "    options.databasePath\n"
+                  "      ?? process.env.WORKSPACE_DB_PATH\n"
+                  "      ?? path.join(moduleDirectory, 'openbrowser-workspace.db'),\n"
+                  "  );\n"
+                  "  const bridgeUrl = bridgeEndpoint.origin;\n"
+                  "  const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;\n"
+                  "  const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });\n",
+                  "  const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });\n",
+              ),
+              (
+                  "    if (error instanceof WorkspaceHttpError) {\n"
+                  "      return reply.code(error.statusCode).send({ error: error.message });\n"
+                  "    }\n",
+                  "    if (error instanceof WorkspaceHttpError) {\n"
+                  "      return reply.code(error.statusCode).send({\n"
+                  "        error: error.statusCode >= 500 ? 'Workspace operation failed' : error.message,\n"
+                  "        detail: error.statusCode >= 500 ? error.message : undefined,\n"
+                  "      });\n"
+                  "    }\n",
+              ),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one merge artifact, found {count}: {old[:120]!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          git diff --check
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
+      - name: Activate pnpm 11.2.2
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+          pnpm --version
+
+      - name: Verify root package
+        shell: bash
+        run: |
+          pnpm install --frozen-lockfile
+          set +e
+          pnpm run verify > /tmp/root-verify.log 2>&1
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- concise failure markers ---'
+            grep -nE 'not ok|FAIL|ERR_|AssertionError|error:|# fail|ELIFECYCLE|Process completed' /tmp/root-verify.log | tail -n 240 || true
+            echo '--- final root verification output ---'
+            tail -n 360 /tmp/root-verify.log
+            exit "$status"
+          fi
+          cat /tmp/root-verify.log
+
+      - name: Verify companion package
+        shell: bash
+        run: |
+          pnpm --dir browser-extension install --frozen-lockfile
+          set +e
+          pnpm --dir browser-extension run verify > /tmp/companion-verify.log 2>&1
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- concise companion failure markers ---'
+            grep -nE 'not ok|FAIL|ERR_|AssertionError|error:|# fail|ELIFECYCLE|Process completed' /tmp/companion-verify.log | tail -n 240 || true
+            echo '--- final companion verification output ---'
+            tail -n 360 /tmp/companion-verify.log
+            exit "$status"
+          fi
+          cat /tmp/companion-verify.log
+
+      - name: Build production-only recovery patch
+        shell: bash
+        run: |
+          rm -f scripts/repair_current_main_final.py
+          rm -f docs/current-main-recovery-publish.md
+          rm -f .github/workflows/recovery-artifact.yml
+          git diff --check
+          git diff --binary --full-index > recovery.patch
+          test -s recovery.patch
+          sha256sum recovery.patch > recovery.patch.sha256
+
+      - name: Upload verified recovery patch
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: verified-current-main-recovery
+          path: |
+            recovery.patch
+            recovery.patch.sha256
+          if-no-files-found: error
+          retention-days: 1

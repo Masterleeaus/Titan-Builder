@@ -1,18 +1,18 @@
-import { exec, spawn, type SpawnOptions } from 'node:child_process';
+import { exec } from 'node:child_process';
 import crypto from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
-import { lstat, open, realpath, rename as renamePath, unlink } from 'node:fs/promises';
+import { lstat as lstatPath, open, rename as renamePath, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { createPatch } from 'diff';
 import fs from 'fs-extra';
 import type { FileOperation } from '../core/index.js';
 import { normalizeMultilineText } from '../parser/markdown-agent.js';
-import { appendHistory } from '../memory/index.js';
-import { canonicalizeProjectRoot, isPathInsideProject, isReservedPath, resolveProjectPath } from '../security/project-path.js';
+import type { HistoryEntry } from '../memory/index.js';
+import { canonicalizeProjectRoot, resolveProjectPath } from '../security/project-path.js';
 import { expandMkdirOperations, looksLikePowerShellCommand } from './mkdir-normalize.js';
 import { preserveOperationOrder } from './operation-order.js';
-import { terminateProcessTree } from './process-tree.js';
+import { runContainedProcess } from './process-runner.js';
 import {
   isUnsafeLegacyCommandEnabled,
   resolveToolInvocation,
@@ -23,11 +23,10 @@ import {
 
 const execAsync = promisify(exec);
 
-// File operation limits to prevent memory exhaustion and excessive diff generation
-const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
-const MAX_DIFF_SIZE_BYTES = 1 * 1024 * 1024; // 1 MB
+const MAX_FILE_READ_BYTES = 10 * 1024 * 1024;
+const MAX_DIFF_BYTES = 5 * 1024 * 1024;
 
-export type PathStateKind = 'missing' | 'file' | 'directory' | 'binary' | 'oversized';
+export type PathStateKind = 'missing' | 'file' | 'directory';
 
 export interface PathPrecondition {
   absolutePath: string;
@@ -55,7 +54,6 @@ interface PathSnapshot {
   hash: string;
   content?: string;
   mode?: number;
-  size?: number;
 }
 
 interface RollbackSnapshot extends PathSnapshot {
@@ -237,7 +235,7 @@ export async function executePlannedOperations(
       transaction.journal.error = `${message}; history write failed: ${formatUnknownError(historyError)}`;
       transaction.journal.updatedAt = new Date().toISOString();
       await writeTransactionJournal(transaction).catch((journalError) => {
-        logger.error({ journalError }, 'Failed to write transaction journal during error handling');
+        logger.error('Failed to write transaction journal during error handling', { journalError });
       });
     }
 
@@ -358,11 +356,6 @@ async function planFileOperation(
   affectedPaths: string[];
 }> {
   const relativePath = path.relative(projectRoot, absolutePath);
-
-  if (await isReservedPath(projectRoot, absolutePath)) {
-    throw new Error(`${operation.action} is not allowed on reserved metadata: ${relativePath}`);
-  }
-
   const before = await getVirtualSnapshot(virtualState, absolutePath);
   const preconditions = [toPrecondition(absolutePath, before)];
   const affectedPaths = [absolutePath];
@@ -379,14 +372,12 @@ async function planFileOperation(
       if (before.kind === 'directory') {
         throw new Error(`CREATE_FILE cannot replace directory ${relativePath}`);
       }
-      if (before.kind === 'binary') {
-        throw new Error(`CREATE_FILE cannot replace binary file ${relativePath}`);
-      }
       const after = normalizeMultilineText(operation.content ?? '');
       virtualState.set(absolutePath, createSnapshot('file', after));
       const diff = createPatch(relativePath, before.content ?? '', after, 'before', 'after');
+      validateDiffSize(diff, relativePath);
       return {
-        diff: truncateDiff(diff, MAX_DIFF_SIZE_BYTES),
+        diff,
         preconditions,
         affectedPaths,
       };
@@ -394,9 +385,6 @@ async function planFileOperation(
     case 'EDIT_FILE': {
       if (before.kind === 'directory') {
         throw new Error(`EDIT_FILE cannot edit directory ${relativePath}`);
-      }
-      if (before.kind === 'binary') {
-        throw new Error(`EDIT_FILE cannot edit binary file ${relativePath}`);
       }
       if (before.kind === 'missing' && !operation.content?.trim()) {
         throw new Error(
@@ -406,20 +394,22 @@ async function planFileOperation(
       const after = nextContent(operation, before.content ?? '');
       virtualState.set(absolutePath, createSnapshot('file', after));
       const diff = createPatch(relativePath, before.content ?? '', after, 'before', 'after');
+      validateDiffSize(diff, relativePath);
       return {
-        diff: truncateDiff(diff, MAX_DIFF_SIZE_BYTES),
+        diff,
         preconditions,
         affectedPaths,
       };
     }
     case 'DELETE_FILE': {
-      if (before.kind !== 'file' && before.kind !== 'binary') {
+      if (before.kind !== 'file') {
         throw new Error(`DELETE_FILE requires existing file ${relativePath}`);
       }
       virtualState.set(absolutePath, createSnapshot('missing'));
       const diff = createPatch(relativePath, before.content ?? '', '', 'before', 'after');
+      validateDiffSize(diff, relativePath);
       return {
-        diff: truncateDiff(diff, MAX_DIFF_SIZE_BYTES),
+        diff,
         preconditions,
         affectedPaths,
       };
@@ -432,11 +422,6 @@ async function planFileOperation(
         throw new Error('RENAME_FILE requires replace as destination path');
       }
       const destination = await resolveProjectPath(projectRoot, operation.replace, { expectedType: 'file' });
-
-      if (await isReservedPath(projectRoot, destination)) {
-        throw new Error(`RENAME_FILE destination is reserved metadata: ${path.relative(projectRoot, destination)}`);
-      }
-
       const destinationBefore = await getVirtualSnapshot(virtualState, destination);
       if (destinationBefore.kind !== 'missing') {
         throw new Error(`RENAME_FILE destination already exists: ${path.relative(projectRoot, destination)}`);
@@ -469,17 +454,11 @@ async function getVirtualSnapshot(
   return snapshot;
 }
 
-function createSnapshot(
-  kind: PathStateKind,
-  content?: string,
-  mode?: number,
-  size?: number,
-): PathSnapshot {
+function createSnapshot(kind: PathStateKind, content?: string, mode?: number): PathSnapshot {
   return {
     kind,
     content: kind === 'file' ? content ?? '' : undefined,
     mode,
-    size,
     hash: hashPathState(kind, content),
   };
 }
@@ -508,63 +487,12 @@ async function readPathSnapshot(absolutePath: string): Promise<PathSnapshot> {
     throw new Error(`Unsupported filesystem target: ${absolutePath}`);
   }
 
-  // Check file size before reading
-  if (stats.size > MAX_FILE_SIZE_BYTES) {
-    throw new Error(
-      `File exceeds maximum size for operation planning: ${absolutePath} ` +
-      `(${formatBytes(stats.size)} > ${formatBytes(MAX_FILE_SIZE_BYTES)})`,
-    );
+  if (stats.size > MAX_FILE_READ_BYTES) {
+    throw new Error(`File ${absolutePath} is too large (${stats.size} bytes, limit ${MAX_FILE_READ_BYTES} bytes)`);
   }
 
-  // Read the file
-  const buffer = await fs.readFile(absolutePath);
-
-  // Detect binary content by checking for null bytes
-  if (isBinaryContent(buffer)) {
-    return createSnapshot('binary', undefined, stats.mode, stats.size);
-  }
-
-  const content = buffer.toString('utf8');
-  return createSnapshot('file', content, stats.mode, stats.size);
-}
-
-function isBinaryContent(buffer: Buffer): boolean {
-  // Check for null bytes which indicate binary content
-  for (let i = 0; i < Math.min(buffer.length, 8192); i += 1) {
-    if (buffer[i] === 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function truncateDiff(diff: string, maxBytes: number): string {
-  const bytes = Buffer.byteLength(diff, 'utf8');
-  if (bytes <= maxBytes) {
-    return diff;
-  }
-
-  // Truncate and add indicator
-  let truncated = '';
-  let currentBytes = 0;
-  const lines = diff.split('\n');
-
-  for (const line of lines) {
-    const lineBytes = Buffer.byteLength(line + '\n', 'utf8');
-    if (currentBytes + lineBytes > maxBytes - 100) {
-      break;
-    }
-    truncated += line + '\n';
-    currentBytes += lineBytes;
-  }
-
-  return truncated + `\n... (diff truncated: ${formatBytes(bytes)} > ${formatBytes(maxBytes)})\n`;
+  const content = await fs.readFile(absolutePath, 'utf8');
+  return createSnapshot('file', content, stats.mode);
 }
 
 function hashPathState(kind: PathStateKind, content?: string): string {
@@ -690,26 +618,78 @@ async function rollbackTransaction(
   errorMessage: string,
 ): Promise<'rolled_back' | 'rollback_failed'> {
   try {
-    let projectRoot: string;
-    try {
-      projectRoot = await canonicalizeProjectRoot(transaction.journal.projectRoot);
-    } catch (error) {
-      throw new Error(`Project root validation failed during rollback: ${formatUnknownError(error)}`);
+    const validated = await validateRollbackTransaction(transaction);
+
+    transaction.journal.status = 'rolling_back';
+    transaction.journal.error = errorMessage;
+    transaction.journal.updatedAt = new Date().toISOString();
+    await writeTransactionJournal(transaction);
+
+    const targets = validated.snapshots
+      .filter(({ snapshot }) => snapshot.role === 'target')
+      .sort((left, right) => pathDepth(right.snapshot.relativePath) - pathDepth(left.snapshot.relativePath));
+
+    for (const entry of targets) {
+      const projectRoot = await assertRollbackProjectIdentity(transaction);
+      const absolutePath = await resolveRollbackTarget(projectRoot, entry.snapshot);
+
+      if (entry.snapshot.kind === 'missing') {
+        await fs.remove(absolutePath);
+        continue;
+      }
+
+      if (entry.snapshot.kind === 'directory') {
+        if (await fs.pathExists(absolutePath)) {
+          const current = await fs.lstat(absolutePath);
+          if (current.isSymbolicLink()) {
+            throw new Error(`Rollback path contains a symbolic link or junction: ${entry.snapshot.relativePath}`);
+          }
+          if (!current.isDirectory()) {
+            await fs.remove(absolutePath);
+          }
+        }
+        await resolveRollbackParent(projectRoot, entry.snapshot.relativePath);
+        await fs.ensureDir(absolutePath);
+        continue;
+      }
+
+      if (!entry.backupPath) {
+        throw new Error(`Missing rollback backup for ${entry.snapshot.relativePath}`);
+      }
+
+      const backupPath = await resolveRollbackBackupPath(
+        projectRoot,
+        validated.backupRoot,
+        entry.snapshot,
+      );
+      await fs.remove(absolutePath);
+      await resolveRollbackParent(projectRoot, entry.snapshot.relativePath);
+      await fs.copyFile(backupPath, absolutePath);
+      if (entry.snapshot.mode !== undefined) {
+        await fs.chmod(absolutePath, entry.snapshot.mode);
+      }
     }
 
-    const targets = transaction.snapshots
-      .filter((snapshot) => snapshot.role === 'target')
-      .sort((left, right) => pathDepth(right.absolutePath) - pathDepth(left.absolutePath));
+    const parents = validated.snapshots
+      .filter(({ snapshot }) => snapshot.role === 'parent')
+      .sort((left, right) => pathDepth(right.snapshot.relativePath) - pathDepth(left.snapshot.relativePath));
+    for (const entry of parents) {
+      const projectRoot = await assertRollbackProjectIdentity(transaction);
+      const absolutePath = await resolveRollbackTarget(projectRoot, entry.snapshot);
 
-    for (const snapshot of targets) {
-      await validateAndRollbackTarget(snapshot, projectRoot, transaction.backupRoot);
-    }
-
-    const parents = transaction.snapshots
-      .filter((snapshot) => snapshot.role === 'parent')
-      .sort((left, right) => pathDepth(right.absolutePath) - pathDepth(left.absolutePath));
-    for (const snapshot of parents) {
-      await validateAndRollbackParent(snapshot, projectRoot);
+      if (entry.snapshot.kind === 'missing') {
+        try {
+          await fs.rmdir(absolutePath);
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTEMPTY' && code !== 'EEXIST') {
+            throw error;
+          }
+        }
+      } else if (entry.snapshot.kind === 'directory') {
+        await resolveRollbackParent(projectRoot, entry.snapshot.relativePath);
+        await fs.ensureDir(absolutePath);
+      }
     }
 
     transaction.journal.status = 'rolled_back';
@@ -728,120 +708,200 @@ async function rollbackTransaction(
   }
 }
 
-async function validateAndRollbackTarget(
-  snapshot: RollbackSnapshot,
+async function validateRollbackTransaction(
+  transaction: PreparedTransaction,
+): Promise<ValidatedRollbackTransaction> {
+  const projectRoot = await assertRollbackProjectIdentity(transaction);
+  const backupRoot = await resolveRollbackBackupRoot(projectRoot, transaction.backupRoot);
+  const snapshots: ValidatedRollbackSnapshot[] = [];
+
+  for (const snapshot of transaction.snapshots) {
+    const absolutePath = await resolveRollbackTarget(projectRoot, snapshot);
+    const backupPath = snapshot.kind === 'file'
+      ? await resolveRollbackBackupPath(projectRoot, backupRoot, snapshot)
+      : undefined;
+    snapshots.push({ snapshot, absolutePath, backupPath });
+  }
+
+  return { projectRoot, backupRoot, snapshots };
+}
+
+async function assertRollbackProjectIdentity(
+  transaction: PreparedTransaction,
+): Promise<string> {
+  const projectRoot = await canonicalizeProjectRoot(transaction.journal.projectRoot);
+  if (projectRoot !== transaction.journal.projectRoot) {
+    throw new Error(
+      `Rollback project root changed from ${transaction.journal.projectRoot} to ${projectRoot}`,
+    );
+  }
+
+  const currentIdentity = await readFilesystemIdentity(projectRoot);
+  if (!sameFilesystemIdentity(currentIdentity, transaction.journal.projectRootIdentity)) {
+    throw new Error(`Rollback project root identity changed: ${projectRoot}`);
+  }
+
+  return projectRoot;
+}
+
+async function resolveRollbackBackupRoot(
   projectRoot: string,
   backupRoot: string,
-): Promise<void> {
-  if (!isPathInsideProject(projectRoot, snapshot.absolutePath)) {
-    throw new Error(`Rollback target escapes project root: ${snapshot.relativePath}`);
+): Promise<string> {
+  const relativePath = path.relative(projectRoot, backupRoot);
+  assertSafeRollbackRelativePath(relativePath, 'rollback backup directory');
+  const resolved = await resolveProjectPath(projectRoot, relativePath, {
+    requireExisting: true,
+    expectedType: 'directory',
+  });
+  if (resolved !== backupRoot) {
+    throw new Error(`Rollback backup directory identity changed: ${relativePath}`);
   }
+  return resolved;
+}
 
-  const targetCanonical = await validateTargetPath(snapshot.absolutePath, projectRoot);
-
-  if (snapshot.kind === 'missing') {
-    await fs.remove(targetCanonical);
-    return;
+async function resolveRollbackTarget(
+  projectRoot: string,
+  snapshot: RollbackSnapshot,
+): Promise<string> {
+  assertSafeRollbackRelativePath(snapshot.relativePath, 'rollback target');
+  await resolveRollbackParent(projectRoot, snapshot.relativePath);
+  const absolutePath = await resolveProjectPath(projectRoot, snapshot.relativePath);
+  const expectedPath = path.resolve(projectRoot, snapshot.relativePath);
+  if (absolutePath !== expectedPath) {
+    throw new Error(`Rollback target identity changed: ${snapshot.relativePath}`);
   }
+  return absolutePath;
+}
 
-  if (snapshot.kind === 'directory') {
-    if (await fs.pathExists(targetCanonical)) {
-      const current = await lstat(targetCanonical);
-      if (!current.isSymbolicLink() && current.isDirectory()) {
-        return;
-      }
-      if (current.isSymbolicLink()) {
-        throw new Error(`Cannot rollback: target is now a symlink/junction: ${snapshot.relativePath}`);
-      }
-      await fs.remove(targetCanonical);
-    }
-    await fs.ensureDir(targetCanonical);
-    return;
+async function resolveRollbackParent(
+  projectRoot: string,
+  relativePath: string,
+): Promise<string> {
+  const parentRelativePath = path.dirname(relativePath);
+  const resolvedParent = await resolveProjectPath(projectRoot, parentRelativePath, {
+    requireExisting: true,
+    expectedType: 'directory',
+  });
+  const expectedParent = path.resolve(projectRoot, parentRelativePath);
+  if (resolvedParent !== expectedParent) {
+    throw new Error(`Rollback parent identity changed: ${parentRelativePath}`);
   }
+  return resolvedParent;
+}
 
+async function resolveRollbackBackupPath(
+  projectRoot: string,
+  backupRoot: string,
+  snapshot: RollbackSnapshot,
+): Promise<string> {
   if (!snapshot.backupPath) {
     throw new Error(`Missing rollback backup for ${snapshot.relativePath}`);
   }
 
-  const backupCanonical = await validateBackupPath(snapshot.backupPath, backupRoot);
-  await fs.remove(targetCanonical);
-  await fs.ensureDir(path.dirname(targetCanonical));
-  await validateParentDirectory(path.dirname(targetCanonical), projectRoot);
-  await fs.copyFile(backupCanonical, targetCanonical);
-  if (snapshot.mode !== undefined) {
-    await fs.chmod(targetCanonical, snapshot.mode);
+  const backupRelativePath = path.relative(backupRoot, snapshot.backupPath);
+  assertSafeRollbackRelativePath(backupRelativePath, 'rollback backup');
+  const expectedBackupPath = path.resolve(backupRoot, backupRelativePath);
+  const projectRelativePath = path.relative(projectRoot, expectedBackupPath);
+  assertSafeRollbackRelativePath(projectRelativePath, 'rollback backup');
+  const resolvedBackupPath = await resolveProjectPath(projectRoot, projectRelativePath, {
+    requireExisting: true,
+    expectedType: 'file',
+  });
+
+  if (!isPathInside(backupRoot, resolvedBackupPath) || resolvedBackupPath !== expectedBackupPath) {
+    throw new Error(`Rollback backup escaped its transaction directory: ${backupRelativePath}`);
+  }
+
+  return resolvedBackupPath;
+}
+
+function assertSafeRollbackRelativePath(relativePath: string, label: string): void {
+  const portablePath = relativePath.replace(/\\/gu, '/');
+  const segments = portablePath.split('/').filter(Boolean);
+  if (
+    !relativePath ||
+    relativePath === '.' ||
+    path.isAbsolute(relativePath) ||
+    path.posix.isAbsolute(relativePath) ||
+    path.win32.isAbsolute(relativePath) ||
+    segments.includes('..')
+  ) {
+    throw new Error(`Unsafe ${label} path: ${relativePath}`);
   }
 }
 
-async function validateAndRollbackParent(
-  snapshot: RollbackSnapshot,
-  projectRoot: string,
+function isPathInside(parentPath: string, targetPath: string): boolean {
+  const relativePath = path.relative(parentPath, targetPath);
+  return relativePath === '' || (
+    !path.isAbsolute(relativePath) &&
+    relativePath !== '..' &&
+    !relativePath.startsWith(`..${path.sep}`)
+  );
+}
+
+async function readFilesystemIdentity(targetPath: string): Promise<FilesystemIdentity> {
+  const metadata = await lstatPath(targetPath, { bigint: true });
+  return {
+    device: metadata.dev.toString(),
+    inode: metadata.ino.toString(),
+  };
+}
+
+function sameFilesystemIdentity(
+  left: FilesystemIdentity,
+  right: FilesystemIdentity,
+): boolean {
+  return left.device === right.device && left.inode === right.inode;
+}
+
+async function resolveTransactionMetadataPath(
+  transaction: PreparedTransaction,
+  relativePath: string,
+): Promise<string> {
+  const projectRoot = await assertRollbackProjectIdentity(transaction);
+  assertSafeRollbackRelativePath(relativePath, 'transaction metadata');
+
+  const parentRelativePath = path.dirname(relativePath);
+  const resolvedParent = await resolveProjectPath(projectRoot, parentRelativePath, {
+    requireExisting: true,
+    expectedType: 'directory',
+  });
+  const expectedParent = path.resolve(projectRoot, parentRelativePath);
+  if (resolvedParent !== expectedParent) {
+    throw new Error(`Transaction metadata parent identity changed: ${parentRelativePath}`);
+  }
+
+  const resolvedPath = await resolveProjectPath(projectRoot, relativePath, {
+    expectedType: 'file',
+  });
+  const expectedPath = path.resolve(projectRoot, relativePath);
+  if (resolvedPath !== expectedPath) {
+    throw new Error(`Transaction metadata path identity changed: ${relativePath}`);
+  }
+  return resolvedPath;
+}
+
+async function appendTransactionHistory(
+  transaction: PreparedTransaction,
+  entry: HistoryEntry,
 ): Promise<void> {
-  if (!isPathInsideProject(projectRoot, snapshot.absolutePath)) {
-    throw new Error(`Rollback parent escapes project root: ${snapshot.relativePath}`);
-  }
+  const relativePath = path.join('.openbrowser', 'history.json');
+  let historyPath = await resolveTransactionMetadataPath(transaction, relativePath);
+  const snapshot = await readPathSnapshot(historyPath);
+  let history: HistoryEntry[] = [];
 
-  const parentCanonical = await validateTargetPath(snapshot.absolutePath, projectRoot);
-
-  if (snapshot.kind === 'missing') {
-    try {
-      await fs.rmdir(parentCanonical);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT' && code !== 'ENOTEMPTY' && code !== 'EEXIST') {
-        throw error;
-      }
+  if (snapshot.kind === 'file') {
+    const parsed = JSON.parse(snapshot.content ?? '[]') as unknown;
+    if (!Array.isArray(parsed)) {
+      throw new Error('Transaction history file must contain an array');
     }
-  } else if (snapshot.kind === 'directory') {
-    await fs.ensureDir(parentCanonical);
+    history = parsed as HistoryEntry[];
   }
-}
 
-async function validateTargetPath(absolutePath: string, projectRoot: string): Promise<string> {
-  try {
-    const canonical = await realpath(absolutePath);
-    if (!isPathInsideProject(projectRoot, canonical)) {
-      throw new Error(`Path escapes project root after symlink resolution`);
-    }
-    return canonical;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      const parent = path.dirname(absolutePath);
-      const parentCanonical = await realpath(parent);
-      if (!isPathInsideProject(projectRoot, parentCanonical)) {
-        throw new Error(`Parent directory escapes project root`);
-      }
-      const candidate = path.join(parentCanonical, path.basename(absolutePath));
-      if (!isPathInsideProject(projectRoot, candidate)) {
-        throw new Error(`Path escapes project root`);
-      }
-      return candidate;
-    }
-    throw error;
-  }
-}
-
-async function validateBackupPath(backupPath: string, backupRoot: string): Promise<string> {
-  const canonical = await realpath(backupPath);
-  if (!canonical.startsWith(backupRoot)) {
-    throw new Error(`Backup file is outside backup root: ${backupPath}`);
-  }
-  const stat = await lstat(canonical);
-  if (!stat.isFile()) {
-    throw new Error(`Backup must be a regular file: ${backupPath}`);
-  }
-  return canonical;
-}
-
-async function validateParentDirectory(parentPath: string, projectRoot: string): Promise<void> {
-  const parentCanonical = await realpath(parentPath);
-  if (!isPathInsideProject(projectRoot, parentCanonical)) {
-    throw new Error(`Parent directory escapes project root: ${parentPath}`);
-  }
-  const stat = await lstat(parentCanonical);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    throw new Error(`Parent must be a regular directory: ${parentPath}`);
-  }
+  history.push(entry);
+  historyPath = await resolveTransactionMetadataPath(transaction, relativePath);
+  await safeWriteFile(historyPath, JSON.stringify(history, null, 2));
 }
 
 async function writeTransactionJournal(transaction: PreparedTransaction): Promise<void> {
@@ -988,7 +1048,7 @@ async function safeWriteFile(filePath: string, content: string): Promise<void> {
     `.${path.basename(filePath)}.openbrowser-${crypto.randomUUID()}.tmp`,
   );
   const existingMode = await fs.stat(filePath).then((stats) => stats.mode).catch((statError) => {
-    logger.debug({ filePath, statError }, 'Could not stat existing file; will use default mode');
+    logger.debug('Could not stat existing file; will use default mode', { filePath, statError });
     return undefined;
   });
   const handle = await open(temporaryPath, flags, existingMode ?? 0o666);
@@ -1005,98 +1065,21 @@ async function safeWriteFile(filePath: string, content: string): Promise<void> {
     await renamePath(temporaryPath, filePath);
   } catch (error) {
     await fs.remove(temporaryPath).catch((removeError) => {
-      logger.warn({ temporaryPath, removeError }, 'Failed to clean up temporary file during error recovery');
+      logger.warn('Failed to clean up temporary file during error recovery', { temporaryPath, removeError });
     });
     throw error;
   }
 }
 
 async function runTool(invocation: ToolInvocation): Promise<void> {
-  const maxOutputBytes = 2 * 1024 * 1024;
-  const timeoutMs = 120_000;
-  const gracefulTerminationTimeoutMs = 1000;
-
-  await new Promise<void>((resolve, reject) => {
-    const spawnOptions: SpawnOptions = {
-      cwd: invocation.cwd,
-      shell: false,
-      windowsHide: true,
-      env: process.env,
-      detached: process.platform !== 'win32',
-    };
-
-    const child = spawn(invocation.executable, invocation.args, spawnOptions);
-
-    let stdout = '';
-    let stderr = '';
-    let outputBytes = 0;
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout>;
-
-    const finish = (error?: Error): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) reject(error);
-      else resolve();
-    };
-
-    const handleTermination = async (reason: string): Promise<void> => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-
-      const result = await terminateProcessTree(child.pid!, gracefulTerminationTimeoutMs);
-      let errorMsg = `${invocation.toolId}: ${reason}`;
-
-      if (result.descendantCount > 0) {
-        errorMsg += ` (terminated ${result.descendantCount} descendant process(es)`;
-        if (result.gracefulTermination) {
-          errorMsg += ', graceful)';
-        } else if (result.forcedTermination) {
-          errorMsg += ', forced)';
-        } else {
-          errorMsg += ')';
-        }
-      }
-
-      if (result.error) {
-        errorMsg += ` - ${result.error}`;
-      }
-
-      reject(new Error(errorMsg));
-    };
-
-    const append = (target: 'stdout' | 'stderr', chunk: Buffer): void => {
-      outputBytes += chunk.byteLength;
-      if (outputBytes > maxOutputBytes) {
-        handleTermination(`output exceeded ${maxOutputBytes} bytes`);
-        return;
-      }
-      if (target === 'stdout') stdout += chunk.toString();
-      else stderr += chunk.toString();
-    };
-
-    child.stdout?.on('data', (chunk: Buffer) => append('stdout', chunk));
-    child.stderr?.on('data', (chunk: Buffer) => append('stderr', chunk));
-    child.on('error', (error) => finish(new Error(`Failed to start ${invocation.toolId}: ${error.message}`)));
-    child.on('close', (code, signal) => {
-      if (stdout.trim()) process.stdout.write(`${stdout.trim()}\n`);
-      if (stderr.trim()) process.stderr.write(`${stderr.trim()}\n`);
-      if (code === 0) {
-        finish();
-        return;
-      }
-      finish(
-        new Error(
-          `${invocation.toolId} failed${code === null ? '' : ` with exit code ${code}`}${signal ? ` (${signal})` : ''}`,
-        ),
-      );
-    });
-
-    timer = setTimeout(() => {
-      handleTermination(`timed out after ${timeoutMs}ms`);
-    }, timeoutMs);
+  const result = await runContainedProcess({
+    executable: invocation.executable,
+    args: invocation.args,
+    cwd: invocation.cwd,
+    env: process.env,
+    toolId: invocation.toolId,
+    timeoutMs: 120_000,
+    maxOutputBytes: 2 * 1024 * 1024,
   });
 
   if (result.stdout.trim()) {
@@ -1164,27 +1147,15 @@ function nextContent(operation: FileOperation, before: string): string {
   if (operation.search !== undefined && operation.replace !== undefined) {
     const search = normalizeMultilineText(operation.search);
     const replace = normalizeMultilineText(operation.replace);
-
-    // Count occurrences of search text
-    let count = 0;
-    let index = 0;
-    while ((index = before.indexOf(search, index)) !== -1) {
-      count += 1;
-      index += search.length;
-    }
-
-    if (count === 0) {
+    const searchIndex = before.indexOf(search);
+    if (searchIndex === -1) {
       throw new Error(`Search text not found in ${operation.path}`);
     }
-
-    if (count > 1) {
-      throw new Error(
-        `Search text in ${operation.path} is ambiguous: found ${count} matches. ` +
-        `Provide additional context or an occurrence specifier to disambiguate.`,
-      );
+    const nextIndex = before.indexOf(search, searchIndex + 1);
+    if (nextIndex !== -1) {
+      throw new Error(`Search text appears ${countOccurrences(before, search)} times in ${operation.path}; ambiguous match without explicit occurrence selector`);
     }
-
-    return before.replace(search, replace);
+    return before.substring(0, searchIndex) + replace + before.substring(searchIndex + search.length);
   }
 
   if (operation.content !== undefined) {
@@ -1205,28 +1176,8 @@ function applyLineEdit(
   }
 
   const lines = before.split('\n');
-  const lineCount = lines.length;
-
-  if (startLine > lineCount + 1) {
-    throw new Error(
-      `startLine ${startLine} is beyond end of file (${lineCount} lines total)`,
-    );
-  }
-
-  // Reject endLine beyond file length unless it's for an append operation
-  // An append operation has startLine at or beyond EOF and endLine equal to lineCount+1
-  if (endLine > lineCount + 1) {
-    throw new Error(
-      `endLine ${endLine} is beyond end of file (${lineCount} lines total). ` +
-      `To append at EOF, use startLine=${lineCount + 1} and endLine=${lineCount + 1}.`,
-    );
-  }
-
-  if (endLine === lineCount + 1 && startLine <= lineCount) {
-    throw new Error(
-      `endLine cannot extend beyond file length. ` +
-      `File has ${lineCount} lines. To append, use startLine=${lineCount + 1} and endLine=${lineCount + 1}.`,
-    );
+  if (startLine > lines.length + 1) {
+    throw new Error(`startLine ${startLine} is beyond end of file (${lines.length} lines)`);
   }
 
   if (endLine > lines.length) {
@@ -1234,7 +1185,7 @@ function applyLineEdit(
   }
 
   const startIndex = startLine - 1;
-  const endIndex = endLine > lineCount ? lineCount : endLine;
+  const endIndex = endLine;
   const replacementLines = replacement.split('\n');
 
   return [

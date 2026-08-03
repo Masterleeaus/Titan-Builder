@@ -1,4 +1,11 @@
-import type { TitanToolManifest, ToolRisk } from './manifest.js';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  parseToolManifest,
+  type TitanToolManifest,
+  type ToolRisk,
+} from './manifest.js';
 import {
   builtinToolRegistry,
   requiresExplicitApproval,
@@ -6,6 +13,14 @@ import {
 } from './catalog.js';
 import type { ToolInputFile, ToolInvocation } from './types.js';
 import { validateResolvedToolInvocation } from './validation.js';
+
+const WORKTREE_SENSITIVE_GIT_TOOLS = new Set(['git.status', 'git.diff']);
+const publicManifests = Object.freeze(
+  builtinToolRegistry.manifests().map((manifest) => publicManifest(manifest)),
+);
+const publicManifestByRuntimeId = new Map(
+  publicManifests.map((manifest) => [manifest.runtimeId, manifest]),
+);
 
 export type { ToolId, ToolInputFile, ToolInvocation, ToolRisk };
 export { requiresExplicitApproval };
@@ -23,9 +38,13 @@ export function resolveToolInvocation(
   if (!definition) {
     throw new Error(`Unsupported tool: ${toolId}`);
   }
+  const manifest = publicManifestByRuntimeId.get(definition.manifest.runtimeId);
+  if (!manifest) {
+    throw new Error(`Missing public manifest for tool: ${definition.manifest.runtimeId}`);
+  }
   return validateResolvedToolInvocation(
-    definition.manifest,
-    definition.resolve(args, projectRoot),
+    manifest,
+    hardenGitInvocation(definition.resolve(args, projectRoot)),
   );
 }
 
@@ -37,102 +56,79 @@ export function toolInputFiles(invocation: ToolInvocation): ToolInputFile[] {
   return definition.inputFiles(invocation).map((input) => ({ ...input }));
 }
 
-function assertToolId(value: string): ToolId {
-  const supported: readonly ToolId[] = [
-    'git.status',
-    'git.diff',
-    'git.log',
-    'git.branch.current',
-    'npm.install',
-    'npm.test',
-    'npm.run',
-    'pnpm.install',
-    'pnpm.test',
-    'pnpm.run',
-    'node.version',
-    'vscode.open',
-  ];
-
-  if (!supported.includes(value as ToolId)) {
-    throw new Error(`Unsupported tool: ${value}`);
-  }
-
-  return value as ToolId;
+export function listToolManifests(): readonly TitanToolManifest[] {
+  return publicManifests;
 }
 
-function runScriptInvocation(
-  toolId: ToolId,
-  executable: string,
-  args: string[],
-  cwd: string,
-): ToolInvocation {
-  if (args.length !== 1) {
-    throw new Error(`${toolId} requires exactly one script name`);
+function publicManifest(manifest: TitanToolManifest): TitanToolManifest {
+  if (!WORKTREE_SENSITIVE_GIT_TOOLS.has(manifest.runtimeId)) {
+    return manifest;
   }
-  const script = args[0] ?? '';
-  if (!APPROVED_SCRIPT.test(script)) {
-    throw new Error(`${script || '(empty)'} is not an approved verification script`);
-  }
-  return invocation(toolId, executable, ['run', script], cwd, 'ARBITRARY_EXECUTION');
+
+  return parseToolManifest({
+    ...manifest,
+    risk: 'ARBITRARY_EXECUTION',
+    approval: 'explicit',
+    securityConsiderations: [
+      ...manifest.securityConsiderations,
+      'Working-tree inspection can invoke repository-configured content filters.',
+      'Explicit approval is required before worktree-sensitive Git reads execute.',
+      'Execution is delegated to a self-sanitising Git runner that closes user, system, command-scope, pager, editor, credential, fsmonitor, hook, external-diff, and textconv helper paths.',
+    ],
+  });
 }
 
-function invocation(
-  toolId: ToolId,
-  executable: string,
-  args: string[],
-  cwd: string,
-  risk: ToolRisk,
-): ToolInvocation {
-  const execution = wrapWindowsCommandShim(executable, args);
+function hardenGitInvocation(candidate: ToolInvocation): ToolInvocation {
+  if (candidate.executable !== 'git') {
+    return candidate;
+  }
+
+  const gitArgs = hardenedGitArgs(candidate.toolId, candidate.args);
+  const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+  const sourceRunnerPath = path.resolve(moduleDirectory, '..', 'git', 'hardened-cli.ts');
+  const compiledRunnerPath = path.resolve(moduleDirectory, '..', 'git', 'hardened-cli.js');
+  let runnerPath = compiledRunnerPath;
+  const runnerArgs: string[] = [];
+  if (existsSync(sourceRunnerPath)) {
+    runnerPath = sourceRunnerPath;
+    runnerArgs.push('--experimental-strip-types');
+  }
+  runnerArgs.push(runnerPath, ...gitArgs);
+
   return {
-    toolId,
-    executable: execution.executable,
-    args: execution.args,
-    cwd,
-    risk,
-    displayCommand: [quoteDisplay(executable), ...args.map(quoteDisplay)].join(' '),
+    ...candidate,
+    executable: process.execPath,
+    args: runnerArgs,
+    risk: WORKTREE_SENSITIVE_GIT_TOOLS.has(candidate.toolId)
+      ? 'ARBITRARY_EXECUTION'
+      : candidate.risk,
+    displayCommand: ['git', ...gitArgs.map(quoteDisplay)].join(' '),
     shell: false,
   };
 }
 
-function wrapWindowsCommandShim(
-  executable: string,
-  args: string[],
-): { executable: string; args: string[] } {
-  if (process.platform !== 'win32' || !/\.cmd$/iu.test(executable)) {
-    return { executable, args: [...args] };
+function hardenedGitArgs(toolId: string, args: string[]): string[] {
+  if (toolId === 'git.diff') {
+    return [
+      'diff',
+      '--no-ext-diff',
+      '--no-textconv',
+      ...args.slice(1),
+    ];
   }
-  // Quote the executable if it contains spaces so cmd.exe parses it correctly
-  const quotedExecutable = executable.includes(' ') ? `"${executable}"` : executable;
-  return {
-    executable: process.env.COMSPEC ?? 'cmd.exe',
-    args: ['/d', '/s', '/c', quotedExecutable, ...args],
-  };
-}
 
-function validateArgument(value: string): string {
-  if (typeof value !== 'string') {
-    throw new Error('Tool arguments must be strings');
+  if (toolId === 'git.show' && !args.includes('--no-textconv')) {
+    const insertionPoint = Math.max(args.indexOf('--no-ext-diff') + 1, 1);
+    return [
+      ...args.slice(0, insertionPoint),
+      '--no-textconv',
+      ...args.slice(insertionPoint),
+    ];
   }
-  if (value.length > 300) {
-    throw new Error('Tool argument exceeds 300 characters');
-  }
-  if (/\0|\r|\n/.test(value)) {
-    throw new Error('Tool arguments must not contain control characters');
-  }
-  return value;
-}
 
-function requireArgCount(toolId: string, args: string[], count: number): void {
-  if (args.length !== count) {
-    throw new Error(`${toolId} accepts ${count === 0 ? 'no arguments' : `${count} argument(s)`}`);
-  }
-}
-
-function platformCommand(command: string): string {
-  return process.platform === 'win32' ? `${command}.cmd` : command;
+  return [...args];
 }
 
 function quoteDisplay(value: string): string {
-  return /\s/.test(value) ? JSON.stringify(value) : value;
+  return /\s/u.test(value) ? JSON.stringify(value) : value;
 }
