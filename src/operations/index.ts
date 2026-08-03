@@ -1,4 +1,4 @@
-import { exec } from 'node:child_process';
+import { exec, spawn, type SpawnOptions } from 'node:child_process';
 import crypto from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { lstat as lstatPath, open, rename as renamePath, unlink } from 'node:fs/promises';
@@ -12,7 +12,7 @@ import type { HistoryEntry } from '../memory/index.js';
 import { canonicalizeProjectRoot, resolveProjectPath } from '../security/project-path.js';
 import { expandMkdirOperations, looksLikePowerShellCommand } from './mkdir-normalize.js';
 import { preserveOperationOrder } from './operation-order.js';
-import { runContainedProcess } from './process-runner.js';
+import { terminateProcessTree } from './process-tree.js';
 import {
   isUnsafeLegacyCommandEnabled,
   resolveToolInvocation,
@@ -23,10 +23,11 @@ import {
 
 const execAsync = promisify(exec);
 
-const MAX_FILE_READ_BYTES = 10 * 1024 * 1024;
-const MAX_DIFF_BYTES = 5 * 1024 * 1024;
+// File operation limits to prevent memory exhaustion and excessive diff generation
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_DIFF_SIZE_BYTES = 1 * 1024 * 1024; // 1 MB
 
-export type PathStateKind = 'missing' | 'file' | 'directory';
+export type PathStateKind = 'missing' | 'file' | 'directory' | 'binary' | 'oversized';
 
 export interface PathPrecondition {
   absolutePath: string;
@@ -54,6 +55,7 @@ interface PathSnapshot {
   hash: string;
   content?: string;
   mode?: number;
+  size?: number;
 }
 
 interface RollbackSnapshot extends PathSnapshot {
@@ -372,12 +374,14 @@ async function planFileOperation(
       if (before.kind === 'directory') {
         throw new Error(`CREATE_FILE cannot replace directory ${relativePath}`);
       }
+      if (before.kind === 'binary') {
+        throw new Error(`CREATE_FILE cannot replace binary file ${relativePath}`);
+      }
       const after = normalizeMultilineText(operation.content ?? '');
       virtualState.set(absolutePath, createSnapshot('file', after));
       const diff = createPatch(relativePath, before.content ?? '', after, 'before', 'after');
-      validateDiffSize(diff, relativePath);
       return {
-        diff,
+        diff: truncateDiff(diff, MAX_DIFF_SIZE_BYTES),
         preconditions,
         affectedPaths,
       };
@@ -385,6 +389,9 @@ async function planFileOperation(
     case 'EDIT_FILE': {
       if (before.kind === 'directory') {
         throw new Error(`EDIT_FILE cannot edit directory ${relativePath}`);
+      }
+      if (before.kind === 'binary') {
+        throw new Error(`EDIT_FILE cannot edit binary file ${relativePath}`);
       }
       if (before.kind === 'missing' && !operation.content?.trim()) {
         throw new Error(
@@ -394,22 +401,20 @@ async function planFileOperation(
       const after = nextContent(operation, before.content ?? '');
       virtualState.set(absolutePath, createSnapshot('file', after));
       const diff = createPatch(relativePath, before.content ?? '', after, 'before', 'after');
-      validateDiffSize(diff, relativePath);
       return {
-        diff,
+        diff: truncateDiff(diff, MAX_DIFF_SIZE_BYTES),
         preconditions,
         affectedPaths,
       };
     }
     case 'DELETE_FILE': {
-      if (before.kind !== 'file') {
+      if (before.kind !== 'file' && before.kind !== 'binary') {
         throw new Error(`DELETE_FILE requires existing file ${relativePath}`);
       }
       virtualState.set(absolutePath, createSnapshot('missing'));
       const diff = createPatch(relativePath, before.content ?? '', '', 'before', 'after');
-      validateDiffSize(diff, relativePath);
       return {
-        diff,
+        diff: truncateDiff(diff, MAX_DIFF_SIZE_BYTES),
         preconditions,
         affectedPaths,
       };
@@ -454,11 +459,17 @@ async function getVirtualSnapshot(
   return snapshot;
 }
 
-function createSnapshot(kind: PathStateKind, content?: string, mode?: number): PathSnapshot {
+function createSnapshot(
+  kind: PathStateKind,
+  content?: string,
+  mode?: number,
+  size?: number,
+): PathSnapshot {
   return {
     kind,
     content: kind === 'file' ? content ?? '' : undefined,
     mode,
+    size,
     hash: hashPathState(kind, content),
   };
 }
@@ -487,12 +498,63 @@ async function readPathSnapshot(absolutePath: string): Promise<PathSnapshot> {
     throw new Error(`Unsupported filesystem target: ${absolutePath}`);
   }
 
-  if (stats.size > MAX_FILE_READ_BYTES) {
-    throw new Error(`File ${absolutePath} is too large (${stats.size} bytes, limit ${MAX_FILE_READ_BYTES} bytes)`);
+  // Check file size before reading
+  if (stats.size > MAX_FILE_SIZE_BYTES) {
+    throw new Error(
+      `File exceeds maximum size for operation planning: ${absolutePath} ` +
+      `(${formatBytes(stats.size)} > ${formatBytes(MAX_FILE_SIZE_BYTES)})`,
+    );
   }
 
-  const content = await fs.readFile(absolutePath, 'utf8');
-  return createSnapshot('file', content, stats.mode);
+  // Read the file
+  const buffer = await fs.readFile(absolutePath);
+
+  // Detect binary content by checking for null bytes
+  if (isBinaryContent(buffer)) {
+    return createSnapshot('binary', undefined, stats.mode, stats.size);
+  }
+
+  const content = buffer.toString('utf8');
+  return createSnapshot('file', content, stats.mode, stats.size);
+}
+
+function isBinaryContent(buffer: Buffer): boolean {
+  // Check for null bytes which indicate binary content
+  for (let i = 0; i < Math.min(buffer.length, 8192); i += 1) {
+    if (buffer[i] === 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function truncateDiff(diff: string, maxBytes: number): string {
+  const bytes = Buffer.byteLength(diff, 'utf8');
+  if (bytes <= maxBytes) {
+    return diff;
+  }
+
+  // Truncate and add indicator
+  let truncated = '';
+  let currentBytes = 0;
+  const lines = diff.split('\n');
+
+  for (const line of lines) {
+    const lineBytes = Buffer.byteLength(line + '\n', 'utf8');
+    if (currentBytes + lineBytes > maxBytes - 100) {
+      break;
+    }
+    truncated += line + '\n';
+    currentBytes += lineBytes;
+  }
+
+  return truncated + `\n... (diff truncated: ${formatBytes(bytes)} > ${formatBytes(maxBytes)})\n`;
 }
 
 function hashPathState(kind: PathStateKind, content?: string): string {
@@ -1072,14 +1134,91 @@ async function safeWriteFile(filePath: string, content: string): Promise<void> {
 }
 
 async function runTool(invocation: ToolInvocation): Promise<void> {
-  const result = await runContainedProcess({
-    executable: invocation.executable,
-    args: invocation.args,
-    cwd: invocation.cwd,
-    env: process.env,
-    toolId: invocation.toolId,
-    timeoutMs: 120_000,
-    maxOutputBytes: 2 * 1024 * 1024,
+  const maxOutputBytes = 2 * 1024 * 1024;
+  const timeoutMs = 120_000;
+  const gracefulTerminationTimeoutMs = 1000;
+
+  await new Promise<void>((resolve, reject) => {
+    const spawnOptions: SpawnOptions = {
+      cwd: invocation.cwd,
+      shell: false,
+      windowsHide: true,
+      env: process.env,
+      detached: process.platform !== 'win32',
+    };
+
+    const child = spawn(invocation.executable, invocation.args, spawnOptions);
+
+    let stdout = '';
+    let stderr = '';
+    let outputBytes = 0;
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+
+    const handleTermination = async (reason: string): Promise<void> => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+
+      const result = await terminateProcessTree(child.pid!, gracefulTerminationTimeoutMs);
+      let errorMsg = `${invocation.toolId}: ${reason}`;
+
+      if (result.descendantCount > 0) {
+        errorMsg += ` (terminated ${result.descendantCount} descendant process(es)`;
+        if (result.gracefulTermination) {
+          errorMsg += ', graceful)';
+        } else if (result.forcedTermination) {
+          errorMsg += ', forced)';
+        } else {
+          errorMsg += ')';
+        }
+      }
+
+      if (result.error) {
+        errorMsg += ` - ${result.error}`;
+      }
+
+      reject(new Error(errorMsg));
+    };
+
+    const append = (target: 'stdout' | 'stderr', chunk: Buffer): void => {
+      outputBytes += chunk.byteLength;
+      if (outputBytes > maxOutputBytes) {
+        handleTermination(`output exceeded ${maxOutputBytes} bytes`);
+        return;
+      }
+      if (target === 'stdout') stdout += chunk.toString();
+      else stderr += chunk.toString();
+    };
+
+    child.stdout?.on('data', (chunk: Buffer) => append('stdout', chunk));
+    child.stderr?.on('data', (chunk: Buffer) => append('stderr', chunk));
+    child.on('error', (error) => finish(new Error(`Failed to start ${invocation.toolId}: ${error.message}`)));
+    child.on('close', (code, signal) => {
+      if (stdout.trim()) process.stdout.write(`${stdout.trim()}\n`);
+      if (stderr.trim()) process.stderr.write(`${stderr.trim()}\n`);
+      if (code === 0) {
+        finish();
+        return;
+      }
+      finish(
+        new Error(
+          `${invocation.toolId} failed${code === null ? '' : ` with exit code ${code}`}${signal ? ` (${signal})` : ''}`,
+        ),
+      );
+    });
+
+    timer = setTimeout(() => {
+      handleTermination(`timed out after ${timeoutMs}ms`);
+    }, timeoutMs);
   });
 
   if (result.stdout.trim()) {
@@ -1147,15 +1286,27 @@ function nextContent(operation: FileOperation, before: string): string {
   if (operation.search !== undefined && operation.replace !== undefined) {
     const search = normalizeMultilineText(operation.search);
     const replace = normalizeMultilineText(operation.replace);
-    const searchIndex = before.indexOf(search);
-    if (searchIndex === -1) {
+
+    // Count occurrences of search text
+    let count = 0;
+    let index = 0;
+    while ((index = before.indexOf(search, index)) !== -1) {
+      count += 1;
+      index += search.length;
+    }
+
+    if (count === 0) {
       throw new Error(`Search text not found in ${operation.path}`);
     }
-    const nextIndex = before.indexOf(search, searchIndex + 1);
-    if (nextIndex !== -1) {
-      throw new Error(`Search text appears ${countOccurrences(before, search)} times in ${operation.path}; ambiguous match without explicit occurrence selector`);
+
+    if (count > 1) {
+      throw new Error(
+        `Search text in ${operation.path} is ambiguous: found ${count} matches. ` +
+        `Provide additional context or an occurrence specifier to disambiguate.`,
+      );
     }
-    return before.substring(0, searchIndex) + replace + before.substring(searchIndex + search.length);
+
+    return before.replace(search, replace);
   }
 
   if (operation.content !== undefined) {
@@ -1176,8 +1327,28 @@ function applyLineEdit(
   }
 
   const lines = before.split('\n');
-  if (startLine > lines.length + 1) {
-    throw new Error(`startLine ${startLine} is beyond end of file (${lines.length} lines)`);
+  const lineCount = lines.length;
+
+  if (startLine > lineCount + 1) {
+    throw new Error(
+      `startLine ${startLine} is beyond end of file (${lineCount} lines total)`,
+    );
+  }
+
+  // Reject endLine beyond file length unless it's for an append operation
+  // An append operation has startLine at or beyond EOF and endLine equal to lineCount+1
+  if (endLine > lineCount + 1) {
+    throw new Error(
+      `endLine ${endLine} is beyond end of file (${lineCount} lines total). ` +
+      `To append at EOF, use startLine=${lineCount + 1} and endLine=${lineCount + 1}.`,
+    );
+  }
+
+  if (endLine === lineCount + 1 && startLine <= lineCount) {
+    throw new Error(
+      `endLine cannot extend beyond file length. ` +
+      `File has ${lineCount} lines. To append, use startLine=${lineCount + 1} and endLine=${lineCount + 1}.`,
+    );
   }
 
   if (endLine > lines.length) {
@@ -1185,7 +1356,7 @@ function applyLineEdit(
   }
 
   const startIndex = startLine - 1;
-  const endIndex = endLine;
+  const endIndex = endLine > lineCount ? lineCount : endLine;
   const replacementLines = replacement.split('\n');
 
   return [

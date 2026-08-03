@@ -52,7 +52,8 @@ export async function resolveProjectPath(
     throw new Error('Project path must be a non-empty path without null bytes');
   }
 
-  assertNotReserved(targetPath);
+  assertNotReservedVcsPath(targetPath);
+  assertNotWindowsSpecialPath(targetPath);
 
   const root = await canonicalizeProjectRoot(projectRoot);
   const candidate = path.resolve(root, targetPath);
@@ -133,11 +134,68 @@ function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
 }
 
-function assertNotReserved(targetPath: string): void {
-  const normalizedPath = path.normalize(targetPath);
-  const firstSegment = normalizedPath.split(path.sep)[0]?.toLowerCase();
+function assertNotReservedVcsPath(targetPath: string): void {
+  const normalized = targetPath.replace(/\\/g, '/').toLowerCase();
+  const segments = normalized.split('/').filter(Boolean);
 
-  if (firstSegment === '.openbrowser') {
-    throw new Error(`Path targets reserved Titan Builder metadata: ${targetPath}`);
+  const vcsReserved = [
+    '.git',
+    '.hg',
+    '.svn',
+    '.fossil',
+    '.darcs',
+    '_darcs',
+    '.pijul',
+    '.jj',
+    '.openbrowser',
+  ];
+
+  for (const segment of segments) {
+    if (vcsReserved.includes(segment)) {
+      throw new Error(`Path cannot access reserved metadata directory: ${targetPath} (contains ${segment})`);
+    }
+  }
+
+  if (normalized.includes('/.git/') || normalized.startsWith('.git/')) {
+    throw new Error(`Path cannot access Git metadata: ${targetPath}`);
+  }
+}
+
+function assertNotWindowsSpecialPath(targetPath: string): void {
+  const normalized = targetPath.replace(/\\/g, '/');
+  const segments = normalized.split('/');
+
+  const deviceNames = new Set([
+    'con', 'prn', 'aux', 'nul',
+    'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
+    'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9',
+  ]);
+
+  for (let segment of segments) {
+    if (!segment) continue;
+
+    segment = segment.toLowerCase();
+
+    if (segment.includes(':')) {
+      throw new Error(`Path cannot contain alternate data streams (colons): ${targetPath}`);
+    }
+
+    // Skip dots/spaces check for '.' and '..' path components - they should be caught by containment checks
+    if ((segment.endsWith('.') || segment.endsWith(' ')) && segment !== '.' && segment !== '..') {
+      throw new Error(`Path cannot end with dots or spaces: ${targetPath}`);
+    }
+
+    const baseNameWithoutExtension = segment.split('.')[0]?.toLowerCase();
+    if (baseNameWithoutExtension && deviceNames.has(baseNameWithoutExtension)) {
+      throw new Error(`Path cannot use reserved Windows device name: ${targetPath}`);
+    }
+  }
+
+  if (/^[a-z]:/i.test(normalized)) {
+    throw new Error(`Path cannot be absolute with drive letter: ${targetPath}`);
+  }
+
+  if (normalized.startsWith('\\\\')) {
+    throw new Error(`Path cannot be UNC path: ${targetPath}`);
   }
 }

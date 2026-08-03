@@ -37,7 +37,12 @@ export async function detectVerificationPlan(
   profile: VerificationProfile,
 ): Promise<VerificationPlanResult> {
   const status = await readProjectStatus(projectRoot);
-  const scripts = await readPackageScripts(status.repositoryRoot ?? projectRoot);
+  let scripts: Record<string, string>;
+  try {
+    scripts = await readPackageScripts(status.repositoryRoot ?? projectRoot);
+  } catch (error) {
+    throw new Error(`Cannot read project scripts: ${formatUnknownError(error)}`);
+  }
   return {
     profile,
     packageManager: status.packageManager,
@@ -115,21 +120,49 @@ export function parseVerificationProfile(value: string): VerificationProfile {
 }
 
 async function readPackageScripts(projectRoot: string): Promise<Record<string, string>> {
+  const packageJsonPath = path.join(projectRoot, 'package.json');
+  let content: string;
+
   try {
-    const content = await readFile(path.join(projectRoot, 'package.json'), 'utf8');
-    const parsed = JSON.parse(content) as { scripts?: unknown };
-    if (!parsed.scripts || typeof parsed.scripts !== 'object' || Array.isArray(parsed.scripts)) {
+    content = await readFile(packageJsonPath, 'utf8');
+  } catch (error) {
+    const errno = (error as NodeJS.ErrnoException)?.code;
+    if (errno === 'ENOENT') {
       return {};
     }
+    if (errno === 'EACCES') {
+      throw new Error(`package.json is not readable (permission denied)`);
+    }
+    throw new Error(`Failed to read package.json: ${formatUnknownError(error)}`);
+  }
 
-    return Object.fromEntries(
-      Object.entries(parsed.scripts).filter(
-        (entry): entry is [string, string] => typeof entry[1] === 'string',
-      ),
-    );
-  } catch {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (error) {
+    throw new Error(`package.json contains invalid JSON: ${formatUnknownError(error)}`);
+  }
+
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new Error('package.json root must be an object');
+  }
+
+  const packageObj = parsed as Record<string, unknown>;
+  const scripts = packageObj.scripts;
+
+  if (scripts === undefined) {
     return {};
   }
+
+  if (typeof scripts !== 'object' || scripts === null || Array.isArray(scripts)) {
+    throw new Error('package.json "scripts" field must be an object');
+  }
+
+  return Object.fromEntries(
+    Object.entries(scripts).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string',
+    ),
+  );
 }
 
 function formatUnknownError(error: unknown): string {

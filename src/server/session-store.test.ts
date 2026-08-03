@@ -4,9 +4,11 @@ import {
   clearSessions,
   completeSession,
   createSession,
+  DEFAULT_SESSION_RETENTION_MS,
   failSession,
   getSession,
   listDispatchableSessions,
+  pruneSessions,
   renewSessionClaim,
   releaseClaim,
   tryClaimSession,
@@ -143,4 +145,76 @@ test('a claimed session can be explicitly released and reclaimed', () => {
   assert.ok(reclaimed);
   assert.equal(reclaimed.session.attemptCount, 2);
   assert.equal(getSession(session.id)?.claimantId, 'tab-2');
+});
+
+test('pruning removes old completed and failed sessions but keeps pending and claimed', () => {
+  const now = 1_000_000;
+
+  const pending = createSession({
+    mode: 'ask',
+    prompt: 'pending',
+    systemPrompt: 'system',
+    message: 'message',
+    composerMessage: 'message',
+    delivery: 'text',
+    conversationId: 'pending-1',
+  });
+
+  const claimed = createSession({
+    mode: 'ask',
+    prompt: 'claimed',
+    systemPrompt: 'system',
+    message: 'message',
+    composerMessage: 'message',
+    delivery: 'text',
+    conversationId: 'claimed-1',
+  });
+  tryClaimSession(claimed.id, { nowMs: now, leaseMs: 5_000 });
+
+  const oldCompleted = createSession({
+    mode: 'ask',
+    prompt: 'old complete',
+    systemPrompt: 'system',
+    message: 'message',
+    composerMessage: 'message',
+    delivery: 'text',
+    conversationId: 'old-complete-1',
+  });
+  const completeClaim = tryClaimSession(oldCompleted.id, { nowMs: now - DEFAULT_SESSION_RETENTION_MS - 100_000, leaseMs: 5_000 });
+  assert.ok(completeClaim);
+  completeSession(oldCompleted.id, 'response', completeClaim.claimToken, now - DEFAULT_SESSION_RETENTION_MS - 100_000 + 5_000);
+
+  const oldFailed = createSession({
+    mode: 'ask',
+    prompt: 'old failed',
+    systemPrompt: 'system',
+    message: 'message',
+    composerMessage: 'message',
+    delivery: 'text',
+    conversationId: 'old-failed-1',
+  });
+  const failClaim = tryClaimSession(oldFailed.id, { nowMs: now - DEFAULT_SESSION_RETENTION_MS - 100_000, leaseMs: 5_000 });
+  assert.ok(failClaim);
+  failSession(oldFailed.id, 'error', failClaim.claimToken, now - DEFAULT_SESSION_RETENTION_MS - 100_000 + 5_000);
+
+  const recentCompleted = createSession({
+    mode: 'ask',
+    prompt: 'recent complete',
+    systemPrompt: 'system',
+    message: 'message',
+    composerMessage: 'message',
+    delivery: 'text',
+    conversationId: 'recent-complete-1',
+  });
+  const recentClaim = tryClaimSession(recentCompleted.id, { nowMs: now - 1_000, leaseMs: 5_000 });
+  assert.ok(recentClaim);
+  completeSession(recentCompleted.id, 'response', recentClaim.claimToken, now - 1_000 + 100);
+
+  const result = pruneSessions(now);
+  assert.equal(result.removed, 2, 'should remove old completed and failed sessions');
+  assert.ok(getSession(pending.id), 'pending session should be retained');
+  assert.ok(getSession(claimed.id), 'claimed session should be retained');
+  assert.equal(getSession(oldCompleted.id), undefined, 'old completed session should be removed');
+  assert.equal(getSession(oldFailed.id), undefined, 'old failed session should be removed');
+  assert.ok(getSession(recentCompleted.id), 'recent completed session should be retained');
 });

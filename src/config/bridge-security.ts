@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
-import { access, chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, writeFile, lstat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { parseEnvironmentText } from './environment.js';
 
 export interface EnsureBridgeSecurityOptions {
   env?: NodeJS.ProcessEnv;
@@ -88,10 +89,10 @@ export async function ensureBridgeSecurityEnvironment(
       await chmod(configPath, 0o600);
     }
   } else {
-    await access(configPath).catch((error) => {
-      console.warn(`Config file not accessible: ${configPath}`, error);
-    });
+    await validateAndRepairCredentialPermissions(configPath);
   }
+
+  await validateAndRepairCredentialPermissions(path.dirname(configPath));
 
   return {
     configPath,
@@ -99,6 +100,41 @@ export async function ensureBridgeSecurityEnvironment(
     generatedBrowserToken,
     insecureDevelopment: false,
   };
+}
+
+async function validateAndRepairCredentialPermissions(filePath: string): Promise<void> {
+  try {
+    const stats = await lstat(filePath);
+
+    if (stats.isSymbolicLink()) {
+      throw new Error('Credential path is a symbolic link, which is not allowed');
+    }
+
+    if (process.platform === 'win32') {
+      return;
+    }
+
+    const mode = stats.mode & 0o777;
+    const isFile = stats.isFile();
+    const isDir = stats.isDirectory();
+
+    if (isFile) {
+      const expectedMode = 0o600;
+      if (mode !== expectedMode) {
+        await chmod(filePath, expectedMode);
+      }
+    } else if (isDir) {
+      const expectedMode = 0o700;
+      if (mode !== expectedMode) {
+        await chmod(filePath, expectedMode);
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
 }
 
 export function generateStrongToken(): string {
@@ -115,19 +151,3 @@ function assertStrongToken(token: string | undefined, label: string): void {
   }
 }
 
-function parseEnvironmentText(text: string): Record<string, string> {
-  const values: Record<string, string> = {};
-  for (const rawLine of text.split(/\r?\n/u)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    const separator = line.indexOf('=');
-    if (separator <= 0) continue;
-    const key = line.slice(0, separator).trim();
-    let value = line.slice(separator + 1).trim();
-    if ((value.startsWith('\"') && value.endsWith('\"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (key) values[key] = value;
-  }
-  return values;
-}
