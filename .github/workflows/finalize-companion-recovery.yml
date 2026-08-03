@@ -1,4 +1,4 @@
-name: Finalize companion recovery once
+name: Finalize frozen recovery once
 
 on:
   push:
@@ -8,99 +8,154 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: finalize-current-main-recovery
+  cancel-in-progress: true
+
 jobs:
-  finalize:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+  repair-verify-publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
     steps:
-      - name: Check out exact branch head
+      - name: Check out exact frozen branch head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Restore coherent companion and root source
+        shell: bash
+        run: |
+          git show 684a62b8f14dc494de0c8820fd5e11e4689667b7:browser-extension/bridge-server.ts > browser-extension/bridge-server.ts
+          git show 9c55d427a71b7a66b29e26db917ebfbd4464e115:browser-extension/package.json > browser-extension/package.json
+          git show 9c55d427a71b7a66b29e26db917ebfbd4464e115:browser-extension/pnpm-lock.yaml > browser-extension/pnpm-lock.yaml
+
+          git show 3163e9724cd6640e1b39a913d883f5aad139ba40:src/skills/dispatcher.ts > src/skills/dispatcher.ts
+          git show 3163e9724cd6640e1b39a913d883f5aad139ba40:src/skills/dispatcher.test.ts > src/skills/dispatcher.test.ts
+          git show 3163e9724cd6640e1b39a913d883f5aad139ba40:src/skills/registry.test.ts > src/skills/registry.test.ts
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('browser-extension/bridge-server.ts')
+          source = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str) -> None:
+              global source
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one companion source block, found {count}: {old[:120]!r}')
+              source = source.replace(old, new, 1)
+
+          replace_once(
+              "import {\n  BridgeConnectionError,\n  requestAuthenticatedBridge,\n} from './bridge-connection-transport.js';",
+              "import { requestAuthenticatedBridge } from './bridge-connection-transport.js';",
+          )
+          replace_once(
+              "  const explicit = options.databasePath ?? process.env.WORKSPACE_DB_PATH;\n"
+              "  if (explicit) {",
+              "  const configuredPath = process.env.WORKSPACE_DB_PATH;\n"
+              "  const explicit = options.databasePath\n"
+              "    ?? (configuredPath && configuredPath !== 'undefined' ? configuredPath : undefined);\n"
+              "  if (explicit) {",
+          )
+          replace_once(
+              "  const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;\n"
+              "  const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });",
+              "  const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;\n"
+              "  const authenticatedBridgeRequest = options.bridgeRequest ?? requestAuthenticatedBridge;\n"
+              "  const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });",
+          )
+          replace_once(
+              "    let response: Response;\n"
+              "    try {\n"
+              "      response = await authenticatedBridgeRequest({\n"
+              "        endpoint: bridgeEndpoint,\n"
+              "        controlToken: bridgeToken,\n"
+              "        method,\n"
+              "        route,\n"
+              "        body,\n"
+              "      });\n"
+              "    } catch (error) {\n"
+              "      if (error instanceof BridgeConnectionError) {\n"
+              "        throw new WorkspaceHttpError(error.message, error.statusCode);\n"
+              "      }\n"
+              "      throw error;\n"
+              "    }",
+              "    const response = await authenticatedBridgeRequest({\n"
+              "      endpoint: bridgeEndpoint,\n"
+              "      controlToken: bridgeToken,\n"
+              "      method,\n"
+              "      route,\n"
+              "      body,\n"
+              "    });",
+          )
+
+          path.write_text(source, encoding='utf-8')
+          PY
+
+          python scripts/repair_current_main_final.py
+          git show acfa07cb9d1490deabdefff8e269ed5d2a4c31aa:src/server/session-store.ts > src/server/session-store.ts
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/security/project-path.ts')
+          source = path.read_text(encoding='utf-8')
+          old = "  'cvs',\n]);"
+          new = "  'cvs',\n  '.openbrowser',\n]);"
+          if source.count(old) != 1:
+              raise SystemExit(f'expected one reserved metadata set terminator, found {source.count(old)}')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+
+          rm .github/workflows/finalize-companion-recovery.yml
+          rm scripts/repair_current_main_final.py
+          git diff --check
+
       - name: Set up Node.js 22
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '22'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
       - name: Activate pnpm 11.2.2
-        shell: bash
         run: |
           corepack enable
           corepack prepare pnpm@11.2.2 --activate
-      - name: Repair collided companion initialization
-        shell: python
+
+      - name: Verify companion package
         run: |
-          from pathlib import Path
+          pnpm --dir browser-extension install --frozen-lockfile
+          pnpm --dir browser-extension run verify
 
-          path = Path('browser-extension/bridge-server.ts')
-          text = path.read_text(encoding='utf-8')
-
-          replacements = [
-              (
-                  "import { existsSync, readFileSync } from 'node:fs';",
-                  "import { existsSync } from 'node:fs';",
-              ),
-              (
-                  "  bridgeAllowedPorts?: number[];\n  bridgeRequest?: typeof requestAuthenticatedBridge;\n",
-                  "  bridgeAllowedPorts?: number[];\n",
-              ),
-          ]
-          for old, new in replacements:
-              if text.count(old) != 1:
-                  raise SystemExit(f'Expected one repair anchor, found {text.count(old)}: {old!r}')
-              text = text.replace(old, new, 1)
-
-          collided = """  const bridgeEndpoint = parseLoopbackBridgeUrl(
-            options.bridgeUrl ?? process.env.OPENBROWSER_BRIDGE_URL ?? DEFAULT_BRIDGE_URL,
-          );
-          const bridgeUrl = bridgeEndpoint.origin;
-          const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;
-          const bridgeClient = bridgeToken
-            ? createAuthenticatedBridgeClient({ bridgeUrl, controlToken: bridgeToken })
-            : undefined;
-          const databasePath = path.resolve(
-            options.databasePath
-              ?? process.env.WORKSPACE_DB_PATH
-              ?? path.join(moduleDirectory, 'openbrowser-workspace.db'),
-          );
-          const bridgeUrl = bridgeEndpoint.origin;
-          const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;
-          const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });
-          """
-          repaired = """  const bridgeEndpoint = parseLoopbackBridgeUrl(
-            options.bridgeUrl ?? process.env.OPENBROWSER_BRIDGE_URL ?? DEFAULT_BRIDGE_URL,
-          );
-          const bridgeUrl = bridgeEndpoint.origin;
-          const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;
-          const bridgeClient = bridgeToken
-            ? createAuthenticatedBridgeClient({ bridgeUrl, controlToken: bridgeToken })
-            : undefined;
-          const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });
-          """
-          if text.count(collided) != 1:
-              raise SystemExit(f'Expected one duplicated initialization block, found {text.count(collided)}')
-          path.write_text(text.replace(collided, repaired, 1), encoding='utf-8')
-      - name: Regenerate companion lock from its manifest
-        working-directory: browser-extension
-        shell: bash
+      - name: Verify root package
         run: |
-          set -euo pipefail
-          rm -f pnpm-lock.yaml
-          pnpm install --lockfile-only --ignore-scripts
           pnpm install --frozen-lockfile
           pnpm run verify
-      - name: Publish verified companion repair
-        shell: bash
+
+      - name: Verify workflow policy
+        run: |
+          python -m pip install --disable-pip-version-check --no-input PyYAML==6.0.2
+          python scripts/check_github_workflows.py .
+
+      - name: Publish verified frozen recovery
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          set -euo pipefail
-          rm .github/workflows/finalize-companion-recovery.yml
+          old_head=$(git rev-parse HEAD)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add browser-extension/bridge-server.ts browser-extension/pnpm-lock.yaml .github/workflows/finalize-companion-recovery.yml
-          git diff --cached --check
-          git commit -m "fix(ci): reconcile companion source and lock"
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" "HEAD:fix/current-main-recovery-final"
+          git add -A
+          git commit -m "fix(ci): restore verified companion and root runtime"
+          auth_header=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth_header" push \
+            --force-with-lease="refs/heads/fix/current-main-recovery-final:${old_head}" \
+            origin "HEAD:fix/current-main-recovery-final"
