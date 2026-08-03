@@ -82,6 +82,12 @@ export function createSession(input: CreateSessionInput): PromptSession {
   if (Buffer.byteLength(input.systemPrompt, 'utf8') > MAX_PROMPT_SIZE) {
     throw new Error(`System prompt exceeds maximum size of ${MAX_PROMPT_SIZE} bytes`);
   }
+  if (Buffer.byteLength(input.message, 'utf8') > MAX_RESPONSE_SIZE) {
+    throw new Error(`Message exceeds maximum size of ${MAX_RESPONSE_SIZE} bytes`);
+  }
+  if (Buffer.byteLength(input.composerMessage, 'utf8') > MAX_RESPONSE_SIZE) {
+    throw new Error(`Composer message exceeds maximum size of ${MAX_RESPONSE_SIZE} bytes`);
+  }
 
   pruneExpiredSessions(Date.now());
   pruneToFitLimits();
@@ -254,6 +260,10 @@ async function loadSessionsFromDisk(): Promise<void> {
         sessions.clear();
         for (const session of data) {
           if (isValidSession(session)) {
+            if (session.status === 'claimed') {
+              session.status = 'pending';
+              clearClaim(session);
+            }
             sessions.set(session.id, session);
           }
         }
