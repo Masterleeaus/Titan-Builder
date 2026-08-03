@@ -35,19 +35,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Restore coherent Skill Library and repair root contracts
+      - name: Repair root contracts
         shell: bash
-        run: |
-          skill_ref=6b2e61a73313b9b4381d89fcd86dcec6f1aa9562
-          for skill_file in \
-            src/skills/dispatcher.ts \
-            src/skills/dispatcher.test.ts \
-            src/skills/handlers.ts \
-            src/skills/index.ts \
-            src/skills/schema-validation.ts; do
-            git show "${skill_ref}:${skill_file}" > "${skill_file}"
-          done
-          python scripts/repair_current_main_final.py
+        run: python scripts/repair_current_main_final.py
 
       - name: Restore lock and repair companion contracts
         shell: bash
