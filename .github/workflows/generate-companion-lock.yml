@@ -28,38 +28,32 @@ jobs:
         run: |
           corepack enable
           corepack prepare pnpm@11.2.2 --activate
-      - name: Restore and repair coherent companion security slice
-        shell: bash
+      - name: Replace cwd dotenv discovery with explicit environment authority
+        shell: python
         run: |
-          set -euo pipefail
-          git fetch --no-tags --depth=1 origin 33b828f01858abbb86f4d34010941114577c0f77
-          git checkout 33b828f01858abbb86f4d34010941114577c0f77 -- \
-            browser-extension/bridge-server.ts \
-            browser-extension/package.json
-          rm -f \
-            browser-extension/bridge-authenticated-client.test.ts \
-            browser-extension/bridge-authenticated-client.ts \
-            browser-extension/bridge-endpoint-policy.ts \
-            browser-extension/bridge-forwarding-security.test.ts \
-            browser-extension/bridge-identity-verifier.ts
-          python - <<'PY'
           from pathlib import Path
 
           path = Path('browser-extension/bridge-server.ts')
           text = path.read_text(encoding='utf-8')
           replacements = [
               (
-                  "import { existsSync, readFileSync } from 'node:fs';",
-                  "import { existsSync } from 'node:fs';",
+                  "import { config } from 'dotenv';",
+                  "import { loadWorkspaceEnvironment } from './environment.js';",
               ),
-              ('response = await authenticatedBridgeRequest({', 'response = await requestAuthenticatedBridge({'),
+              (
+                  "config();",
+                  "const workspaceConfigPath = loadWorkspaceEnvironment();",
+              ),
+              (
+                  "console.log(`OpenBrowser Workspace companion listening on http://${host}:${port}`);",
+                  "console.log(`OpenBrowser Workspace companion listening on http://${host}:${port} (config: ${workspaceConfigPath ?? 'process environment only'})`);",
+              ),
           ]
           for old, new in replacements:
               if text.count(old) != 1:
-                  raise SystemExit(f'Expected one companion repair anchor, found {text.count(old)}: {old!r}')
+                  raise SystemExit(f'Expected one environment integration anchor, found {text.count(old)}: {old!r}')
               text = text.replace(old, new, 1)
           path.write_text(text, encoding='utf-8')
-          PY
       - name: Regenerate and verify companion
         working-directory: browser-extension
         shell: bash
@@ -73,9 +67,19 @@ jobs:
         shell: bash
         run: |
           cat > companion-recovery-manifest.txt <<'EOF'
-          restore browser-extension/bridge-server.ts
-          restore browser-extension/package.json
-          restore browser-extension/pnpm-lock.yaml
+          replace browser-extension/bridge-server.ts
+          replace browser-extension/bridge-server.test.ts
+          replace browser-extension/bridge-connection-transport.ts
+          replace browser-extension/bridge-connection-transport.test.ts
+          replace browser-extension/bridge-trust.ts
+          replace browser-extension/bridge-trust.test.ts
+          replace browser-extension/bridge-instance-pinning.test.ts
+          replace browser-extension/bridge-token-normalization.test.ts
+          replace browser-extension/environment.ts
+          replace browser-extension/environment.test.ts
+          replace browser-extension/package.json
+          replace browser-extension/tsconfig.json
+          replace browser-extension/pnpm-lock.yaml
           delete browser-extension/bridge-authenticated-client.test.ts
           delete browser-extension/bridge-authenticated-client.ts
           delete browser-extension/bridge-endpoint-policy.ts
@@ -88,7 +92,17 @@ jobs:
           name: verified-companion-recovery
           path: |
             browser-extension/bridge-server.ts
+            browser-extension/bridge-server.test.ts
+            browser-extension/bridge-connection-transport.ts
+            browser-extension/bridge-connection-transport.test.ts
+            browser-extension/bridge-trust.ts
+            browser-extension/bridge-trust.test.ts
+            browser-extension/bridge-instance-pinning.test.ts
+            browser-extension/bridge-token-normalization.test.ts
+            browser-extension/environment.ts
+            browser-extension/environment.test.ts
             browser-extension/package.json
+            browser-extension/tsconfig.json
             browser-extension/pnpm-lock.yaml
             companion-recovery-manifest.txt
           if-no-files-found: error
