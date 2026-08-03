@@ -88,7 +88,9 @@ export async function ensureBridgeSecurityEnvironment(
       await chmod(configPath, 0o600);
     }
   } else {
-    await access(configPath).catch(() => undefined);
+    await access(configPath).catch((error) => {
+      console.warn(`Config file not accessible: ${configPath}`, error);
+    });
   }
 
   return {
