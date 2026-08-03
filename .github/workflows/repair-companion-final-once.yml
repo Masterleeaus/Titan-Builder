@@ -14,14 +14,14 @@ permissions:
   contents: write
 
 concurrency:
-  group: repair-companion-final-${{ github.event.pull_request.number }}
+  group: repair-companion-gpt56-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   repair-verify-publish:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'fix/current-main-verification-regressions' &&
+      github.event.pull_request.head.ref == 'fix/current-main-recovery-gpt56' &&
       github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -29,11 +29,11 @@ jobs:
       - name: Check out exact recovery branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: fix/current-main-verification-regressions
+          ref: fix/current-main-recovery-gpt56
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Restore lock and repair exact merge artifacts
+      - name: Restore lock and repair exact companion contracts
         run: |
           git show 51683d900f5f8958b2845ada252f468bb3aa6f6d:browser-extension/pnpm-lock.yaml > browser-extension/pnpm-lock.yaml
           python - <<'PY'
@@ -47,8 +47,22 @@ jobs:
                   "import { existsSync } from 'node:fs';",
               ),
               (
+                  "export { parseLoopbackBridgeUrl } from './bridge-endpoint-policy.js';\n",
+                  "export { parseLoopbackBridgeUrl } from './bridge-endpoint-policy.js';\n"
+                  "export { loadWorkspaceEnvironment as loadCompanionEnvironment } from './environment.js';\n",
+              ),
+              (
                   "  bridgeRequest?: typeof requestAuthenticatedBridge;\n",
                   "",
+              ),
+              (
+                  "  const explicit = options.databasePath ?? process.env.WORKSPACE_DB_PATH;\n",
+                  "  const configuredPath = process.env.WORKSPACE_DB_PATH?.trim();\n"
+                  "  const explicit = options.databasePath ?? (\n"
+                  "    configuredPath && !['undefined', 'null'].includes(configuredPath.toLowerCase())\n"
+                  "      ? configuredPath\n"
+                  "      : undefined\n"
+                  "  );\n",
               ),
               (
                   "  const databasePath = path.resolve(\n"
@@ -60,6 +74,17 @@ jobs:
                   "  const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;\n"
                   "  const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });\n",
                   "  const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });\n",
+              ),
+              (
+                  "    if (error instanceof WorkspaceHttpError) {\n"
+                  "      return reply.code(error.statusCode).send({ error: error.message });\n"
+                  "    }\n",
+                  "    if (error instanceof WorkspaceHttpError) {\n"
+                  "      return reply.code(error.statusCode).send({\n"
+                  "        error: error.statusCode >= 500 ? 'Workspace operation failed' : error.message,\n"
+                  "        detail: error.statusCode >= 500 ? error.message : undefined,\n"
+                  "      });\n"
+                  "    }\n",
               ),
           ]
           for old, new in replacements:
