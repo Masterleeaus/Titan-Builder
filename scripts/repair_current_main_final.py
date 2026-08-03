@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+
+VERIFIED_COMPANION_REF = '51683d900f5f8958b2845ada252f468bb3aa6f6d'
 
 
 def replace_once(path: str, old: str, new: str) -> None:
@@ -24,6 +27,15 @@ def replace_between(path: str, start: str, end: str, replacement: str = '') -> N
         source[:start_index] + replacement + source[end_index:],
         encoding='utf-8',
     )
+
+
+def restore_verified_companion_manifest() -> None:
+    content = subprocess.check_output([
+        'git',
+        'show',
+        f'{VERIFIED_COMPANION_REF}:browser-extension/package.json',
+    ])
+    Path('browser-extension/package.json').write_bytes(content)
 
 
 def repair_install_doctor() -> None:
@@ -241,6 +253,7 @@ export async function discoverSkillPackages(libraryRoot: string): Promise<Loaded
 
 
 def main() -> None:
+    restore_verified_companion_manifest()
     repair_install_doctor()
     repair_operations()
     repair_project_path()
