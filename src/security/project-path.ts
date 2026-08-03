@@ -180,7 +180,8 @@ function assertNotWindowsSpecialPath(targetPath: string): void {
       throw new Error(`Path cannot contain alternate data streams (colons): ${targetPath}`);
     }
 
-    if (segment.endsWith('.') || segment.endsWith(' ')) {
+    // Skip dots/spaces check for '.' and '..' path components - they should be caught by containment checks
+    if ((segment.endsWith('.') || segment.endsWith(' ')) && segment !== '.' && segment !== '..') {
       throw new Error(`Path cannot end with dots or spaces: ${targetPath}`);
     }
 

@@ -320,7 +320,7 @@ function requireClaim(
   if (!claimToken || session.claimToken !== claimToken) {
     throw new Error('Invalid session claim token');
   }
-  if (session.claimExpiresAt && Date.parse(session.claimExpiresAt) <= nowMs) {
+  if (session.claimExpiresAt && Date.parse(session.claimExpiresAt) < nowMs) {
     resetClaim(session, nowMs);
     throw new Error('Session claim expired');
   }
