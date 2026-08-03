@@ -29,10 +29,16 @@ export interface ActivationResult {
 }
 
 function compareVersions(current: string, required: string): boolean {
-  const parse = (v: string) => {
-    const match = v.match(/^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z0-9.-]+))?(?:\+([a-zA-Z0-9.-]+))?$/);
-    if (!match) return [0, 0, 0];
-    return [parseInt(match[1]!, 10), parseInt(match[2]!, 10), parseInt(match[3]!, 10)];
+  const parse = (v: string): number[] => {
+    const match = v.match(/^(\d+)\.(\d+)\.(\d+)/);
+    if (!match || match.length < 4) return [0, 0, 0];
+    const major = parseInt(match[1], 10);
+    const minor = parseInt(match[2], 10);
+    const patch = parseInt(match[3], 10);
+    if (!Number.isInteger(major) || !Number.isInteger(minor) || !Number.isInteger(patch)) {
+      return [0, 0, 0];
+    }
+    return [major, minor, patch];
   };
   const curr = parse(current);
   const req = parse(required);
