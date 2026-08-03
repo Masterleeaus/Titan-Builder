@@ -86,6 +86,7 @@ jobs:
           cp browser-extension/tsconfig.json "$verified_dir/"
           cp browser-extension/pnpm-lock.yaml "$verified_dir/"
 
+          git reset --hard
           git checkout --detach b94e83d307a9fad830ab5fa17841369f758887e6
           cp "$verified_dir"/* browser-extension/
           rm -f \
