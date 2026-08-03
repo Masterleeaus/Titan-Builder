@@ -1,0 +1,155 @@
+name: Repair current main source coherence
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: repair-current-main-source
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/current-main-verification-regressions
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Restore coherent verified source slices
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git show 4ee7a97d554bd4986a74519330ad5286e60ab3b4:src/context/directory-tree.ts > src/context/directory-tree.ts
+          git show 4ee7a97d554bd4986a74519330ad5286e60ab3b4:src/context/file-context.ts > src/context/file-context.ts
+          git show 7262c837bd753a38f3d83492b187b10487ea07d0:src/operations/index.ts > src/operations/index.ts
+          git show 7262c837bd753a38f3d83492b187b10487ea07d0:src/security/project-path.ts > src/security/project-path.ts
+          git show 6b2e61a73313b9b4381d89fcd86dcec6f1aa9562:src/skills/dispatcher.ts > src/skills/dispatcher.ts
+          git show ea3f60efede32227f7bbe93b32455e99fbfc4633:src/tools/registry.ts > src/tools/registry.ts
+
+          python - <<'PY'
+          from pathlib import Path
+
+          doctor = Path('src/diagnostics/install-doctor.ts')
+          text = doctor.read_text(encoding='utf-8')
+          old = """        values: Object.fromEntries(
+          Object.entries(input.env).filter(([, value]) => value !== undefined && value !== null),
+        ),"""
+          new = """        values: Object.fromEntries(
+          Object.entries(input.env)
+            .filter((entry): entry is [string, string] => entry[1] !== undefined && entry[1] !== null),
+        ),"""
+          if old not in text:
+              raise SystemExit('install-doctor repair marker not found')
+          doctor.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          routes = Path('src/server/browser-workflow-routes.ts')
+          text = routes.read_text(encoding='utf-8')
+          marker = "import { listToolManifests } from '../tools/registry.js';\n"
+          if marker not in text:
+              raise SystemExit('browser route import marker not found')
+          text = text.replace(marker, marker + "import { logger } from '../shared/index.js';\n", 1)
+          text = text.replace(
+              "logger.warn('SSE update fetch failed', { runId, error });",
+              "logger.warn({ runId, error }, 'SSE update fetch failed');",
+          )
+          routes.write_text(text, encoding='utf-8')
+
+          server = Path('src/server/index.ts')
+          text = server.read_text(encoding='utf-8')
+          text = text.replace(
+              "import { createBridgeIdentityProof } from './bridge-identity.js';",
+              "import { createBridgeIdentityResponse, isValidBridgeIdentityChallenge } from './bridge-identity.js';",
+          )
+          text = text.replace(
+              "const PORT = Number(process.env.PORT ?? 5000);",
+              "const PORT = Number(process.env.PORT ?? 5000);\nconst MAX_RESPONSE_BYTES = 10 * 1024 * 1024;",
+              1,
+          )
+          text = text.replace(
+              "app.post('/operations/preview', bridgeBodyLimit('/operations/preview'), async (request) => {",
+              "app.post('/operations/preview', bridgeBodyLimit('/operations/preview'), async (request, reply) => {",
+              1,
+          )
+          server.write_text(text, encoding='utf-8')
+
+          session = Path('src/server/session-store.ts')
+          text = session.read_text(encoding='utf-8')
+          marker = "let persistenceStore: PersistentSessionStore | undefined;\n"
+          if marker not in text:
+              raise SystemExit('session store persistence marker not found')
+          addition = r'''
+let persistenceWrite: Promise<void> = Promise.resolve();
+
+export async function initializeSessionStore(
+  store: PersistentSessionStore,
+): Promise<{ recovered: number }> {
+  persistenceStore = store;
+  const loaded = store.pruneByPolicy(await store.loadSessions());
+  sessions.clear();
+  for (const session of loaded) {
+    if (session.status === 'claimed') {
+      session.status = 'pending';
+      clearClaim(session);
+    }
+    sessions.set(session.id, session);
+  }
+  await store.saveSessions([...sessions.values()]);
+  return { recovered: sessions.size };
+}
+
+function persistSessions(): Promise<void> {
+  const store = persistenceStore;
+  if (!store) return Promise.resolve();
+  persistenceWrite = persistenceWrite.then(async () => {
+    const retained = store.pruneByPolicy([...sessions.values()]);
+    sessions.clear();
+    for (const session of retained) sessions.set(session.id, session);
+    await store.saveSessions(retained);
+  });
+  return persistenceWrite;
+}
+'''
+          text = text.replace(marker, marker + addition, 1)
+          session.write_text(text, encoding='utf-8')
+          PY
+
+          git diff --check
+      - name: Activate pnpm
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck repaired source
+        run: pnpm run typecheck
+      - name: Verify root application
+        run: pnpm run verify
+      - name: Install companion dependencies
+        working-directory: browser-extension
+        run: pnpm install --frozen-lockfile
+      - name: Verify companion
+        working-directory: browser-extension
+        run: pnpm run verify
+      - name: Publish verified repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/repair-current-main-source.yml
+          git add -A
+          git commit -m "fix(ci): restore coherent current-main source"
+          git push origin HEAD:fix/current-main-verification-regressions
