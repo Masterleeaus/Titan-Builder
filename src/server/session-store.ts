@@ -317,7 +317,7 @@ function requireClaim(
   if (session.status !== 'claimed') {
     throw new Error(`Session is not claimed (status: ${session.status})`);
   }
-  if (!claimToken || session.claimToken !== claimToken) {
+  if (!claimToken || !session.claimToken || !constantTimeEqual(claimToken, session.claimToken)) {
     throw new Error('Invalid session claim token');
   }
   if (session.claimExpiresAt && Date.parse(session.claimExpiresAt) < nowMs) {
@@ -327,37 +327,8 @@ function requireClaim(
   return session;
 }
 
-async function persistSessions(): Promise<void> {
-  if (!persistenceStore) return;
-  await persistenceStore.saveSessions(Array.from(sessions.values()));
-}
-
-export async function initializeSessionStore(
-  store: PersistentSessionStore,
-): Promise<{ recovered: number }> {
-  persistenceStore = store;
-  const persisted = await store.loadSessions();
-  const nowMs = Date.now();
-
-  for (const session of persisted) {
-    // Recovery for pending and claimed sessions
-    if (session.status === 'claimed') {
-      resetClaim(session, nowMs);
-    }
-    sessions.set(session.id, session);
-  }
-
-  // Prune old sessions according to retention policy
-  const pruned = persistenceStore.pruneByPolicy(Array.from(sessions.values()), nowMs);
-  sessions.clear();
-  for (const session of pruned) {
-    sessions.set(session.id, session);
-  }
-
-  await persistSessions();
-  return { recovered: persisted.length };
-}
-
-export function setPersistenceStore(store: PersistentSessionStore): void {
-  persistenceStore = store;
+function constantTimeEqual(left: string, right: string): boolean {
+  const leftBytes = Buffer.from(left);
+  const rightBytes = Buffer.from(right);
+  return leftBytes.length === rightBytes.length && crypto.timingSafeEqual(leftBytes, rightBytes);
 }

@@ -89,6 +89,7 @@ import {
   startSessionHeartbeat,
   writeCorsPreflight,
 } from './sse-hub.js';
+import { createRateLimiter } from './rate-limiter.js';
 
 loadOpenBrowserEnvironment();
 
@@ -115,12 +116,9 @@ export interface ServerOptions {
 }
 
 export async function createBridgeServer(options: ServerOptions = {}): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false, bodyLimit: SMALL_BODY_LIMIT_BYTES });
-  app.setErrorHandler((error, request, reply) => {
-    if (isPayloadTooLargeError(error)) {
-      return reply.code(413).send(createPayloadTooLargeResponse(request));
-    }
-    return reply.send(error);
+  const app = Fastify({
+    logger: false,
+    bodyLimit: 4_194_304,
   });
   const projectRoot = await canonicalizeProjectRoot(options.projectRoot ?? process.cwd());
   const protectedBranches = normalizeProtectedBranches(
@@ -159,6 +157,7 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
       ((request, selectedProjectRoot) =>
         queueBrowserWorkflowPromptAndWait(request, selectedProjectRoot)),
   });
+  const claimRateLimiter = createRateLimiter({ windowMs: 60_000, maxFailures: 10, penaltyMs: 5_000 });
 
   await app.register(cors, {
     origin: (origin, callback) => {
@@ -234,8 +233,23 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
 
   app.get('/health', async () => ({
     status: 'ok',
+    product: 'OpenBrowser',
+    version: '0.5.0',
+  }));
+
+  app.get('/ready', async () => ({
+    status: 'ready',
+    product: 'OpenBrowser',
+    version: '0.5.0',
+    protocol: 'v1',
     authentication: insecureDevelopment ? 'insecure-development' : 'required',
-    extensionOrigins: securityPolicy.allowedExtensionOrigins(),
+    instance: process.pid,
+    capabilities: {
+      sessions: true,
+      memory: true,
+      skills: true,
+      browser: true,
+    },
   }));
 
   await registerBrowserWorkflowRoutes(app, { coordinator: browserCoordinator });
@@ -508,8 +522,18 @@ export async function createBridgeServer(options: ServerOptions = {}): Promise<F
   app.post('/browser/claim', bridgeBodyLimit('/browser/claim'), async (request) => {
     const body = request.body as { sessionId?: string; claimantId?: string };
     if (!body.sessionId) throw new Error('sessionId is required');
+
+    const clientId = request.ip;
+    if (!claimRateLimiter.recordFailure(clientId)) {
+      throw new Error('Too many claim attempts, please retry later');
+    }
+
     const claim = tryClaimSession(body.sessionId, { claimantId: body.claimantId });
-    if (!claim) return { claimed: false };
+    if (!claim) {
+      return { claimed: false };
+    }
+
+    claimRateLimiter.recordSuccess(clientId);
     return {
       claimed: true,
       claimToken: claim.claimToken,

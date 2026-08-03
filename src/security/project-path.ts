@@ -134,68 +134,66 @@ function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
 }
 
-function assertNotReservedVcsPath(targetPath: string): void {
-  const normalized = targetPath.replace(/\\/g, '/').toLowerCase();
+const VCS_RESERVED_PREFIXES = ['.git', '.hg', '.svn', '.fossil', '.bzr', '.darcs'];
+const OPENBROWSER_RESERVED = '.openbrowser';
+
+export async function isReservedPath(
+  projectRoot: string,
+  absolutePath: string,
+): Promise<boolean> {
+  const relative = path.relative(projectRoot, absolutePath);
+  const normalized = relative.replace(/\\/g, '/');
+
+  if (isVcsReservedPath(normalized)) {
+    return true;
+  }
+
+  if (normalized === OPENBROWSER_RESERVED || normalized.startsWith(`${OPENBROWSER_RESERVED}/`)) {
+    return true;
+  }
+
   const segments = normalized.split('/').filter(Boolean);
-
-  const vcsReserved = [
-    '.git',
-    '.hg',
-    '.svn',
-    '.fossil',
-    '.darcs',
-    '_darcs',
-    '.pijul',
-    '.jj',
-    '.openbrowser',
-  ];
-
-  for (const segment of segments) {
-    if (vcsReserved.includes(segment)) {
-      throw new Error(`Path cannot access reserved metadata directory: ${targetPath} (contains ${segment})`);
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i];
+    if (isVcsReservedName(segment)) {
+      return true;
     }
   }
 
-  if (normalized.includes('/.git/') || normalized.startsWith('.git/')) {
-    throw new Error(`Path cannot access Git metadata: ${targetPath}`);
-  }
+  return false;
 }
 
-function assertNotWindowsSpecialPath(targetPath: string): void {
-  const normalized = targetPath.replace(/\\/g, '/');
-  const segments = normalized.split('/');
+function isVcsReservedPath(normalizedPath: string): boolean {
+  for (const prefix of VCS_RESERVED_PREFIXES) {
+    const lowerPath = normalizedPath.toLowerCase();
+    const lowerPrefix = prefix.toLowerCase();
 
-  const deviceNames = new Set([
-    'con', 'prn', 'aux', 'nul',
-    'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
-    'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9',
-  ]);
-
-  for (let segment of segments) {
-    if (!segment) continue;
-
-    segment = segment.toLowerCase();
-
-    if (segment.includes(':')) {
-      throw new Error(`Path cannot contain alternate data streams (colons): ${targetPath}`);
+    if (lowerPath === lowerPrefix || lowerPath.startsWith(`${lowerPrefix}/`)) {
+      return true;
     }
 
-    // Skip dots/spaces check for '.' and '..' path components - they should be caught by containment checks
-    if ((segment.endsWith('.') || segment.endsWith(' ')) && segment !== '.' && segment !== '..') {
-      throw new Error(`Path cannot end with dots or spaces: ${targetPath}`);
-    }
-
-    const baseNameWithoutExtension = segment.split('.')[0]?.toLowerCase();
-    if (baseNameWithoutExtension && deviceNames.has(baseNameWithoutExtension)) {
-      throw new Error(`Path cannot use reserved Windows device name: ${targetPath}`);
+    if (normalizedPath === '.gitfile' || normalizedPath.startsWith('.gitfile/')) {
+      return true;
     }
   }
 
-  if (/^[a-z]:/i.test(normalized)) {
-    throw new Error(`Path cannot be absolute with drive letter: ${targetPath}`);
+  return false;
+}
+
+function isVcsReservedName(name: string): boolean {
+  const lower = name.toLowerCase();
+
+  const directoryReserved = [
+    '.git', '.gitmodules', '.gitattributes', '.gitignore',
+    '.hg', '.hgignore', '.hgsub',
+    '.svn', '.cvs', '.fossil', '.bzr', '.darcs',
+  ];
+
+  for (const reserved of directoryReserved) {
+    if (lower === reserved.toLowerCase() || lower === `${reserved.toLowerCase()}.file`) {
+      return true;
+    }
   }
 
-  if (normalized.startsWith('\\\\')) {
-    throw new Error(`Path cannot be UNC path: ${targetPath}`);
-  }
+  return false;
 }

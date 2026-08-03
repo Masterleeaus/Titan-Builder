@@ -534,7 +534,7 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
 }
 
 function normalizeListLimit(value?: number): number {
-  if (value === undefined) return Number.MAX_SAFE_INTEGER;
+  if (value === undefined) return 100;
   if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.min(Math.round(value), 500);
 }
