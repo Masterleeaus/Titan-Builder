@@ -1,0 +1,197 @@
+name: Fix issue 162 once
+
+on:
+  push:
+    branches:
+      - fix/162-observable-best-effort-errors
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+
+      - name: Add red regression test
+        shell: bash
+        run: |
+          cat > src/shared/silent-catch-policy.test.ts <<'EOF'
+          import assert from 'node:assert/strict';
+          import { readdir, readFile } from 'node:fs/promises';
+          import path from 'node:path';
+          import test from 'node:test';
+
+          const SOURCE_ROOT = path.resolve(import.meta.dirname, '..');
+          const SILENT_PROMISE_CATCH = /\.catch\(\s*\(\s*\)\s*=>\s*(?:undefined|null)\s*\)/gu;
+
+          async function collectProductionSources(directory: string): Promise<string[]> {
+            const entries = await readdir(directory, { withFileTypes: true });
+            const files: string[] = [];
+            for (const entry of entries) {
+              const absolutePath = path.join(directory, entry.name);
+              if (entry.isDirectory()) {
+                files.push(...await collectProductionSources(absolutePath));
+                continue;
+              }
+              if (!entry.isFile() || !/\.(?:ts|js|mjs|cjs)$/u.test(entry.name)) continue;
+              if (/\.(?:test|spec)\./u.test(entry.name)) continue;
+              files.push(absolutePath);
+            }
+            return files;
+          }
+
+          test('production source does not silently discard rejected promises', async () => {
+            const offenders: string[] = [];
+            for (const filePath of await collectProductionSources(SOURCE_ROOT)) {
+              const source = await readFile(filePath, 'utf8');
+              for (const match of source.matchAll(SILENT_PROMISE_CATCH)) {
+                const line = source.slice(0, match.index).split('\n').length;
+                offenders.push(`${path.relative(SOURCE_ROOT, filePath)}:${line}`);
+              }
+            }
+            assert.deepEqual(
+              offenders,
+              [],
+              `Rejected promises must be handled or logged; found silent catches:\n${offenders.join('\n')}`,
+            );
+          });
+          EOF
+
+          set +e
+          node --experimental-strip-types --test src/shared/silent-catch-policy.test.ts > /tmp/issue-162-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/issue-162-red.log
+          if [ "$status" -eq 0 ]; then
+            echo "Expected the regression test to fail before the fix"
+            exit 1
+          fi
+
+      - name: Apply observable error-handling fix
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file_path = Path(path)
+              text = file_path.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected exactly one match in {path}, found {count}: {old[:80]!r}")
+              file_path.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              'src/server/browser-workflow-routes.ts',
+              "import type { FastifyInstance, FastifyReply } from 'fastify';\n",
+              "import type { FastifyInstance, FastifyReply } from 'fastify';\nimport { logger } from '../shared/index.js';\n",
+          )
+          replace_once(
+              'src/server/browser-workflow-routes.ts',
+              "logger.warn({ runId, error }, 'SSE update fetch failed');",
+              "logger.warn({ err: error, runId }, 'SSE update fetch failed');",
+          )
+
+          replace_once(
+              'src/client/bridge-client.ts',
+              "import { loadOpenBrowserEnvironment } from '../config/environment.js';\n",
+              "import { loadOpenBrowserEnvironment } from '../config/environment.js';\nimport { logger } from '../shared/index.js';\n",
+          )
+          replace_once(
+              'src/client/bridge-client.ts',
+              "      reader.cancel().catch(() => undefined);",
+              "      void reader.cancel().catch((error: unknown) => {\n        logger.debug({ err: error, sessionId }, 'Failed to cancel session SSE reader during cleanup');\n      });",
+          )
+          replace_once(
+              'src/client/bridge-client.ts',
+              "    } catch {\n      // Ignore malformed SSE payloads.\n    }",
+              "    } catch (error) {\n      logger.debug({ err: error, event }, 'Ignored malformed or rejected SSE payload');\n    }",
+          )
+
+          replace_once(
+              'src/operations/process-runner.ts',
+              "import process from 'node:process';\n",
+              "import process from 'node:process';\nimport { logger } from '../shared/index.js';\n",
+          )
+          replace_once(
+              'src/operations/process-runner.ts',
+              "  } catch {\n    return undefined;\n  }\n}\n\nasync function terminateWindowsProcessTree",
+              "  } catch (error) {\n    logger.debug({ err: error, rootPid }, 'Failed to enumerate POSIX process tree; falling back to PID probes');\n    return undefined;\n  }\n}\n\nasync function terminateWindowsProcessTree",
+          )
+          replace_once(
+              'src/operations/process-runner.ts',
+              "  } catch {\n    return new Set([rootPid]);\n  }\n}\n\nfunction collectDescendants",
+              "  } catch (error) {\n    logger.debug({ err: error, rootPid }, 'Failed to enumerate Windows process tree; falling back to root PID');\n    return new Set([rootPid]);\n  }\n}\n\nfunction collectDescendants",
+          )
+          replace_once(
+              'src/operations/process-runner.ts',
+              "  await execFileText('taskkill.exe', args).catch(() => undefined);",
+              "  try {\n    await execFileText('taskkill.exe', args);\n  } catch (error) {\n    logger.debug({ err: error, pid, force }, 'taskkill failed during best-effort process-tree termination');\n  }",
+          )
+
+          replace_once(
+              'src/operations/index.ts',
+              "import type { FileOperation } from '../core/index.js';\n",
+              "import type { FileOperation } from '../core/index.js';\nimport { logger } from '../shared/index.js';\n",
+          )
+          replace_once(
+              'src/operations/index.ts',
+              "        logger.error({ journalError }, 'Failed to write transaction journal during error handling');",
+              "        logger.error(\n          { err: journalError, transactionId: transaction.journal.id },\n          'Failed to write transaction journal during error handling',\n        );",
+          )
+          replace_once(
+              'src/operations/index.ts',
+              "    await writeTransactionJournal(transaction).catch(() => undefined);\n    throw new Error(\n      `Operation transaction committed, but post-commit finalization failed: ${message}. Applied changes were not rolled back.`,",
+              "    await writeTransactionJournal(transaction).catch((journalError) => {\n      logger.error(\n        { err: journalError, transactionId: transaction.journal.id },\n        'Failed to persist post-commit finalization error',\n      );\n    });\n    throw new Error(\n      `Operation transaction committed, but post-commit finalization failed: ${message}. Applied changes were not rolled back.`,",
+          )
+          replace_once(
+              'src/operations/index.ts',
+              "    await fs.remove(validated.backupRoot);",
+              "    await fs.remove(transaction.backupRoot);",
+          )
+          replace_once(
+              'src/operations/index.ts',
+              "    await writeTransactionJournal(transaction).catch(() => undefined);\n    return 'rollback_failed';",
+              "    await writeTransactionJournal(transaction).catch((journalError) => {\n      logger.error(\n        { err: journalError, transactionId: transaction.journal.id },\n        'Failed to persist rollback failure in transaction journal',\n      );\n    });\n    return 'rollback_failed';",
+          )
+
+          replace_once(
+              'package.json',
+              "src/client/response-timeout.test.ts src/operations/mkdir-normalize.test.ts",
+              "src/client/response-timeout.test.ts src/shared/silent-catch-policy.test.ts src/operations/mkdir-normalize.test.ts",
+          )
+          PY
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify regression and full suite
+        run: |
+          node --experimental-strip-types --test src/shared/silent-catch-policy.test.ts
+          pnpm run verify
+
+      - name: Publish verified fix
+        shell: bash
+        run: |
+          rm .github/workflows/fix-162-once.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/server/browser-workflow-routes.ts src/client/bridge-client.ts src/operations/process-runner.ts src/operations/index.ts src/shared/silent-catch-policy.test.ts package.json .github/workflows/fix-162-once.yml
+          git diff --cached --check
+          git commit -m "fix: make best-effort failures observable (#162)"
+          git push origin HEAD:fix/162-observable-best-effort-errors
