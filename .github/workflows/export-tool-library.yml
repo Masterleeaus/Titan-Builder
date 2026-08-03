@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - artifact/tool-library-export
+  pull_request:
+    branches:
+      - feature/tool-library-expansion
 
 permissions:
   contents: read
