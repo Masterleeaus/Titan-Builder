@@ -104,7 +104,7 @@ jobs:
           PY
 
           python scripts/repair_current_main_final.py
-          git show acfa07cb9d1490deabdefff8e269ed5d2a4c31aa:src/server/session-store.ts > src/server/session-store.ts
+          git show 6398101816f8fb5b59f5c4357923fe584ba2fa85:src/server/session-store.ts > src/server/session-store.ts
 
           python - <<'PY'
           from pathlib import Path
