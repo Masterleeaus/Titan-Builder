@@ -34,7 +34,7 @@ jobs:
 
       - name: Restore exact independently verified companion lock
         run: |
-          git show 533dc67465e19cfddf517a96a5f4fa1e21f0c36d:browser-extension/pnpm-lock.yaml > browser-extension/pnpm-lock.yaml
+          git show 51683d900f5f8958b2845ada252f468bb3aa6f6d:browser-extension/pnpm-lock.yaml > browser-extension/pnpm-lock.yaml
           rm .github/workflows/repair-companion-lock-once.yml
           git diff --check
 
