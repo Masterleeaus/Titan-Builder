@@ -106,7 +106,9 @@ export async function registerBrowserWorkflowRoutes(
           clearInterval(heartbeat);
           reply.raw.end();
         }
-      }).catch(() => undefined);
+      }).catch((error) => {
+        logger.warn('SSE update fetch failed', { runId, error });
+      });
     }, 1000);
     const heartbeat = setInterval(() => reply.raw.write(': heartbeat\n\n'), 15_000);
     request.raw.on('close', () => {

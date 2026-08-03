@@ -231,7 +231,9 @@ export async function executePlannedOperations(
     } catch (historyError) {
       transaction.journal.error = `${message}; history write failed: ${formatUnknownError(historyError)}`;
       transaction.journal.updatedAt = new Date().toISOString();
-      await writeTransactionJournal(transaction).catch(() => undefined);
+      await writeTransactionJournal(transaction).catch((journalError) => {
+        logger.error('Failed to write transaction journal during error handling', { journalError });
+      });
     }
 
     throw new Error(
@@ -1032,7 +1034,10 @@ async function safeWriteFile(filePath: string, content: string): Promise<void> {
     path.dirname(filePath),
     `.${path.basename(filePath)}.openbrowser-${crypto.randomUUID()}.tmp`,
   );
-  const existingMode = await fs.stat(filePath).then((stats) => stats.mode).catch(() => undefined);
+  const existingMode = await fs.stat(filePath).then((stats) => stats.mode).catch((statError) => {
+    logger.debug('Could not stat existing file; will use default mode', { filePath, statError });
+    return undefined;
+  });
   const handle = await open(temporaryPath, flags, existingMode ?? 0o666);
   try {
     await handle.writeFile(content, 'utf8');
@@ -1046,7 +1051,9 @@ async function safeWriteFile(filePath: string, content: string): Promise<void> {
     }
     await renamePath(temporaryPath, filePath);
   } catch (error) {
-    await fs.remove(temporaryPath).catch(() => undefined);
+    await fs.remove(temporaryPath).catch((removeError) => {
+      logger.warn('Failed to clean up temporary file during error recovery', { temporaryPath, removeError });
+    });
     throw error;
   }
 }
