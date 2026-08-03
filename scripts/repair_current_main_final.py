@@ -68,6 +68,106 @@ def repair_operations() -> None:
         "logger.warn('Failed to clean up temporary file during error recovery', { temporaryPath, removeError });",
         "logger.warn({ err: removeError, temporaryPath }, 'Failed to clean up temporary file during error recovery');",
     )
+    replace_once(
+        'src/operations/index.ts',
+        """  const resolved = await resolveProjectPath(projectRoot, relativePath, {
+    requireExisting: true,
+    expectedType: 'directory',
+  });
+""",
+        """  const resolved = await resolveInternalMetadataPath(projectRoot, relativePath, {
+    requireExisting: true,
+    expectedType: 'directory',
+  });
+""",
+    )
+    replace_once(
+        'src/operations/index.ts',
+        """  const resolvedBackupPath = await resolveProjectPath(projectRoot, projectRelativePath, {
+    requireExisting: true,
+    expectedType: 'file',
+  });
+""",
+        """  const resolvedBackupPath = await resolveInternalMetadataPath(projectRoot, projectRelativePath, {
+    requireExisting: true,
+    expectedType: 'file',
+  });
+""",
+    )
+    replace_between(
+        'src/operations/index.ts',
+        'async function resolveTransactionMetadataPath(',
+        'async function appendTransactionHistory(',
+        """async function resolveInternalMetadataPath(
+  projectRoot: string,
+  relativePath: string,
+  options: { requireExisting?: boolean; expectedType?: 'file' | 'directory' } = {},
+): Promise<string> {
+  assertSafeRollbackRelativePath(relativePath, 'internal metadata');
+  const candidate = path.resolve(projectRoot, relativePath);
+  if (!isPathInside(projectRoot, candidate)) {
+    throw new Error(`Internal metadata path escapes project root: ${relativePath}`);
+  }
+
+  const segments = path.relative(projectRoot, candidate).split(path.sep).filter(Boolean);
+  let current = projectRoot;
+  let exists = true;
+
+  for (const segment of segments) {
+    current = path.join(current, segment);
+    try {
+      const metadata = await lstatPath(current);
+      if (metadata.isSymbolicLink()) {
+        throw new Error(`Internal metadata path contains a symbolic link or junction: ${relativePath}`);
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') throw error;
+      exists = false;
+      break;
+    }
+  }
+
+  if (!exists) {
+    if (options.requireExisting) {
+      throw new Error(`Internal metadata path does not exist: ${relativePath}`);
+    }
+    const existingAncestor = path.dirname(current);
+    const canonicalAncestor = await fs.realpath(existingAncestor);
+    if (!isPathInside(projectRoot, canonicalAncestor)) {
+      throw new Error(`Internal metadata ancestor escapes project root: ${relativePath}`);
+    }
+    return candidate;
+  }
+
+  const canonicalTarget = await fs.realpath(candidate);
+  if (!isPathInside(projectRoot, canonicalTarget) || canonicalTarget !== candidate) {
+    throw new Error(`Internal metadata path identity changed: ${relativePath}`);
+  }
+
+  if (options.expectedType) {
+    const metadata = await lstatPath(canonicalTarget);
+    const matches = options.expectedType === 'directory'
+      ? metadata.isDirectory()
+      : metadata.isFile();
+    if (!matches) {
+      throw new Error(`Internal metadata path must be a ${options.expectedType}: ${relativePath}`);
+    }
+  }
+
+  return canonicalTarget;
+}
+
+async function resolveTransactionMetadataPath(
+  transaction: PreparedTransaction,
+  relativePath: string,
+): Promise<string> {
+  const projectRoot = await assertRollbackProjectIdentity(transaction);
+  return resolveInternalMetadataPath(projectRoot, relativePath, { expectedType: 'file' });
+}
+
+""",
+    )
 
 
 def repair_project_path() -> None:
@@ -88,8 +188,29 @@ def repair_server() -> None:
         'src/server/index.ts',
         "} from './bridge-identity.js';\nimport { registerBrowserWorkflowRoutes }",
         "} from './bridge-identity.js';\n"
-        "import { bridgeBodyLimit } from './body-limits.js';\n"
+        "import {\n"
+        "  bridgeBodyLimit,\n"
+        "  createPayloadTooLargeResponse,\n"
+        "  isPayloadTooLargeError,\n"
+        "  SMALL_BODY_LIMIT_BYTES,\n"
+        "} from './body-limits.js';\n"
         "import { registerBrowserWorkflowRoutes }",
+    )
+    replace_once(
+        'src/server/index.ts',
+        """  const app = Fastify({
+    logger: false,
+    bodyLimit: 4_194_304,
+  });
+""",
+        """  const app = Fastify({ logger: false, bodyLimit: SMALL_BODY_LIMIT_BYTES });
+  app.setErrorHandler((error, request, reply) => {
+    if (isPayloadTooLargeError(error)) {
+      return reply.code(413).send(createPayloadTooLargeResponse(request));
+    }
+    return reply.send(error);
+  });
+""",
     )
 
     path = Path('src/server/session-store.ts')
