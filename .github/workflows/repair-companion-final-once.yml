@@ -37,7 +37,199 @@ jobs:
 
       - name: Repair root contracts
         shell: bash
-        run: python scripts/repair_current_main_final.py
+        run: |
+          python scripts/repair_current_main_final.py
+          python - <<'PY'
+          from pathlib import Path
+
+          identity_source = """import crypto from 'node:crypto';
+
+export const BRIDGE_IDENTITY_PROTOCOL = 'openbrowser-bridge' as const;
+export const BRIDGE_IDENTITY_VERSION = '1' as const;
+export const BRIDGE_IDENTITY_SERVICE = BRIDGE_IDENTITY_PROTOCOL;
+export const BRIDGE_IDENTITY_PROTOCOL_VERSION = 1 as const;
+export const BRIDGE_VERSION = '0.5.0';
+
+const CHALLENGE_PATTERN = /^[0-9a-f]{64}$/iu;
+const SOCKET_NONCE_PATTERN = /^[a-f0-9]{64}$/u;
+const INSTANCE_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
+
+export interface BridgeIdentityResponse {
+  service: typeof BRIDGE_IDENTITY_SERVICE;
+  protocolVersion: typeof BRIDGE_IDENTITY_PROTOCOL_VERSION;
+  version: string;
+  instanceId: string;
+  challenge: string;
+  proof: string;
+}
+
+export interface BridgeIdentityBinding {
+  address: string;
+  port: number;
+}
+
+export interface BridgeIdentityProof extends BridgeIdentityBinding {
+  protocol: typeof BRIDGE_IDENTITY_PROTOCOL;
+  version: typeof BRIDGE_IDENTITY_VERSION;
+  instanceId: string;
+  nonce: string;
+  mac: string;
+}
+
+export function isValidBridgeIdentityChallenge(value: unknown): value is string {
+  return typeof value === 'string' && CHALLENGE_PATTERN.test(value);
+}
+
+export function createBridgeIdentityProof(input: {
+  controlToken: string;
+  challenge: string;
+  instanceId: string;
+  version?: string;
+}): string {
+  const version = input.version ?? BRIDGE_VERSION;
+  if (!input.controlToken) throw new Error('Control token is required for bridge identity');
+  if (!isValidBridgeIdentityChallenge(input.challenge)) {
+    throw new Error('A 64-character hexadecimal challenge is required');
+  }
+  if (!input.instanceId) throw new Error('Bridge instance id is required');
+
+  return crypto
+    .createHmac('sha256', input.controlToken)
+    .update(`${BRIDGE_IDENTITY_SERVICE}\\0${version}\\0${input.instanceId}\\0${input.challenge}`)
+    .digest('hex');
+}
+
+export function createBridgeIdentityResponse(input: {
+  controlToken: string;
+  challenge: string;
+  instanceId: string;
+  version?: string;
+}): BridgeIdentityResponse {
+  const version = input.version ?? BRIDGE_VERSION;
+  return {
+    service: BRIDGE_IDENTITY_SERVICE,
+    protocolVersion: BRIDGE_IDENTITY_PROTOCOL_VERSION,
+    version,
+    instanceId: input.instanceId,
+    challenge: input.challenge,
+    proof: createBridgeIdentityProof({ ...input, version }),
+  };
+}
+
+export function createSocketBoundBridgeIdentityProof(
+  controlToken: string,
+  nonce: string,
+  instanceId: string,
+  binding: BridgeIdentityBinding,
+): BridgeIdentityProof {
+  if (!controlToken) throw new Error('Bridge identity proof requires the control token.');
+  if (!SOCKET_NONCE_PATTERN.test(nonce)) {
+    throw new Error('Bridge identity nonce must be 32 random bytes encoded as lowercase hexadecimal.');
+  }
+  if (!INSTANCE_ID_PATTERN.test(instanceId)) {
+    throw new Error('Bridge identity instance ID must be a UUID.');
+  }
+
+  const address = normalizeSocketAddress(binding.address);
+  const port = normalizePort(binding.port);
+  const unsigned = {
+    protocol: BRIDGE_IDENTITY_PROTOCOL,
+    version: BRIDGE_IDENTITY_VERSION,
+    instanceId,
+    nonce,
+    address,
+    port,
+  } as const;
+
+  return {
+    ...unsigned,
+    mac: crypto
+      .createHmac('sha256', controlToken)
+      .update(serializeBridgeIdentity(unsigned))
+      .digest('hex'),
+  };
+}
+
+export function serializeBridgeIdentity(
+  proof: Omit<BridgeIdentityProof, 'mac'>,
+): string {
+  return JSON.stringify([
+    proof.protocol,
+    proof.version,
+    proof.instanceId,
+    proof.nonce,
+    proof.address,
+    proof.port,
+  ]);
+}
+
+function normalizeSocketAddress(value: string): string {
+  const normalized = String(value || '').trim().toLowerCase().replace(/^\\[|\\]$/gu, '');
+  if (!normalized || /[\\r\\n\\0]/u.test(normalized)) {
+    throw new Error('Bridge identity requires a valid local socket address.');
+  }
+  return normalized;
+}
+
+function normalizePort(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 65_535) {
+    throw new Error('Bridge identity requires a valid local socket port.');
+  }
+  return value;
+}
+"""
+          Path('src/server/bridge-identity.ts').write_text(identity_source, encoding='utf-8')
+
+          server_path = Path('src/server/index.ts')
+          server = server_path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str) -> None:
+              global server
+              count = server.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one root bridge artifact, found {count}: {old[:120]!r}')
+              server = server.replace(old, new, 1)
+
+          replace_once(
+              "import {\n  createBridgeIdentityResponse,\n  isValidBridgeIdentityChallenge,\n} from './bridge-identity.js';\nimport { bridgeBodyLimit } from './body-limits.js';",
+              "import {\n  createBridgeIdentityResponse,\n  createSocketBoundBridgeIdentityProof,\n  isValidBridgeIdentityChallenge,\n} from './bridge-identity.js';\nimport {\n  bridgeBodyLimit,\n  createPayloadTooLargeResponse,\n  isPayloadTooLargeError,\n  SMALL_BODY_LIMIT_BYTES,\n} from './body-limits.js';",
+          )
+          replace_once(
+              "  const app = Fastify({\n    logger: false,\n    bodyLimit: 4_194_304,\n  });\n",
+              "  const app = Fastify({\n    logger: false,\n    bodyLimit: SMALL_BODY_LIMIT_BYTES,\n  });\n"
+              "  app.setErrorHandler<Error>((error, request, reply) => {\n"
+              "    if (isPayloadTooLargeError(error)) {\n"
+              "      return reply.code(413).send(createPayloadTooLargeResponse(request));\n"
+              "    }\n"
+              "    return reply.send(error);\n"
+              "  });\n",
+          )
+          replace_once(
+              "  app.get('/health', async (request, reply) => {",
+              "  app.get('/bridge/identity', async (request, reply) => {\n"
+              "    const { nonce } = request.query as { nonce?: unknown };\n"
+              "    if (typeof nonce !== 'string' || !/^[a-f0-9]{64}$/u.test(nonce)) {\n"
+              "      return reply.code(400).send({ error: 'Bridge identity nonce is invalid' });\n"
+              "    }\n"
+              "    if (!controlToken) {\n"
+              "      return reply.code(503).send({ error: 'Bridge identity proof is unavailable' });\n"
+              "    }\n"
+              "    const address = request.socket.localAddress;\n"
+              "    const port = request.socket.localPort;\n"
+              "    if (!address || !port) {\n"
+              "      return reply.code(503).send({ error: 'Bridge socket identity is unavailable' });\n"
+              "    }\n"
+              "    return createSocketBoundBridgeIdentityProof(\n"
+              "      controlToken,\n"
+              "      nonce,\n"
+              "      bridgeInstanceId,\n"
+              "      { address, port },\n"
+              "    );\n"
+              "  });\n\n"
+              "  app.get('/health', async (request, reply) => {",
+          )
+          server_path.write_text(server, encoding='utf-8')
+          PY
 
       - name: Restore lock and repair companion contracts
         shell: bash
