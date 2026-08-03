@@ -322,8 +322,7 @@ export function createBrowserRunCoordinator(
         try {
           await failRun(store, runId, error);
         } catch (failError) {
-          const errorMsg = failError instanceof Error ? failError.message : String(failError);
-          logger.error(`failed to mark run as failed: ${errorMsg}`);
+          logger.error({ failError }, 'failed to mark run as failed');
         }
       });
     });
