@@ -6,9 +6,6 @@ from pathlib import Path
 
 SKILL_RUNTIME_REFERENCE = '04545227c23acc9bcb32cc7b84b5460f3f8ecca2'
 SKILL_RUNTIME_FILES = (
-    'browser-extension/skill-library/packages/project-path-containment/manifest.json',
-    'browser-extension/skill-library/packages/project-path-containment/runtime/entrypoint.js',
-    'browser-extension/src/generated/skill-catalog.js',
     'src/skills/dispatcher.test.ts',
     'src/skills/dispatcher.ts',
     'src/skills/entrypoint.test.ts',
