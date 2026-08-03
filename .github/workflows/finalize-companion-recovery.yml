@@ -42,6 +42,7 @@ jobs:
           git show 3163e9724cd6640e1b39a913d883f5aad139ba40:src/skills/dispatcher.ts > src/skills/dispatcher.ts
           git show 3163e9724cd6640e1b39a913d883f5aad139ba40:src/skills/dispatcher.test.ts > src/skills/dispatcher.test.ts
           git show 3163e9724cd6640e1b39a913d883f5aad139ba40:src/skills/registry.test.ts > src/skills/registry.test.ts
+          git show 11974fceb35ca8dde374f93b1c3687e794ba7692:src/security/internal-state.ts > src/security/internal-state.ts
 
           python - <<'PY'
           from pathlib import Path
@@ -104,6 +105,7 @@ jobs:
           PY
 
           python scripts/repair_current_main_final.py
+          python scripts/repair_transaction_state.py
 
           python - <<'PY'
           from pathlib import Path
@@ -125,7 +127,7 @@ jobs:
           PY
 
           rm .github/workflows/finalize-companion-recovery.yml
-          rm scripts/repair_current_main_final.py
+          rm scripts/repair_current_main_final.py scripts/repair_transaction_state.py
           git diff --check
 
       - name: Set up Node.js 22
