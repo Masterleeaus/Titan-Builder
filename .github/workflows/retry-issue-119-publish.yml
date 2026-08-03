@@ -1,0 +1,77 @@
+name: Retry verified issue 119 publication
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/retry-issue-119-publish.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-verify-publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out exact issue branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: fix/issue-119-repository-identity-approvals-v2
+          fetch-depth: 0
+
+      - name: Confirm expected issue head
+        env:
+          EXPECTED_HEAD: 97e81aedc26563f2e81d94d0b54ecacd5d01ceb9
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Reapply the exact verified patch
+        env:
+          VERIFIED_CONTROLLER_SHA: c6345bcb8bae05f1a49167cc82ff3cb7b52bb75d
+        run: |
+          git show "$VERIFIED_CONTROLLER_SHA:.github/workflows/apply-issue-119.yml" > /tmp/verified-controller.yml
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          workflow = Path('/tmp/verified-controller.yml').read_text()
+          marker = "          python - <<'PY'\n"
+          start = workflow.index(marker) + len(marker)
+          end = workflow.index("\n          PY\n", start)
+          script = dedent(workflow[start:end])
+          Path('/tmp/apply-issue-119.py').write_text(script)
+          PY
+          python /tmp/apply-issue-119.py
+          rm .github/workflows/issue-119-red.yml
+          git diff --check
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+          pnpm install --frozen-lockfile
+
+      - name: Repeat unchanged verification
+        run: |
+          pnpm run typecheck
+          pnpm exec tsx --test src/security/repository-identity.test.ts src/server/operation-approvals.test.ts src/workflows/agent-application.test.ts src/server/workflow.integration.ts
+          pnpm run test:node
+
+      - name: Commit and publish verified implementation
+        env:
+          EXPECTED_OLD_HEAD: 97e81aedc26563f2e81d94d0b54ecacd5d01ceb9
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/security/repository-identity.ts src/server/operation-approvals.ts src/server/index.ts package.json .github/workflows/issue-119-red.yml
+          git commit -m "fix(security): bind approvals to repository identity (#119)"
+          git push \
+            --force-with-lease=refs/heads/fix/issue-119-repository-identity-approvals-v2:${EXPECTED_OLD_HEAD} \
+            origin HEAD:fix/issue-119-repository-identity-approvals-v2
