@@ -160,6 +160,102 @@ def repair_skills() -> None:
     for path in SKILL_RUNTIME_FILES:
         restore_verified_file(path)
 
+    replace_once(
+        'src/skills/handlers.ts',
+        "const PROJECT_PATH_ENTRYPOINT = 'src/security/project-path.ts#resolveProjectPath';",
+        "const PROJECT_PATH_ENTRYPOINT = 'runtime/entrypoint.js#resolveProjectPath';",
+    )
+    replace_once(
+        'src/skills/entrypoint.ts',
+        'Skill entrypoint module contains an invalid or traversing path segment.',
+        'Skill entrypoint module contains an invalid path traversal segment.',
+    )
+
+    loader = """import path from 'node:path';
+import { readFile, realpath } from 'node:fs/promises';
+import fg from 'fast-glob';
+import { resolveApprovedSkillEntrypoint, type SkillRuntimeHandler } from './dispatcher.js';
+import { parseSkillEntrypoint } from './entrypoint.js';
+import { parseSkillManifest, type TitanSkillManifest } from './manifest.js';
+import { resolveContainedPackageFile } from './package-file.js';
+
+export interface LoadedSkillEntrypoint {
+  modulePath: string;
+  exportName: string;
+  absolutePath: string;
+  handler: SkillRuntimeHandler;
+}
+
+export interface LoadedSkillPackage {
+  manifest: TitanSkillManifest;
+  packageRoot: string;
+  manifestPath: string;
+  instructions?: string;
+  entrypoint?: LoadedSkillEntrypoint;
+}
+
+export async function discoverSkillManifestPaths(libraryRoot: string): Promise<string[]> {
+  const canonicalRoot = await realpath(libraryRoot);
+  const matches = await fg('**/manifest.json', {
+    cwd: canonicalRoot,
+    absolute: true,
+    onlyFiles: true,
+    unique: true,
+    followSymbolicLinks: false,
+    ignore: ['fixtures/**', '**/node_modules/**'],
+  });
+  return matches.map((item) => path.resolve(item)).sort((left, right) => left.localeCompare(right));
+}
+
+export async function loadSkillPackage(manifestPath: string): Promise<LoadedSkillPackage> {
+  const canonicalManifest = await realpath(manifestPath);
+  const packageRoot = path.dirname(canonicalManifest);
+  const source = JSON.parse(await readFile(canonicalManifest, 'utf8')) as unknown;
+  const manifest = parseSkillManifest(source);
+  const loaded: LoadedSkillPackage = {
+    manifest,
+    packageRoot,
+    manifestPath: canonicalManifest,
+  };
+
+  if (manifest.instructions) {
+    const instructionsPath = await resolveContainedPackageFile(packageRoot, manifest.instructions);
+    loaded.instructions = (await readFile(instructionsPath, 'utf8')).trim();
+    if (!loaded.instructions) throw new Error(`Skill instructions are empty: ${manifest.instructions}`);
+  }
+
+  if (manifest.entrypoint) {
+    const parsedEntrypoint = parseSkillEntrypoint(manifest.entrypoint);
+    let absolutePath: string;
+    try {
+      absolutePath = await resolveContainedPackageFile(packageRoot, parsedEntrypoint.modulePath);
+    } catch (error) {
+      throw new Error(
+        `Unable to resolve skill entrypoint ${manifest.entrypoint}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
+    const approvedEntrypoint = resolveApprovedSkillEntrypoint(manifest.id, parsedEntrypoint);
+    loaded.entrypoint = {
+      modulePath: approvedEntrypoint.modulePath,
+      exportName: approvedEntrypoint.exportName,
+      absolutePath,
+      handler: approvedEntrypoint.handler,
+    };
+  }
+
+  return loaded;
+}
+
+export async function discoverSkillPackages(libraryRoot: string): Promise<LoadedSkillPackage[]> {
+  const manifests = await discoverSkillManifestPaths(libraryRoot);
+  const packages: LoadedSkillPackage[] = [];
+  for (const manifestPath of manifests) packages.push(await loadSkillPackage(manifestPath));
+  return packages;
+}
+"""
+    Path('src/skills/loader.ts').write_text(loader, encoding='utf-8')
+
 
 def main() -> None:
     repair_install_doctor()
