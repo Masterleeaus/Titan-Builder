@@ -6,7 +6,7 @@ on:
       - artifact/tool-library-export
   pull_request:
     branches:
-      - feature/tool-library-expansion
+      - main
 
 permissions:
   contents: read
@@ -55,8 +55,9 @@ jobs:
           cat > "$export_root/README-ARCHIVE.md" <<'EOF'
           # Titan Builder Tool Library Export
 
-          Source branch: `feature/tool-library-expansion`
-          Pull request: `#18`
+          Preserved source commit: `fd70f503690bf6a14cb86132af002e20f7d2d835`
+          Original source branch: `feature/tool-library-expansion`
+          Original pull request: `#18`
 
           This package contains the complete 22-file Tool Library implementation delta: production source, tests, bridge/security integration, package test wiring, architecture documentation, and canonical `.titan` records.
           EOF
