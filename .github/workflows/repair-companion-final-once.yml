@@ -58,11 +58,6 @@ jobs:
               "import { requestAuthenticatedBridge } from './bridge-connection-transport.js';",
           )
           replace_once(
-              "const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:5000';",
-              "const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:5000';\n"
-              "const WORKSPACE_DB_FILENAME = 'database.sqlite';",
-          )
-          replace_once(
               "  const explicit = options.databasePath ?? process.env.WORKSPACE_DB_PATH;\n"
               "  if (explicit) {",
               "  const configuredPath = process.env.WORKSPACE_DB_PATH;\n"
