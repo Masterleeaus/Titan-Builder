@@ -1,0 +1,83 @@
+name: Export Titan Skill Library
+
+on:
+  pull_request:
+    branches:
+      - feature/skill-library-pass-04
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out verified skill branch
+        uses: actions/checkout@v4
+
+      - name: Build skill archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="Titan-Builder-Skill-Library-Pass-04"
+          rm -rf "$ROOT" "${ROOT}.zip"
+
+          mkdir -p "$ROOT/browser-extension" "$ROOT/src" "$ROOT/scripts" "$ROOT/docs/superpowers/plans" "$ROOT/docs/superpowers/specs" "$ROOT/.titan/todo/issues"
+
+          cp -R browser-extension/skill-library "$ROOT/browser-extension/"
+
+          mkdir -p "$ROOT/browser-extension/src/generated"
+          cp browser-extension/src/generated/skill-catalog.js "$ROOT/browser-extension/src/generated/"
+          cp browser-extension/src/skill-registry.js "$ROOT/browser-extension/src/"
+          cp browser-extension/src/skill-registry.test.mjs "$ROOT/browser-extension/src/"
+          cp browser-extension/src/workspace-library.js "$ROOT/browser-extension/src/"
+          cp browser-extension/src/workspace-skill-activation.test.mjs "$ROOT/browser-extension/src/"
+
+          cp -R src/skills "$ROOT/src/"
+          mkdir -p "$ROOT/src/security"
+          cp src/security/project-path.ts "$ROOT/src/security/"
+          cp src/security/project-path.test.ts "$ROOT/src/security/"
+
+          cp scripts/generate-skill-catalog.mjs "$ROOT/scripts/"
+          cp package.json "$ROOT/"
+
+          cp docs/superpowers/plans/2026-08-02-skill-registry-loader.md "$ROOT/docs/superpowers/plans/"
+          cp docs/superpowers/plans/2026-08-02-canonical-guidance-skill-migration.md "$ROOT/docs/superpowers/plans/"
+          cp docs/superpowers/plans/2026-08-02-executable-skill-dispatch.md "$ROOT/docs/superpowers/plans/"
+          cp docs/superpowers/specs/2026-08-02-canonical-guidance-skill-migration-design.md "$ROOT/docs/superpowers/specs/"
+          cp docs/superpowers/specs/2026-08-02-executable-skill-dispatch-design.md "$ROOT/docs/superpowers/specs/"
+
+          cp .titan/todo/issues/skill-library-pass-02.md "$ROOT/.titan/todo/issues/"
+          cp .titan/todo/issues/skill-library-pass-03.md "$ROOT/.titan/todo/issues/"
+          cp .titan/todo/issues/skill-library-pass-04.md "$ROOT/.titan/todo/issues/"
+
+          cat > "$ROOT/EXPORT-MANIFEST.md" <<'EOF'
+          # Titan Builder Skill Library Export
+
+          Exported from verified Pass 04 head:
+
+          `c779a32e06876ca33f94f99962ef699f1cb9ce00`
+
+          Contents:
+
+          - 7 canonical skill packages
+          - 6 guidance skills
+          - 1 executable skill
+          - manifest schema, loader, registry and generated extension catalog
+          - closed executable dispatcher and static handler bindings
+          - runtime input/output contract validation
+          - browser workspace activation and compatibility aliases
+          - focused tests and implementation documentation
+
+          The executable Project Path Containment skill uses the included authoritative `src/security/project-path.ts` implementation.
+          EOF
+
+          zip -r -9 "${ROOT}.zip" "$ROOT"
+
+      - name: Upload skill archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: Titan-Builder-Skill-Library-Pass-04
+          path: Titan-Builder-Skill-Library-Pass-04.zip
+          if-no-files-found: error
+          retention-days: 7
