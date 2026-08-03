@@ -34,7 +34,10 @@ export function loadCompanionEnvironment(options: { homeDir?: string; packageRoo
   try {
     content = readFileSync(configPath, 'utf8');
   } catch (error) {
-    return undefined;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined;
+    }
+    throw error;
   }
   for (const line of content.split(/\r?\n/u)) {
     const trimmed = line.trim();
