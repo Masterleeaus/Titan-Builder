@@ -53,6 +53,21 @@ def repair_operations() -> None:
         "import type { FileOperation } from '../core/index.js';\n"
         "import { logger } from '../shared/index.js';\n",
     )
+    replace_once(
+        'src/operations/index.ts',
+        "logger.error('Failed to write transaction journal during error handling', { journalError });",
+        "logger.error({ err: journalError }, 'Failed to write transaction journal during error handling');",
+    )
+    replace_once(
+        'src/operations/index.ts',
+        "logger.debug('Could not stat existing file; will use default mode', { filePath, statError });",
+        "logger.debug({ err: statError, filePath }, 'Could not stat existing file; will use default mode');",
+    )
+    replace_once(
+        'src/operations/index.ts',
+        "logger.warn('Failed to clean up temporary file during error recovery', { temporaryPath, removeError });",
+        "logger.warn({ err: removeError, temporaryPath }, 'Failed to clean up temporary file during error recovery');",
+    )
 
 
 def repair_project_path() -> None:
