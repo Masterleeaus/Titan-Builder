@@ -1,0 +1,48 @@
+name: Export Titan Builder Prompts Once
+
+on:
+  push:
+    branches:
+      - chore/export-prompt-library-zip
+
+permissions:
+  contents: read
+
+jobs:
+  package-prompts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Assemble prompt export
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir="browser-extension/prompt-library"
+          export_dir="export/titan-builder-prompts"
+          test -d "$source_dir"
+          mkdir -p "$export_dir"
+          cp -R "$source_dir" "$export_dir/prompt-library"
+          {
+            echo "Titan Builder Canonical Prompt Library"
+            echo
+            echo "Source: Masterleeaus/Titan-Builder"
+            echo "Branch: main snapshot used by chore/export-prompt-library-zip"
+            echo
+            echo "Included files:"
+            find "$source_dir" -type f -name '*.md' -print | sort | sed 's#^browser-extension/##'
+          } > "$export_dir/CONTENTS.txt"
+          prompt_count=$(find "$source_dir" -type f -name '*.md' | wc -l | tr -d ' ')
+          test "$prompt_count" -gt 0
+          echo "Packaged $prompt_count canonical prompts."
+
+      - name: Upload prompt ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: titan-builder-prompts
+          path: export/titan-builder-prompts
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
