@@ -32,6 +32,7 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
 
           path = Path('browser-extension/bridge-server.ts')
           text = path.read_text(encoding='utf-8')
@@ -51,36 +52,18 @@ jobs:
                   raise SystemExit(f'Expected one repair anchor, found {text.count(old)}: {old!r}')
               text = text.replace(old, new, 1)
 
-          collided = """  const bridgeEndpoint = parseLoopbackBridgeUrl(
-            options.bridgeUrl ?? process.env.OPENBROWSER_BRIDGE_URL ?? DEFAULT_BRIDGE_URL,
-          );
-          const bridgeUrl = bridgeEndpoint.origin;
-          const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;
-          const bridgeClient = bridgeToken
-            ? createAuthenticatedBridgeClient({ bridgeUrl, controlToken: bridgeToken })
-            : undefined;
-          const databasePath = path.resolve(
-            options.databasePath
-              ?? process.env.WORKSPACE_DB_PATH
-              ?? path.join(moduleDirectory, 'openbrowser-workspace.db'),
-          );
-          const bridgeUrl = bridgeEndpoint.origin;
-          const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;
-          const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });
-          """
-          repaired = """  const bridgeEndpoint = parseLoopbackBridgeUrl(
-            options.bridgeUrl ?? process.env.OPENBROWSER_BRIDGE_URL ?? DEFAULT_BRIDGE_URL,
-          );
-          const bridgeUrl = bridgeEndpoint.origin;
-          const bridgeToken = options.bridgeToken ?? process.env.BRIDGE_TOKEN;
-          const bridgeClient = bridgeToken
-            ? createAuthenticatedBridgeClient({ bridgeUrl, controlToken: bridgeToken })
-            : undefined;
-          const databasePath = await resolveWorkspaceDatabasePath({ databasePath: options.databasePath });
-          """
-          if text.count(collided) != 1:
-              raise SystemExit(f'Expected one duplicated initialization block, found {text.count(collided)}')
-          path.write_text(text.replace(collided, repaired, 1), encoding='utf-8')
+          pattern = re.compile(
+              r"  const databasePath = path\.resolve\([\s\S]*?"
+              r"  const databasePath = await resolveWorkspaceDatabasePath\(\{ databasePath: options\.databasePath \}\);\n"
+          )
+          replacement = (
+              "  const databasePath = await resolveWorkspaceDatabasePath("
+              "{ databasePath: options.databasePath });\n"
+          )
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'Expected one collided database initialization region, found {count}')
+          path.write_text(text, encoding='utf-8')
       - name: Regenerate and verify companion
         working-directory: browser-extension
         shell: bash
