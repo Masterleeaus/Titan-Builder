@@ -11,6 +11,8 @@ export interface ProjectMemoryEntry {
 }
 
 const MEMORY_FILE = 'memory.json';
+const MAX_MEMORY_ENTRIES = 500;
+const MEMORY_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
 
 export async function listProjectMemory(projectRoot: string): Promise<ProjectMemoryEntry[]> {
   try {
@@ -88,12 +90,38 @@ export function projectMemoryFilePath(projectRoot: string): string {
 async function writeMemory(projectRoot: string, entries: ProjectMemoryEntry[]): Promise<void> {
   const filePath = memoryFilePath(projectRoot);
   await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  pruneMemory(entries);
   const ordered = [...entries].sort(
     (left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
   );
   const tempPath = `${filePath}.${crypto.randomUUID()}.tmp`;
   await writeFile(tempPath, `${JSON.stringify(ordered, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   await rename(tempPath, filePath);
+}
+
+function pruneMemory(entries: ProjectMemoryEntry[]): void {
+  const now = Date.now();
+  const cutoff = now - MEMORY_RETENTION_MS;
+
+  let writeIdx = 0;
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const entryTime = new Date(entry.createdAt).getTime();
+
+    if (entryTime >= cutoff) {
+      if (writeIdx !== i) {
+        entries[writeIdx] = entry;
+      }
+      writeIdx++;
+    }
+  }
+
+  entries.length = writeIdx;
+
+  if (entries.length > MAX_MEMORY_ENTRIES) {
+    entries.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    entries.length = MAX_MEMORY_ENTRIES;
+  }
 }
 
 function memoryFilePath(projectRoot: string): string {

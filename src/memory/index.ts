@@ -28,6 +28,9 @@ export interface HistoryEntry {
   error?: string;
 }
 
+const MAX_HISTORY_ENTRIES = 1000;
+const HISTORY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
 function memoryPath(projectRoot: string, fileName?: string): string {
   return path.join(projectRoot, OPENBROWSER_DIR, fileName ?? '');
 }
@@ -57,10 +60,37 @@ export async function appendHistory(
   } catch {
     history = [];
   }
+
   history.push(entry);
+  pruneHistory(history);
+
   const tempPath = `${historyFile}.${crypto.randomUUID()}.tmp`;
   await writeFile(tempPath, `${JSON.stringify(history, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   await rename(tempPath, historyFile);
+}
+
+function pruneHistory(history: HistoryEntry[]): void {
+  const now = Date.now();
+  const cutoff = now - HISTORY_RETENTION_MS;
+
+  let writeIdx = 0;
+  for (let i = 0; i < history.length; i++) {
+    const entry = history[i];
+    const entryTime = new Date(entry.timestamp).getTime();
+
+    if (entryTime >= cutoff) {
+      if (writeIdx !== i) {
+        history[writeIdx] = entry;
+      }
+      writeIdx++;
+    }
+  }
+
+  history.length = writeIdx;
+
+  if (history.length > MAX_HISTORY_ENTRIES) {
+    history.splice(0, history.length - MAX_HISTORY_ENTRIES);
+  }
 }
 
 export async function listHistory(projectRoot: string): Promise<HistoryEntry[]> {
@@ -74,6 +104,31 @@ export async function listHistory(projectRoot: string): Promise<HistoryEntry[]> 
   } catch {
     return [];
   }
+}
+
+export async function pruneExpiredHistory(projectRoot: string): Promise<number> {
+  await ensureMemory(projectRoot);
+  const historyFile = memoryPath(projectRoot, MEMORY_FILES.history);
+  let history: HistoryEntry[] = [];
+  try {
+    const content = await readFile(historyFile, 'utf8');
+    history = JSON.parse(content);
+    if (!Array.isArray(history)) return 0;
+  } catch {
+    return 0;
+  }
+
+  const originalLength = history.length;
+  pruneHistory(history);
+  const prunedCount = originalLength - history.length;
+
+  if (prunedCount > 0) {
+    const tempPath = `${historyFile}.${crypto.randomUUID()}.tmp`;
+    await writeFile(tempPath, `${JSON.stringify(history, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    await rename(tempPath, historyFile);
+  }
+
+  return prunedCount;
 }
 
 export async function saveContextSummary(
@@ -120,6 +175,36 @@ export async function readPromptFile(
   return fs.readFile(promptFilePath(projectRoot, sessionId), 'utf8');
 }
 
+export async function pruneOldPromptFiles(projectRoot: string, retentionMs = HISTORY_RETENTION_MS): Promise<number> {
+  const promptsDir = memoryPath(projectRoot, MEMORY_FILES.promptsDir);
+  let files: string[];
+  try {
+    files = await fs.readdir(promptsDir);
+  } catch {
+    return 0;
+  }
+
+  const now = Date.now();
+  const cutoff = now - retentionMs;
+  let prunedCount = 0;
+
+  for (const file of files) {
+    if (!file.endsWith('.txt')) continue;
+    const filePath = path.join(promptsDir, file);
+    try {
+      const stats = await fs.stat(filePath);
+      if (stats.mtimeMs < cutoff) {
+        await fs.unlink(filePath);
+        prunedCount++;
+      }
+    } catch {
+      // Ignore errors for individual files
+    }
+  }
+
+  return prunedCount;
+}
+
 export {
   addProjectMemory,
   clearProjectMemory,
@@ -129,3 +214,17 @@ export {
   removeProjectMemory,
   type ProjectMemoryEntry,
 } from './project-memory.js';
+
+export interface RetentionStats {
+  historyPruned: number;
+  promptFilesPruned: number;
+}
+
+export async function pruneProjectRetention(projectRoot: string): Promise<RetentionStats> {
+  const [historyPruned, promptFilesPruned] = await Promise.all([
+    pruneExpiredHistory(projectRoot),
+    pruneOldPromptFiles(projectRoot),
+  ]);
+
+  return { historyPruned, promptFilesPruned };
+}
