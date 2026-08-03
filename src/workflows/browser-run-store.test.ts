@@ -79,7 +79,7 @@ test('store rejects a filesystem path supplied instead of a registered project i
     () =>
       store.create({
         mode: 'agent',
-        projectId: '/tmp/unregistered-project',
+        projectId: 'unregistered-project',
         prompt: 'change x',
       }),
     /registered project id/i,
