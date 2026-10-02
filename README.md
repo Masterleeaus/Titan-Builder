@@ -1,3 +1,5 @@
+![Titan Builder Local Development Harness — REPOSITORY-AWARE DEVELOPMENT TOOLING](docs/images/portfolio-banner.svg)
+
 # Titan Builder
 
 **A security-focused local coding harness that connects browser AI sessions to repository-aware development workflows.**
