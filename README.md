@@ -4,6 +4,13 @@
 
 **A security-focused local coding harness that connects browser AI sessions to repository-aware development workflows.**
 
+## Product architecture and engineering highlights
+
+A local coding harness that connects browser AI sessions to repository-aware engineering workflows.
+
+- **Architecture:** A TypeScript CLI and Fastify bridge coordinate project context, browser-extension jobs, structured file operations, skills, and verification behind repository-authority and path-safety controls.
+- **Distinctive engineering:** Its differentiators are approval capabilities, bounded context, recoverable jobs, executable skills, and verification-driven completion rather than unrestricted model access.
+
 ## Overview
 
 Titan Builder turns supported browser AI interfaces into a controlled coding environment for local projects. A TypeScript CLI and Fastify bridge coordinate prompts, project context, structured file operations, verification and browser-extension jobs while keeping repository mutation behind explicit security boundaries.
