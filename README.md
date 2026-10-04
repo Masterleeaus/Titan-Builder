@@ -121,7 +121,8 @@ Until the remaining executable identifiers are migrated, the built CLI is invoke
 ```text
 src/                 CLI, server, operations, projects, memory and workflows
 browser-extension/   Browser integration and coding workspace
-skills/              Reusable skill packages and manifests
+src/skills/           Runtime skill manifests, loading, activation and dispatch
+browser-extension/skill-library/  Packaged browser skill definitions
 scripts/             Build, release and catalog tooling
 docs/                Architecture, security and operational documentation
 .github/workflows/    Verification and security automation
@@ -131,6 +132,12 @@ docs/                Architecture, security and operational documentation
 ## Status
 
 **In Development / Advanced Prototype** — the core coding harness is substantial and heavily tested. The largest remaining presentation issue is migration of legacy OpenBrowser package, CLI and internal identifiers to Titan Builder.
+
+## Verification and limits
+
+The package-defined verification entrypoint is `pnpm verify`; the focused lanes are `pnpm typecheck`, `pnpm test:skills`, `pnpm check:skills`, and `pnpm check:extension`. The browser-first smoke checklist and security notes document what those checks do and do not cover.
+
+This is an advanced prototype, not a production-readiness claim. Live provider sessions, browser-extension behavior, and host-environment integration still require the environment-specific checks described in [`docs/browser-first-smoke-checklist.md`](docs/browser-first-smoke-checklist.md). The retained `OpenBrowser-v0.5.0-Project-Intelligence-Port.zip` and `.titan/` records remain provenance/pending-work material and are intentionally not presented as a supported runtime surface.
 
 ## Provenance
 
