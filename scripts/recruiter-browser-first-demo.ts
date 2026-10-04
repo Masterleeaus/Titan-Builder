@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
