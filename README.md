@@ -1,4 +1,4 @@
-![Titan Builder Local Development Harness — REPOSITORY-AWARE DEVELOPMENT TOOLING](docs/images/portfolio-banner.svg)
+![Titan Builder Local Development Harness — REPOSITORY-AWARE DEVELOPMENT TOOLING](docs/images/titan-builder-banner.svg)
 
 # Titan Builder
 
@@ -68,6 +68,12 @@ This is offline contract evidence: the deterministic lane does not open a browse
 - **Bounded context and memory:** project history, memory, prompts and context budgets are represented as local, bounded workflow state.
 
 ## Architecture
+
+<p align="center">
+  <img src="docs/images/titan-builder-architecture.svg" alt="Titan Builder flow from developer CLI and project context through local bridge, typed operation planner, approval boundary, safe runtime, repository, and verification" width="100%" />
+</p>
+
+The graphic is a source-backed map of the current local workflow; provider sessions and host integration remain environment-dependent.
 
 ```mermaid
 flowchart LR
