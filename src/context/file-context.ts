@@ -1,5 +1,4 @@
 import path from 'node:path';
-import { lstat, realpath } from 'node:fs/promises';
 import fg from 'fast-glob';
 import fs from 'fs-extra';
 import { canonicalizeProjectRoot } from '../security/project-path.js';

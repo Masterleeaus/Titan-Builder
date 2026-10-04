@@ -1,5 +1,4 @@
 import path from 'node:path';
-import { lstat, realpath, readdir } from 'node:fs/promises';
 import fg from 'fast-glob';
 import fs from 'fs-extra';
 import { CONTEXT_IGNORE } from './file-context.js';
@@ -51,7 +50,7 @@ export async function scanDirectoryTree(
   await walkDirectory(root, resolved, relativePath, 0, treeLines, directories, files);
 
   const nestedFiles = await fg('**/*', {
-    cwd: targetCanonical,
+    cwd: resolved,
     dot: false,
     onlyFiles: true,
     followSymbolicLinks: false,
@@ -103,7 +102,7 @@ async function walkDirectory(
     return;
   }
 
-  const entries = await readdir(absoluteDir, { withFileTypes: true });
+  const entries = await fs.readdir(absoluteDir, { withFileTypes: true });
   entries.sort((left, right) => {
     if (left.isDirectory() !== right.isDirectory()) {
       return left.isDirectory() ? -1 : 1;
@@ -120,12 +119,8 @@ async function walkDirectory(
       continue;
     }
 
-    const childAbsolute = path.join(absoluteDir, entry.name);
+    const indent = '  '.repeat(depth);
     const childRelative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-
-    if (entry.isSymbolicLink()) {
-      continue;
-    }
 
     if (entry.isDirectory()) {
       let safeDirectory;
@@ -140,7 +135,6 @@ async function walkDirectory(
 
       const dirPath = `${safeDirectory.relativePath}/`;
       directories.push(dirPath);
-      const indent = '  '.repeat(depth);
       treeLines.push(`${indent}${entry.name}/`);
 
       await walkDirectory(
@@ -195,12 +189,7 @@ export async function collectProjectDirectories(projectRoot: string): Promise<st
 
     const entries = await fs.readdir(currentDirectory.absolutePath, { withFileTypes: true });
     for (const entry of entries) {
-      if (!entry.isDirectory() || shouldSkipDir(entry.name) || entry.isSymbolicLink()) {
-        continue;
-      }
-
-      const childAbsolute = path.join(absoluteDir, entry.name);
-      if (!isPathInsideProject(rootCanonical, childAbsolute)) {
+      if (!entry.isDirectory() || shouldSkipDir(entry.name)) {
         continue;
       }
 
@@ -218,6 +207,6 @@ export async function collectProjectDirectories(projectRoot: string): Promise<st
     }
   }
 
-  await walk(rootCanonical, '');
+  await walk('');
   return [...dirs].sort();
 }
