@@ -1,4 +1,4 @@
-![Titan Builder Local Development Harness — REPOSITORY-AWARE DEVELOPMENT TOOLING](docs/images/portfolio-banner.svg)
+![Titan Builder Local Development Harness — REPOSITORY-AWARE DEVELOPMENT TOOLING](docs/images/titan-builder-banner.svg)
 
 # Titan Builder
 
@@ -33,6 +33,10 @@ Rather than acting as an application UI generator, the current code is strongest
 - Automated test, typecheck, build and CI verification pipeline.
 
 ## Architecture
+
+<p align="center">
+  <img src="docs/images/titan-builder-architecture.svg" alt="Titan Builder flow from developer CLI and project context through local bridge, typed operation planner, approval boundary, safe runtime, repository, and verification" width="100%" />
+</p>
 
 ```mermaid
 flowchart LR
