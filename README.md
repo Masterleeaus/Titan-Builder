@@ -128,9 +128,9 @@ The demo copies [`docs/recruiter-fixtures/browser-first`](docs/recruiter-fixture
 - captures filesystem project identity and rejects a path outside the project root;
 - plans a reviewed `CREATE_FILE` operation without writing before approval;
 - binds approval to the project identity, run, conversation, selected operation and preview, then rejects a stale preview and token replay;
-- applies only the approved file and derives `pnpm run verify` from the fixture manifest before executing it.
+- consumes only the approved plan through Titan's safe dry-run executor, leaving the fixture unchanged, then derives `pnpm run verify` from the fixture manifest and executes that read-only verification.
 
-The same path is covered by the existing `test:node` lane through [`src/verification/plan.test.ts`](src/verification/plan.test.ts). This is an offline fixture demonstration: it does not open a browser, call a provider, use credentials, or claim production readiness. Use the [browser-first smoke checklist](docs/browser-first-smoke-checklist.md) for environment-specific provider, extension, service and two-stage UI validation.
+The same path is covered by the existing `test:node` lane through [`src/verification/plan.test.ts`](src/verification/plan.test.ts). This is an offline fixture demonstration: its deterministic lane does not open a browser, call a provider, use credentials, or claim production readiness; live mutation remains an environment-specific step in the checklist. Use the [browser-first smoke checklist](docs/browser-first-smoke-checklist.md) for environment-specific provider, extension, service and two-stage UI validation.
 Until the remaining executable identifiers are migrated, the built CLI is invoked with the compatibility command documented by `package.json`.
 
 ## Repository Structure
