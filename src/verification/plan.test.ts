@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildVerificationPlan } from './plan.ts';
+import { runRecruiterBrowserFirstDemo } from '../../scripts/recruiter-browser-first-demo.ts';
+
 
 test('quick profile chooses the smallest focused test script', () => {
   assert.deepEqual(
@@ -62,8 +64,6 @@ test('unsupported package managers and projects without verification scripts ret
     [],
   );
 });
-import { runRecruiterBrowserFirstDemo } from '../../scripts/recruiter-browser-first-demo.ts';
-
 test('fixture recruiter demo proves authority, approval, and verification boundaries', async () => {
   const result = await runRecruiterBrowserFirstDemo({ emit: false });
 
