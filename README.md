@@ -120,7 +120,7 @@ docs/                 Architecture, security and operational documentation
 
 The package-defined verification entrypoint is `pnpm verify`; focused lanes include `pnpm typecheck`, `pnpm test:skills`, `pnpm check:skills` and `pnpm check:extension`. Use [docs/browser-first-smoke-checklist.md](docs/browser-first-smoke-checklist.md) for environment-specific provider, extension, service and two-stage UI validation.
 
-Current exact-head evidence is recorded in [Verify Titan Builder run #831](https://github.com/Masterleeaus/Titan-Builder/actions/runs/37176492441): inherited workflow-policy violations remain, and Linux/Windows stop at frozen install on the existing duplicate `braces@3.0.3` lockfile mapping before `pnpm verify` runs. No passing full-verification result is claimed until the active recovery work restores the install baseline.
+The latest known workflow evidence before this README-only commit is [Verify Titan Builder run #832](https://github.com/Masterleeaus/Titan-Builder/actions/runs/37176592435) on earlier demo head `d41ea7b5967952bcad0c771046763c6a7219709c`: inherited workflow-policy violations remain, and Linux/Windows stop at frozen install on the existing duplicate `braces@3.0.3` lockfile mapping before `pnpm verify` runs. This README commit has no fresh full-verification result; no passing full-verification claim is made until the active recovery work restores the install baseline.
 
 The repository is an **advanced prototype in development**. Live provider sessions, browser-extension behavior and host-environment integration require environment-specific checks. The retained `OpenBrowser-v0.5.0-Project-Intelligence-Port.zip` and `.titan/` records are provenance or pending-work material, not supported runtime surfaces.
 
