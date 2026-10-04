@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { cp, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 import { planOperations, executePlannedOperations } from '../src/operations/index.ts';
@@ -10,6 +12,7 @@ import { captureRepositoryIdentity } from '../src/security/repository-identity.t
 import { resolveProjectPath } from '../src/security/project-path.ts';
 import { buildVerificationPlan } from '../src/verification/plan.ts';
 
+const execFileAsync = promisify(execFile);
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPOSITORY_ROOT = path.resolve(path.dirname(SCRIPT_PATH), '..');
 const FIXTURE_SOURCE = path.join(
@@ -33,6 +36,10 @@ export interface RecruiterDemoResult {
     riskSummary: Record<string, number>;
     previewMismatchRejected: boolean;
     replayRejected: boolean;
+  };
+  execution: {
+    dryRun: boolean;
+    applied: boolean;
   };
   verification: {
     selectedOperation: string;
@@ -129,10 +136,12 @@ export async function runRecruiterBrowserFirstDemo(
     assert.equal(previewMismatchRejected, true);
 
     const approvedPlans = approvalStore.consume(issued.token, expectation);
-    await executePlannedOperations(approvedPlans, projectRoot, {
+    const dryRunPlans = await executePlannedOperations(approvedPlans, projectRoot, {
       conversationId,
+      dryRun: true,
     });
-    assert.equal(await readFile(path.join(projectRoot, 'demo-output.md'), 'utf8'), DEMO_OUTPUT);
+    assert.equal(dryRunPlans[0]?.operation.path, 'demo-output.md');
+    await assert.rejects(stat(path.join(projectRoot, 'demo-output.md')));
 
     let replayRejected = false;
     try {
@@ -146,8 +155,11 @@ export async function runRecruiterBrowserFirstDemo(
       verificationOperations,
       projectRoot,
     );
-    await executePlannedOperations(verificationPlans, projectRoot, {
-      conversationId,
+    assert.equal(verificationPlans[0]?.operation.tool, 'pnpm.run');
+    const pnpmExecutable = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+    await execFileAsync(pnpmExecutable, ['run', 'verify'], {
+      cwd: projectRoot,
+      windowsHide: true,
     });
 
     const result: RecruiterDemoResult = {
@@ -162,6 +174,10 @@ export async function runRecruiterBrowserFirstDemo(
         riskSummary: issued.riskSummary,
         previewMismatchRejected,
         replayRejected,
+      },
+      execution: {
+        dryRun: true,
+        applied: false,
       },
       verification: {
         selectedOperation: 'pnpm run verify',
