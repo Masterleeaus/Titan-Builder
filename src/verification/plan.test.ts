@@ -62,3 +62,19 @@ test('unsupported package managers and projects without verification scripts ret
     [],
   );
 });
+import { runRecruiterBrowserFirstDemo } from '../../scripts/recruiter-browser-first-demo.ts';
+
+test('fixture recruiter demo proves authority, approval, and verification boundaries', async () => {
+  const result = await runRecruiterBrowserFirstDemo({ emit: false });
+
+  assert.equal(result.fixture, 'docs/recruiter-fixtures/browser-first');
+  assert.equal(result.projectAuthority.identityKind, 'filesystem');
+  assert.equal(result.projectAuthority.escapeRejected, true);
+  assert.equal(result.approval.previewMismatchRejected, true);
+  assert.equal(result.approval.replayRejected, true);
+  assert.equal(result.verification.selectedOperation, 'pnpm run verify');
+  assert.equal(result.verification.passed, true);
+  assert.equal(result.provider, 'not invoked');
+  assert.equal(result.browserSession, 'not invoked');
+  assert.equal(result.productionReadiness, 'not assessed');
+});
