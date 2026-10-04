@@ -1,10 +1,10 @@
-# Contributing to OpenBrowser
+# Contributing to Titan Builder
 
-Thank you for your interest in contributing to OpenBrowser! This project is open source under the [MIT License](./LICENSE).
+Thank you for your interest in contributing to Titan Builder! This project is open source under the [MIT License](./LICENSE).
 
 ## Ways to contribute
 
-- Report bugs and request features via [GitHub Issues](https://github.com/1129Aliasgar/OpenBrowser/issues)
+- Report bugs and request features via [GitHub Issues](https://github.com/1129Aliasgar/Titan Builder/issues)
 - Improve documentation (README, comments, examples)
 - Fix bugs or add features via pull requests
 - Add or improve support for browser AI providers in `browser-extension/src/providers.js`
@@ -12,15 +12,15 @@ Thank you for your interest in contributing to OpenBrowser! This project is open
 
 ## Before you start
 
-1. Check existing [issues](https://github.com/1129Aliasgar/OpenBrowser/issues) and [pull requests](https://github.com/1129Aliasgar/OpenBrowser/pulls) to avoid duplicate work.
+1. Check existing [issues](https://github.com/1129Aliasgar/Titan Builder/issues) and [pull requests](https://github.com/1129Aliasgar/Titan Builder/pulls) to avoid duplicate work.
 2. For large changes, open an issue first to discuss the approach.
 3. Read the [product specification](./pid.md) for architecture and design intent.
 
 ## Development setup
 
 ```bash
-git clone https://github.com/1129Aliasgar/OpenBrowser.git
-cd OpenBrowser
+git clone https://github.com/1129Aliasgar/Titan Builder.git
+cd Titan Builder
 pnpm install
 cp .env.example .env   # Windows: copy .env.example .env
 pnpm build
@@ -86,4 +86,4 @@ This project follows the [Code of Conduct](./CODE_OF_CONDUCT.md). By participati
 
 ## Questions
 
-Open a [GitHub Discussion](https://github.com/1129Aliasgar/OpenBrowser/discussions) or issue if you are unsure where to start. Issues labeled `good first issue` are a great entry point.
+Open a [GitHub Discussion](https://github.com/1129Aliasgar/Titan Builder/discussions) or issue if you are unsure where to start. Issues labeled `good first issue` are a great entry point.
