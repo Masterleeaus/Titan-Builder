@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { planOperations } from '../operations/index.ts';
+import { reducePlansToBrowserPreviews } from './browser-run-integrity.ts';
 import { createBrowserRunStore } from './browser-run-store.ts';
 
 async function fixtureDirectory(): Promise<string> {
@@ -25,6 +26,7 @@ async function seedAgentRun(directory: string, targetStatus: 'awaiting_approval'
   const plans = await planOperations([
     { action: 'CREATE_FILE', path: 'note.txt', content: 'hello\n' },
   ], projectRoot);
+  await store.setPreview(run.id, reducePlansToBrowserPreviews(plans));
   await store.setPrepared(run.id, {
     conversationId: crypto.randomUUID(),
     rawResponse: '{}',
@@ -32,15 +34,6 @@ async function seedAgentRun(directory: string, targetStatus: 'awaiting_approval'
     previews: plans,
     plannedPreviewRevision: 'a'.repeat(64),
   });
-  await store.setPreview(run.id, [{
-    id: 'op-1',
-    action: 'CREATE_FILE',
-    path: 'note.txt',
-    risk: 'WRITE',
-    summary: 'Create note.txt',
-    diff: plans[0].diff,
-    requiresExplicitApproval: true,
-  }]);
   await store.transition(run.id, 'awaiting_approval');
   if (targetStatus === 'ready_to_apply' || targetStatus === 'applying') {
     await store.transition(run.id, 'ready_to_apply');
