@@ -4,7 +4,54 @@
 
 **Titan Builder is a security-focused local coding harness that turns browser AI output into reviewed, repository-bounded development operations.**
 
+## Overview
+
 It combines a TypeScript CLI, Fastify local bridge, browser-extension workflow, persistent job state and verification profiles. The central engineering problem is authority: model output can propose work, but repository context, file operations, tools and mutation stay behind typed contracts, path checks, approval state and verification.
+
+
+## Measured evidence
+
+Titan Builder has a strong **offline contract demo** and, separately, a currently failing full-verification lane. Both are useful evidence and are reported together.
+
+| Evidence | Current result / scope |
+| --- | --- |
+| Fixture recruiter demo | rejects path escape, binds approval to repository/run/conversation/operation/preview, rejects stale preview and approval replay, executes approved operation as dry-run only, then runs fixture verification |
+| Provider use in fixture | **none** |
+| Browser session in fixture | **none** |
+| Mutation in fixture | **none — dry run** |
+| Full current-head verification | **failing before root verification** in documented run #837 |
+| CI blockers in documented run | 6 inherited workflow-policy violations + duplicate `braces@3.0.3` lockfile mapping |
+
+Reproduce the bounded demo:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm exec tsx scripts/recruiter-browser-first-demo.ts
+```
+
+This is intentionally stronger as *authority-boundary evidence* than as an AI-performance demo. It proves the fixture contract does not silently escape its repository or reuse stale approval, while making no claim about provider quality or live browser reliability.
+
+## What is new
+
+Titan Builder's technical signature is **approval-bound repository mutation with verification-driven completion**.
+
+```text
+Browser/model proposal
+      ↓
+Typed operation plan
+      ↓
+Deterministic preview + risk
+      ↓
+Approval bound to repository identity
+      ↓
+Safe tool/file runtime
+      ↓
+Verification profile
+      ↓
+Persisted outcome
+```
+
+The notable mechanism is that approval is tied to the specific repository identity, run, conversation, selected operation and preview. A stale preview or replayed approval token is rejected rather than treated as reusable permission.
 
 ## Get started
 
@@ -58,7 +105,7 @@ It copies [docs/recruiter-fixtures/browser-first](docs/recruiter-fixtures/browse
 
 This is offline contract evidence: the deterministic lane does not open a browser, call a provider or use credentials. It does not claim live mutation or production readiness.
 
-## Why it is interesting
+## Verified capabilities
 
 - **Repository authority:** project resolution is centralized and privileged operations are constrained to canonical project roots, including traversal, symlink/junction and Windows-special-path defenses.
 - **Approval-bound operations:** AI responses become Zod-validated structured operations with previews and risk summaries. Approval state is tied to project and repository identity so stale work is not silently replayed.
