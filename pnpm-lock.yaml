@@ -633,10 +633,6 @@ packages:
     resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
     engines: {node: '>=8'}
 
-  braces@3.0.3:
-    resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
-    engines: {node: '>=8'}
-
   cfonts@3.3.1:
     resolution: {integrity: sha512-ZGEmN3W9mViWEDjsuPo4nK4h39sfh6YtoneFYp9WLPI/rw8BaSSrfQC6jkrGW3JMvV3ZnExJB/AEqXc/nHYxkw==}
     engines: {node: '>=10'}
