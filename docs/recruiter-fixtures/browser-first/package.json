@@ -1,0 +1,8 @@
+{
+  "name": "titan-browser-first-fixture",
+  "private": true,
+  "scripts": {
+    "test": "node --test fixture.test.mjs",
+    "verify": "node --test fixture.test.mjs"
+  }
+}
