@@ -19,7 +19,7 @@ Titan Builder has a strong **offline contract demo** and, separately, a currentl
 | Provider use in fixture | **none** |
 | Browser session in fixture | **none** |
 | Mutation in fixture | **none — dry run** |
-| Full current-head verification | **failing before root verification** in documented run #837 |
+| Documented full-verification snapshot | **failed before root verification** in run #837 |
 | CI blockers in documented run | 6 inherited workflow-policy violations + duplicate `braces@3.0.3` lockfile mapping |
 
 Reproduce the bounded demo:
@@ -173,7 +173,7 @@ docs/                 Architecture, security and operational documentation
 
 The package-defined verification entrypoint is `pnpm verify`; focused lanes include `pnpm typecheck`, `pnpm test:skills`, `pnpm check:skills` and `pnpm check:extension`. Use [docs/browser-first-smoke-checklist.md](docs/browser-first-smoke-checklist.md) for environment-specific provider, extension, service and two-stage UI validation.
 
-The exact current-head verification is [Verify Titan Builder run #837](https://github.com/Masterleeaus/Titan-Builder/actions/runs/37181057724), which completed with failure before the root verification lane: workflow policy reports six inherited violations across three controller workflows, and Linux/Windows stop at frozen install because the existing lockfile contains a duplicate `braces@3.0.3` mapping. The required-CI aggregate therefore fails and the build/test jobs are skipped. The fixture remains bounded contract evidence; no passing full-verification or production-readiness claim is made.
+The latest verification snapshot documented in this README is [Verify Titan Builder run #837](https://github.com/Masterleeaus/Titan-Builder/actions/runs/37181057724), which completed with failure before the root verification lane: workflow policy reports six inherited violations across three controller workflows, and Linux/Windows stop at frozen install because the existing lockfile contains a duplicate `braces@3.0.3` mapping. The required-CI aggregate therefore failed and the build/test jobs were skipped. The branch may move after this snapshot, so rerun the workflow before quoting it as current. The fixture remains bounded contract evidence; no passing full-verification or production-readiness claim is made.
 
 The repository is an **advanced prototype in development**. Live provider sessions, browser-extension behavior and host-environment integration require environment-specific checks. The retained `OpenBrowser-v0.5.0-Project-Intelligence-Port.zip` and `.titan/` records are provenance or pending-work material, not supported runtime surfaces.
 
