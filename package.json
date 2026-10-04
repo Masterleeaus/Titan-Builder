@@ -68,7 +68,7 @@
     "gradient-string": "^3.0.0",
     "jsonc-parser": "^3.3.1",
     "pino": "^9.5.0",
-    "zod": "^3.23.8"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/diff": "^5.2.3",
