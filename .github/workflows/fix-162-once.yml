@@ -1,0 +1,81 @@
+name: Fix issue 162 once
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+
+jobs:
+  fix-and-verify:
+    if: github.head_ref == 'fix/162-observable-best-effort-errors'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.2.2 --activate
+
+      - name: Prove the silent-catch regression
+        shell: bash
+        run: |
+          python scripts/fix_issue_162_once.py write-test
+          set +e
+          node --experimental-strip-types --test src/shared/silent-catch-policy.test.ts > /tmp/issue-162-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/issue-162-red.log
+          if [ "$status" -eq 0 ]; then
+            echo "Expected the regression test to fail before the fix"
+            exit 1
+          fi
+
+      - name: Apply issue 162 fixes
+        run: python scripts/fix_issue_162_once.py apply
+
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify root regression and full suite
+        run: |
+          node --experimental-strip-types --test src/shared/silent-catch-policy.test.ts
+          pnpm run verify
+
+      - name: Verify browser-extension companion
+        run: |
+          pnpm --dir browser-extension install --frozen-lockfile
+          pnpm --dir browser-extension run verify
+
+      - name: Publish verified fix
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          rm .github/workflows/fix-162-once.yml scripts/fix_issue_162_once.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pnpm-lock.yaml package.json src/server/browser-workflow-routes.ts src/client/bridge-client.ts src/operations/process-runner.ts src/operations/index.ts src/shared/silent-catch-policy.test.ts .github/workflows/fix-162-once.yml scripts/fix_issue_162_once.py
+          git diff --cached --check
+          git commit -m "fix: make best-effort failures observable (#162)"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" "HEAD:${HEAD_REF}"
