@@ -1,0 +1,1 @@
+Temporary read-only merge probe for issue #146. This file and its workflow are not production changes and will be removed after conflict discovery.
