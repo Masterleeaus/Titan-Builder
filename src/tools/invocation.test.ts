@@ -11,10 +11,10 @@ assert.ok(manifest);
 function validInvocation(): ToolInvocation {
   return {
     toolId: 'git.status',
-    executable: 'git',
-    args: ['status', '--short', '--branch'],
+    executable: process.execPath,
+    args: ['--experimental-strip-types', 'hardened-runner.ts', 'status', '--short', '--branch'],
     cwd: path.resolve('/tmp/project'),
-    risk: 'READ',
+    risk: 'ARBITRARY_EXECUTION',
     displayCommand: 'git status --short --branch',
     shell: false,
   };
@@ -37,7 +37,7 @@ test('rejects resolver output whose tool ID or risk drifts from the manifest', (
   );
   assert.throws(
     () => validateResolvedToolInvocation(manifest, { ...validInvocation(), risk: 'PUBLISH' }),
-    /returned risk PUBLISH but manifest requires READ/u,
+    /returned risk PUBLISH but manifest requires ARBITRARY_EXECUTION/u,
   );
 });
 
@@ -51,11 +51,11 @@ test('rejects shell execution, relative working directories, and malformed comma
     /absolute working directory/u,
   );
   assert.throws(
-    () => validateResolvedToolInvocation(manifest, { ...validInvocation(), executable: 'git\nunsafe' }),
+    () => validateResolvedToolInvocation(manifest, { ...validInvocation(), executable: 'node\nunsafe' }),
     /executable/u,
   );
   assert.throws(
-    () => validateResolvedToolInvocation(manifest, { ...validInvocation(), args: ['status', 'bad\narg'] }),
+    () => validateResolvedToolInvocation(manifest, { ...validInvocation(), args: ['runner', 'bad\narg'] }),
     /argument 1/u,
   );
 });

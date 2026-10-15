@@ -1,14 +1,9 @@
-import { execFile } from 'node:child_process';
-import path from 'node:path';
-import { promisify } from 'node:util';
 import { access } from 'node:fs/promises';
-
-const execFileAsync = promisify(execFile);
+import path from 'node:path';
+import { runHardenedGit } from '../git/hardened-read.js';
 
 export function redactRemoteUrl(url: string): string {
   if (!url) return url;
-  // Match credentials in git URLs (https://, http://, git+https://, ssh+git://, etc.)
-  // Pattern: [protocol]://[username[:password]@]host/path
   return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)([^@/]+@)/, '$1***@');
 }
 
@@ -24,8 +19,16 @@ export interface ProjectStatus {
   packageManager: 'pnpm' | 'npm' | 'yarn' | 'bun' | 'unknown';
 }
 
-export async function readProjectStatus(projectRoot: string): Promise<ProjectStatus> {
+export interface ReadProjectStatusOptions {
+  env?: NodeJS.ProcessEnv;
+}
+
+export async function readProjectStatus(
+  projectRoot: string,
+  options: ReadProjectStatusOptions = {},
+): Promise<ProjectStatus> {
   const root = path.resolve(projectRoot);
+  const environment = options.env ?? process.env;
   const packageManager = await detectPackageManager(root);
   const base: ProjectStatus = {
     projectRoot: root,
@@ -37,25 +40,32 @@ export async function readProjectStatus(projectRoot: string): Promise<ProjectSta
     packageManager,
   };
 
-  const inside = await runGit(root, ['rev-parse', '--is-inside-work-tree']);
+  const inside = await runMetadataGit(root, ['rev-parse', '--is-inside-work-tree'], environment);
   if (inside !== 'true') {
     return base;
   }
 
-  const [repositoryRoot, branch, status, remote] = await Promise.all([
-    runGit(root, ['rev-parse', '--show-toplevel']),
-    runGit(root, ['rev-parse', '--abbrev-ref', 'HEAD']),
-    runGit(root, ['status', '--porcelain']),
-    runGit(root, ['remote', 'get-url', 'origin']),
+  const [repositoryRootValue, branch, remote] = await Promise.all([
+    runMetadataGit(root, ['rev-parse', '--show-toplevel'], environment),
+    runMetadataGit(root, ['rev-parse', '--abbrev-ref', 'HEAD'], environment),
+    runMetadataGit(root, ['remote', 'get-url', 'origin'], environment),
   ]);
-
-  const changedFiles = status ? status.split(/\r?\n/).filter(Boolean).length : 0;
+  const repositoryRoot = repositoryRootValue || root;
+  const status = await runHardenedGit(repositoryRoot, ['status', '--porcelain'], {
+    env: environment,
+    rejectConfiguredHelpers: true,
+  });
+  const changedFiles = status.stdout
+    .split(/\r?\n/u)
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .length;
 
   return {
     ...base,
     isGitRepository: true,
-    repositoryRoot: repositoryRoot || root,
-    projectName: path.basename(repositoryRoot || root),
+    repositoryRoot,
+    projectName: path.basename(repositoryRoot),
     branch: branch || 'unknown',
     dirty: changedFiles > 0,
     changedFiles,
@@ -63,15 +73,14 @@ export async function readProjectStatus(projectRoot: string): Promise<ProjectSta
   };
 }
 
-async function runGit(cwd: string, args: string[]): Promise<string> {
+async function runMetadataGit(
+  cwd: string,
+  args: string[],
+  environment: NodeJS.ProcessEnv,
+): Promise<string> {
   try {
-    const { stdout } = await execFileAsync('git', args, {
-      cwd,
-      timeout: 15_000,
-      maxBuffer: 512 * 1024,
-      windowsHide: true,
-    });
-    return stdout.trim();
+    const result = await runHardenedGit(cwd, args, { env: environment });
+    return result.stdout.trim();
   } catch {
     return '';
   }

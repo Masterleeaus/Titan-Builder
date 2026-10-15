@@ -8,46 +8,62 @@ import {
   resolveToolInvocation,
   toolInputFiles,
 } from './registry.ts';
+import type { ToolInvocation } from './types.ts';
 
 const TEST_PROJECT_ROOT = '/test-project';
 
-test('resolves git.status without a shell', () => {
+function gitArgs(invocation: ToolInvocation): string[] {
+  assert.equal(invocation.executable, process.execPath);
+  const runnerIndex = invocation.args.findIndex((argument) => /hardened-cli\.(?:ts|js)$/u.test(argument));
+  assert.ok(runnerIndex >= 0, `missing hardened runner in ${invocation.args.join(' ')}`);
+  return invocation.args.slice(runnerIndex + 1);
+}
+
+test('resolves git.status through the hardened runner with explicit approval', () => {
   const root = path.resolve(TEST_PROJECT_ROOT);
   const invocation = resolveToolInvocation('git.status', [], root);
 
-  assert.equal(invocation.executable, 'git');
-  assert.deepEqual(invocation.args, ['status', '--short', '--branch']);
+  assert.deepEqual(gitArgs(invocation), ['status', '--short', '--branch']);
   assert.equal(invocation.cwd, root);
-  assert.equal(invocation.risk, 'READ');
+  assert.equal(invocation.risk, 'ARBITRARY_EXECUTION');
+  assert.equal(requiresExplicitApproval(invocation.risk), true);
   assert.equal(invocation.shell, false);
 });
 
-test('preserves the established built-in tool invocation contracts', () => {
+test('preserves built-in logical arguments behind the hardened Git boundary', () => {
   const root = path.resolve('/tmp/project');
   const cases = [
-    ['git.diff', [], 'git', ['diff'], 'READ'],
-    ['git.diff', ['--staged'], 'git', ['diff', '--staged'], 'READ'],
-    ['git.log', [], 'git', ['log', '--oneline', '--decorate', '-n', '20'], 'READ'],
-    ['git.log', ['5'], 'git', ['log', '--oneline', '--decorate', '-n', '5'], 'READ'],
-    ['git.branch.current', [], 'git', ['rev-parse', '--abbrev-ref', 'HEAD'], 'READ'],
-    ['node.version', [], process.execPath, ['--version'], 'READ'],
-    ['vscode.open', [], process.platform === 'win32' ? 'code.cmd' : 'code', ['.'], 'SAFE_EXECUTION'],
+    ['git.diff', [], ['diff', '--no-ext-diff', '--no-textconv'], 'ARBITRARY_EXECUTION'],
+    ['git.diff', ['--staged'], ['diff', '--no-ext-diff', '--no-textconv', '--staged'], 'ARBITRARY_EXECUTION'],
+    ['git.log', [], ['log', '--oneline', '--decorate', '-n', '20'], 'READ'],
+    ['git.log', ['5'], ['log', '--oneline', '--decorate', '-n', '5'], 'READ'],
+    ['git.branch.current', [], ['rev-parse', '--abbrev-ref', 'HEAD'], 'READ'],
   ] as const;
 
-  for (const [toolId, args, executable, expectedArgs, risk] of cases) {
+  for (const [toolId, args, expectedArgs, risk] of cases) {
     const invocation = resolveToolInvocation(toolId, [...args], root);
-    if (process.platform === 'win32' && executable.endsWith('.cmd')) {
-      assert.equal(invocation.executable.toLowerCase(), (process.env.COMSPEC ?? 'cmd.exe').toLowerCase());
-      assert.deepEqual(invocation.args.slice(0, 4), ['/d', '/s', '/c', executable]);
-      assert.deepEqual(invocation.args.slice(4), expectedArgs);
-    } else {
-      assert.equal(invocation.executable, executable);
-      assert.deepEqual(invocation.args, expectedArgs);
-    }
+    assert.deepEqual(gitArgs(invocation), expectedArgs);
     assert.equal(invocation.risk, risk);
     assert.equal(invocation.cwd, root);
     assert.equal(invocation.shell, false);
   }
+
+  const node = resolveToolInvocation('node.version', [], root);
+  assert.equal(node.executable, process.execPath);
+  assert.deepEqual(node.args, ['--version']);
+  assert.equal(node.risk, 'READ');
+
+  const vscode = resolveToolInvocation('vscode.open', [], root);
+  if (process.platform === 'win32') {
+    assert.equal(vscode.executable.toLowerCase(), (process.env.COMSPEC ?? 'cmd.exe').toLowerCase());
+    assert.deepEqual(vscode.args.slice(0, 4), ['/d', '/s', '/c', 'code.cmd']);
+    assert.deepEqual(vscode.args.slice(4), ['.']);
+  } else {
+    assert.equal(vscode.executable, 'code');
+    assert.deepEqual(vscode.args, ['.']);
+  }
+  assert.equal(vscode.risk, 'SAFE_EXECUTION');
+  assert.equal(vscode.shell, false);
 });
 
 test('exposes deterministic public manifests for every supported tool', () => {
@@ -73,28 +89,36 @@ test('exposes deterministic public manifests for every supported tool', () => {
     assert.equal(Object.hasOwn(manifest, 'executable'), false);
   }
 
+  const status = manifests.find((manifest) => manifest.runtimeId === 'git.status');
+  const diff = manifests.find((manifest) => manifest.runtimeId === 'git.diff');
+  assert.equal(status?.risk, 'ARBITRARY_EXECUTION');
+  assert.equal(status?.approval, 'explicit');
+  assert.equal(diff?.risk, 'ARBITRARY_EXECUTION');
+  assert.equal(diff?.approval, 'explicit');
+
   assert.throws(() => {
     (manifests as unknown as Array<unknown>).push({});
   }, TypeError);
 });
 
-test('adds bounded Git repository discovery tools', () => {
+test('adds bounded Git repository discovery tools through hardened execution', () => {
   const root = path.resolve('/tmp/project');
 
-  assert.deepEqual(resolveToolInvocation('git.root', [], root).args, ['rev-parse', '--show-toplevel']);
-  assert.deepEqual(resolveToolInvocation('git.branch.list', [], root).args, [
+  assert.deepEqual(gitArgs(resolveToolInvocation('git.root', [], root)), ['rev-parse', '--show-toplevel']);
+  assert.deepEqual(gitArgs(resolveToolInvocation('git.branch.list', [], root)), [
     'branch',
     '--format=%(refname:short)',
   ]);
-  assert.deepEqual(resolveToolInvocation('git.branch.list', ['--all'], root).args, [
+  assert.deepEqual(gitArgs(resolveToolInvocation('git.branch.list', ['--all'], root)), [
     'branch',
     '--all',
     '--format=%(refname:short)',
   ]);
-  assert.deepEqual(resolveToolInvocation('git.remote.list', [], root).args, ['remote']);
-  assert.deepEqual(resolveToolInvocation('git.show', ['main'], root).args, [
+  assert.deepEqual(gitArgs(resolveToolInvocation('git.remote.list', [], root)), ['remote']);
+  assert.deepEqual(gitArgs(resolveToolInvocation('git.show', ['main'], root)), [
     'show',
     '--no-ext-diff',
+    '--no-textconv',
     '--stat',
     '--oneline',
     '--decorate',
@@ -106,7 +130,7 @@ test('adds bounded Git repository discovery tools', () => {
   for (const toolId of ['git.root', 'git.branch.list', 'git.remote.list', 'git.show']) {
     const args = toolId === 'git.show' ? ['main'] : [];
     const invocation = resolveToolInvocation(toolId, args, root);
-    assert.equal(invocation.executable, 'git');
+    assert.equal(invocation.executable, process.execPath);
     assert.equal(invocation.risk, 'READ');
     assert.equal(invocation.shell, false);
   }
@@ -207,13 +231,11 @@ test('Windows command shims quote executable paths containing spaces', () => {
     return;
   }
   const npm = resolveToolInvocation('npm.test', [], '/tmp/project');
-  // Verify that executable paths are properly quoted in the cmd.exe /c invocation
   assert.equal(npm.shell, false);
   const cFlagIndex = npm.args.indexOf('/c');
   assert.ok(cFlagIndex >= 0);
   const executableArg = npm.args[cFlagIndex + 1];
   assert.ok(executableArg);
-  // If the executable path contains spaces, it should be quoted
   if (executableArg.includes(' ') && !executableArg.startsWith('"')) {
     throw new Error(`Executable with spaces must be quoted: ${executableArg}`);
   }
